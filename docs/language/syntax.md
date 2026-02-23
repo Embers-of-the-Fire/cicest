@@ -12,7 +12,7 @@
     - [Type Aliases](#type-aliases)
     - [Type Invocation](#type-invocation)
   - [Function Declaration](#function-declaration)
-    - [`self` Param](#self-param)
+    - [`self` Parameter](#self-parameter)
   - [Expression](#expression)
     - [Block Expression](#block-expression)
     - [Grouped Expression](#grouped-expression)
@@ -31,8 +31,8 @@ Note: The syntax reference is not comprehensive and is just a guide instead of r
 
 ## Compiler Contract Marker
 
-The language supports three markers: `runtime`, `async` and `mut`.
-To support higher level generics, the following variants are allowed: `runtime<R>`, `async<A>` and `mut<M>`, where the `R, A, M` are type variables, and `!runtime`, `!async` and `!mut`.
+The language supports two type constructors: `async` and `runtime`.
+To support higher level generics, the following variants are allowed: `async<A>` and `runtime<R>`, where the `A, R` are type variables, and `!async` and `!runtime`.
 The negative declarations do not accept variables.
 
 ## Type Declaration
@@ -103,17 +103,24 @@ _contract-marker?_ & __Type__
 ## Function Declaration
 
 _contract-marker?_ fn __Name__ _(generic-declaration)?_  
-( _self,?_ (mut? __var-name__: __Type__),* ) (-> __Type__)?  
+( _self,?_ (__var-name__: __Type__),* ) (-> __Type__)?  
 _(generic-restriction)?_  
 { _function-body_ }
 
-_contract-marker?_ extern fn __Name__ ( (mut? __var-name__: __Type__),* ) (-> __Type__)? ;
+_contract-marker?_ extern fn __Name__ ( (__var-name__: __Type__),* ) (-> __Type__)? ;
 
-### `self` Param
+### `self` Parameter
 
-_contract-marker?_ &? self
+The `self` parameter comes in two forms:
 
-_contract-marker?_ self: __Type__
+runtime &self
+
+self: __Type__
+
+**Rules**:
+- `self` parameters must be marked `runtime` (methods are runtime-only)
+- `&self` takes an immutable reference to the receiver
+- `self: Type` allows custom receiver types
 
 ## Expression
 
@@ -134,7 +141,7 @@ _contract-marker?_ self: __Type__
 ### Operator Expression
 
 **Borrow**  
-( & | && ) mut? _expression_
+& _expression_
 
 **Dereference**  
 \* _expression_
@@ -191,11 +198,20 @@ if _expression_ _block-expression_
 
 ### Let Statement
 
-let _contract-marker_? __Name__ (: __Type__)? (= _expression)?;
+Binding declarations support two forms (similar to JavaScript):
+
+const __Name__ (: __Type__)? (= _expression)?;
+
+let __Name__ (: __Type__)? (= _expression)?;
+
+**Rules**:
+- `const` declares an immutable binding (cannot be reassigned)
+- `let` declares a mutable binding (can be reassigned)
+- Type constructors (`async`, `runtime`) can be used with both
 
 ## Token List
 
 - Operator: `!` `+` `-` `*` `/` `=` `^` `|` `&` `%` `<<` `>>` `<` `>` `<=` `>=` `!=` `==` `||` `&&` `.` `::` `,` `;` `->`
-- Keywords: `const` `async` `mut` `fn` `where` `extern` `if` `else` `return` `loop` `struct` `enum` `type`
+- Keywords: `const` `let` `async` `fn` `where` `extern` `if` `else` `return` `loop` `struct` `enum` `type`
 - Identifier
 - Brackets: `( )` `[ ]` `{ }`

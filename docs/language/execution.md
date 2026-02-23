@@ -17,11 +17,26 @@ If the program, instead, targeting the native platform, the LIR will then be con
 
 ## Generic Resolution and Compile Time Execution
 
-The generic code and `const` code are executed based on a HIR.
-The execution is lazy.
-When a `const` code is going to be executed, it will be compiled to LIR and transferred to the VM.
-If the compile time code depends on other compile time code, the caller of each will be tracked.
-If a circular dependency is found, the compiler will throw an error.
+### Lazy Substitution (C++ Template-style)
+
+Generics are resolved using lazy substitution, similar to C++ template instantiation.
+When a generic function or type is invoked with concrete type arguments, the compiler:
+1. Records the type substitution without immediate evaluation
+2. Performs type checking and contract validation with substituted types
+3. Generates specialized code only when the type is actually used
+4. Reuses specializations across identical type arguments
+
+### Compile Time Evaluation
+
+Compile-time code (marked `const` or defaulting to compile-time compatible) is executed based on HIR.
+The execution uses the following strategy:
+1. **Lazy Evaluation**: Code is only evaluated when its result is needed
+2. **Compilation to LIR**: When execution is required, code is compiled to LIR
+3. **VM Execution**: LIR is transferred to the VM and interpreted
+4. **Dependency Tracking**: If compile-time code depends on other compile-time code, all callers are tracked
+5. **Circular Dependency Detection**: If a circular dependency is found, the compiler throws an error
+
+Both generic resolution and compile-time evaluation follow the same lazy principle—no unnecessary work is performed.
 
 ## Contract Validation
 
@@ -36,6 +51,33 @@ Explicit contract narrowing is accepted.
 
 ## Asynchronous Execution
 
-When a asynchronous operation is introduced in compile time context, an error will be reported.
-The runtime asynchronous runtime is a polling runtime, based on a single-threaded model.
-No multithread is supported in this language.
+Asynchronous execution in Cicest is based on a **delayed evaluation model**.
+
+### Async Type Construction
+
+When an `async fn` is called with a return type `R`, the result is a value of type `async R` rather than `R` itself.
+This value represents a deferred computation that has not yet been executed.
+
+```
+async fn fetch_data() -> i32 { /* ... */ }
+
+let future = fetch_data();  // future has type `async i32`
+```
+
+### Polling Model
+
+Asynchronous values are executed through **polling**:
+- **Field Access Polling**: Accessing a field of an `async T` value polls the computation and returns the inner value
+- **Single-threaded**: All polling is coordinated by a single-threaded event loop
+- **No multithreading**: The language does not support concurrent execution across multiple threads
+
+### Eager Polling
+
+When eager execution is needed, compiler-intrinsic functions can force polling:
+
+```
+__await(future: async T) -> T    // Force immediate polling
+__poll_once(future: mut async T) -> Poll<T>  // Poll once and return Poll status
+```
+
+These intrinsics allow fine-grained control over when and how async computations execute.
