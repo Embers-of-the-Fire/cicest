@@ -1,2 +1,9 @@
 /.idea
 /.vscode
+
+/build
+/target
+/cache
+/temp
+/tmp
+
