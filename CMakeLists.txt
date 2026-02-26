@@ -17,6 +17,8 @@ else()
     target_compile_options(cicest_warnings INTERFACE -Wall -Wextra -Werror)
 endif()
 
+# --- Dependencies ---
+
 # --- LLVM configuration ---
 
 option(CICEST_ENABLE_LLVM "Enable LLVM-dependent targets" ON)
@@ -55,6 +57,18 @@ if (CICEST_ENABLE_LLVM)
     target_link_libraries(cicest_llvm INTERFACE ${LLVM_SYSTEM_LIBS} ${LLVM_LIBS})
 else()
     message(STATUS "LLVM support is disabled. Set CICEST_ENABLE_LLVM=ON to enable it.")
+endif()
+
+# --- taocpp/PEGTL configuration ---
+
+option(CICEST_ENABLE_PEGTL "Enable PEGTL-dependent targets" ON)
+if(CICEST_ENABLE_PEGTL)
+    find_package(pegtl REQUIRED)
+    
+    add_library(cicest_pegtl INTERFACE)
+    target_link_libraries(cicest_pegtl INTERFACE taocpp::pegtl)
+else()
+    message(STATUS "PEGTL support is disabled. Set CICEST_ENABLE_PEGTL=ON to enable it.")
 endif()
 
 add_subdirectory(compiler)

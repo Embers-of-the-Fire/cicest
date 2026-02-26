@@ -39,6 +39,22 @@
       dependencies = llvm-dependencies ++ make-dependencies ++ misc-dependencies;
     in
     {
+      apps.${system} = {
+        build = {
+          type = "app";
+          program = "${
+            pkgs.writeShellApplication {
+              name = "build";
+              runtimeInputs = make-dependencies ++ llvm-dependencies ++ parser-dependencies;
+              text = ''
+                cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug "$@"
+                ninja -C build
+              '';
+            }
+          }/bin/build";
+        };
+      };
+
       devShells.${system}.default =
         (pkgs.buildFHSEnv {
           name = "cicest-lang-dev";

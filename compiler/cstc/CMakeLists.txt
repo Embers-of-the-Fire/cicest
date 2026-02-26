@@ -1,5 +1,10 @@
 add_executable(cstc
-    main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}src/main.cpp
+)
+
+target_include_directories(cstc
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
 
 target_link_libraries(cstc
