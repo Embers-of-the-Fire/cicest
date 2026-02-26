@@ -17,7 +17,6 @@ int main() {
     builder.CreateRet(builder.getInt32(42));
 
     if (llvm::verifyFunction(*fn, &llvm::errs())) {
-    llvm:
         llvm::errs() << "Function verification failed\n";
         return 1;
     }
