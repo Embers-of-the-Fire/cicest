@@ -66,6 +66,7 @@ The dot-access syntax `expr.field` is syntactic sugar for calling this accessor:
 `r.a` desugars to `Rec::a(r)`.
 
 When the receiver is `async T`, the compiler automatically lifts the accessor:
+
 ```
 T::a : (async T) -> async A
 ```
@@ -413,7 +414,7 @@ Patterns appear in `match` arms, lambda parameters, and `let` bindings.
 
 ## Token List
 
-- **Operators**: `!` `+` `-` `*` `/` `=` `^` `|` `&` `%` `<<` `>>` `<` `>` `<=` `>=` `!=` `==` `||` `&&` `.` `::` `,` `;` `->` `=>` `@`
+- **Operators**: `!` `+` `-` `*` `/` `=` `^` `:` `|` `&` `%` `<<` `>>` `<` `>` `<=` `>=` `!=` `==` `||` `&&` `.` `::` `,` `;` `->` `=>` `@`
 - **Keywords**: `let` `async` `runtime` `sync` `fn` `where` `extern` `if` `else` `match` `loop` `struct` `enum` `type` `return` `self` `lambda`
 - **Contract Aliases** (not statement keywords): `const` (≡ `!runtime`), `sync` (≡ `!async`)
 - **Identifier**: starts with a lowercase letter or underscore

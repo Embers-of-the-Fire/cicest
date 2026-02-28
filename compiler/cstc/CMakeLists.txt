@@ -1,5 +1,5 @@
 add_executable(cstc
-    ${CMAKE_CURRENT_SOURCE_DIR}src/main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
 )
 
 target_include_directories(cstc

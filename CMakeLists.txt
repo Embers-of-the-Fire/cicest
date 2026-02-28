@@ -3,7 +3,7 @@ project(cicest LANGUAGES CXX)
 
 set(CMAKE_COLOR_DIAGNOSTICS ON)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -70,6 +70,9 @@ if(CICEST_ENABLE_PEGTL)
 else()
     message(STATUS "PEGTL support is disabled. Set CICEST_ENABLE_PEGTL=ON to enable it.")
 endif()
+
+# --- Testing ---
+option(CICEST_BUILD_TESTS "Build all tests" OFF)
 
 add_subdirectory(compiler)
 
