@@ -2,16 +2,18 @@
 
 - [Language Syntax](#language-syntax)
   - [Compiler Contract Marker](#compiler-contract-marker)
+    - [Contract Blocks](#contract-blocks)
   - [Type Declaration](#type-declaration)
     - [Generic](#generic)
     - [Structures](#structures)
       - [Marker Structures](#marker-structures)
       - [Named Structures](#named-structures)
-      - [UnNamed Structures](#unnamed-structures)
+      - [Unnamed Structures](#unnamed-structures)
     - [Enums](#enums)
     - [Type Aliases](#type-aliases)
     - [Type Invocation](#type-invocation)
   - [Function Declaration](#function-declaration)
+    - [Type Annotations](#type-annotations)
     - [`self` Parameter](#self-parameter)
   - [Expression](#expression)
     - [Block Expression](#block-expression)
@@ -19,95 +21,245 @@
     - [Tuple Expression](#tuple-expression)
     - [Operator Expression](#operator-expression)
     - [Constructor](#constructor)
+    - [Lambda Expression](#lambda-expression)
+    - [Match Expression](#match-expression)
     - [Call Expression](#call-expression)
     - [Turbofish Expression](#turbofish-expression)
     - [Control Expression](#control-expression)
   - [Statement](#statement)
     - [Expression Statement](#expression-statement)
     - [Let Statement](#let-statement)
+  - [Patterns](#patterns)
   - [Token List](#token-list)
 
-Note: The syntax reference is not comprehensive and is just a guide instead of rule for this language.
+Note: The syntax reference is not comprehensive and is just a guide instead of a strict rule for this language.
 
 ## Compiler Contract Marker
 
 The language supports two type constructors: `async` and `runtime`.
-To support higher level generics, the following variants are allowed: `async<A>` and `runtime<R>`, where the `A, R` are type variables, and `!async` and `!runtime`.
-The negative declarations do not accept variables.
+To support higher-level generics, the following variants are allowed: `async<A>` and `runtime<R>`, where `A` and `R` are type variables.
+
+**Negative declarations** assert the *absence* of a contract: `!async` and `!runtime`.
+Negative declarations do not accept type variables.
+
+**Aliases** — the negative forms have readable keyword equivalents:
+
+| Full form | Alias | Meaning |
+|-----------|-------|---------|
+| `async T` | — | Deferred computation; not yet resolved |
+| `runtime T` | — | Only available at runtime |
+| `!async T` | `sync T` | Must **not** be deferred; synchronously resolved |
+| `!runtime T` | `const T` | Must **not** be runtime-only; compile-time available |
+
+`sync` and `const` are syntactic aliases. They are interchangeable with `!async` and `!runtime` everywhere: in type positions, function signatures, and block keywords.
+
+**`!async` / `sync` — field accessor types:**
+
+Each named struct field generates an **accessor function**.
+For `struct T { a: A }`, the compiler generates:
+
+```
+T::a : (!async T) -> A
+```
+
+The dot-access syntax `expr.field` is syntactic sugar for calling this accessor:
+`r.a` desugars to `Rec::a(r)`.
+
+When the receiver is `async T`, the compiler automatically lifts the accessor:
+```
+T::a : (async T) -> async A
+```
+
+```rust
+struct Rec { a: i32 }
+// generates: Rec::a : (!async Rec) -> i32
+
+let r: Rec = Rec { a: 5 };
+let v = r.a;               // Rec::a(r) — r: !async Rec → v: i32
+
+let ar: async Rec = async { deferred() };
+let av = ar.a;             // Rec::a(ar) — lifted: async Rec → av: async i32
+let sv = sync { ar }.a;    // sync { ar }: !async Rec → sv: i32
+```
+
+**`!runtime` / `const` — compile-time type intrinsics:**
+
+Compiler-intrinsic functions that query type information require a `!runtime` (`const`) type argument.
+All plain types satisfy `!runtime` by default.
+
+```rust
+let s = sizeof(i32);        // OK: i32 is !runtime (const)
+let a = alignof(Point);     // OK
+
+// sizeof(runtime i32);       // ERROR: runtime i32 violates !runtime
+```
+
+### Contract Blocks
+
+A `<keyword> { }` block is an **explicit type-conversion expression**.
+In the common case, the compiler handles `async T` → `T` coercion implicitly; contract blocks are used when explicit control is needed.
+
+*contract-keyword* `{` *expression* `}`
+
+Where *contract-keyword* is one of: `async` | `sync` | `runtime` | `const` | `!async` | `!runtime`
+
+| Block | Body type | Result type |
+|-------|-----------|-------------|
+| `async { expr }` | `T` | `async T` |
+| `sync { expr }` | `async T` | `T` |
+| `runtime { expr }` | `T` | `runtime T` |
+| `const { expr }` | `T` | `const T` (`!runtime T`) |
+
+`sync { }` and `const { }` are the preferred aliases for `!async { }` and `!runtime { }`.
+
+```rust
+let f: async i32   = async { 42 };           // i32  → async i32
+let v: i32         = sync { f };             // explicit force (optional: implicit coercion also works)
+let r: runtime i32 = runtime { read_int() }; // i32 → runtime i32
+let c: const i32   = const { factorial(10) };// i32 → const i32 (compile-time)
+```
+
+Inside function bodies, `async T` is implicitly coerced to `T` at usage sites — `sync { }` is usually not written by hand. See [Implicit Coercion](design.md#implicit-coercion).
 
 ## Type Declaration
 
-There are basically two types, structures and named enumerations.
+There are two primary types: structures (product types) and enumerations (sum types).
 
 ### Generic
 
-To declare generic variables:
+To declare generic type variables:
 
-< (__Name__ (: _(generic-restriction +)_+ )? ),* >
+< ( **Name** ( : *(generic-restriction)*+ )? ),* >
 
 To declare standalone restrictions:
 
 where  
-&emsp;&emsp;( __Type__: _(generic-restriction +)_* )+
+&emsp;&emsp;( **Type** : *(generic-restriction)*+ )+  
+&emsp;&emsp;( *compile-time-bool-expression-over-type-params* )+
+
+`where` clauses accept two forms:
+
+- **Trait bounds**: `T: Constraint` — requires `T` to implement a trait
+- **Type-level predicates**: arbitrary compile-time boolean expressions that mention only type parameters (not value parameters)
+
+Type parameters are compile-time values (like Zig's `comptime`), so compiler intrinsics like `sizeof(T)` and `alignof(T)` may appear inside `where`.
+Any non-`runtime` function whose arguments are derived solely from type parameters is valid in a predicate.
+
+```rust
+fn<T> foo(x: T) -> T where sizeof(T) == 4 { x }
+fn<T, U> compatible() -> bool where sizeof(T) == sizeof(U) { true }
+fn<T> aligned() -> T where is_power_of_two(sizeof(T)) { /* ... */ }
+
+// ERROR — value parameter `n` is not a type parameter:
+// fn bar(n: i32) -> i32 where is_positive(n) { n }
+```
+
+#### Const Generics
+
+There is no separate `const N` or `const fn` generic parameter syntax.
+Const-generic-style constraints are expressed entirely through type-level `where` predicates, using the fact that types are compile-time values.
+The compiler evaluates all `where` predicates via the VM at each call site.
 
 ### Structures
 
-Structures are plain memory skeletons.
+Structures are **abstract product types**. There is no C-ABI-style memory layout — the compiler chooses a representation. Programs cannot directly observe field offsets.
 
 #### Marker Structures
 
-struct __Name__ _(generic-declaration)?_  
-_(generic-restriction)?_ ;
+struct **Name** *(generic-declaration)?*  
+*(generic-restriction)?* ;
 
 #### Named Structures
 
-struct __Name__ _(generic-declaration)?_  
-_(generic-restriction)?_  
+struct **Name** *(generic-declaration)?*  
+*(generic-restriction)?*  
 {  
-&emsp;&emsp;(__name__: __Type__),*  
+&emsp;&emsp;( **name** : **Type** ),*  
 }
 
-#### UnNamed Structures
+Each named field **name** of type **FieldType** in `struct T` generates an accessor function:
 
-struct __Name__ _(generic-declaration)?_  
-_(generic-restriction)?_  
-( (__Type__),* );
+`T::name : (!async T) -> FieldType`
+
+The dot-access syntax `expr.name` is syntactic sugar for calling this accessor.
+
+#### Unnamed Structures
+
+struct **Name** *(generic-declaration)?*  
+*(generic-restriction)?*  
+( **Type**,* );
+
+Positional fields do not generate named accessors; they are only destructured via patterns.
 
 ### Enums
 
-enum __Name__ _(generic-declaration)?_  
-_(generic-restriction)?_  
+`enum` declares a sum type (algebraic data type). Each variant may carry no data, named fields, or positional fields:
+
+enum **Name** *(generic-declaration)?*  
+*(generic-restriction)?*  
 {(  
-&emsp;| __Name__  
-&emsp;| __Name__ { (__Name__: __Type__),* }  
-&emsp;| __Name__ ( (__Type__),* )  
+&emsp;| **Name**  
+&emsp;| **Name** { ( **Name** : **Type** ),*}  
+&emsp;| **Name** ( **Type**,* )  
 ),*}
+
+Enum variants with fields are full algebraic data type constructors and can be used in [patterns](#patterns).
 
 ### Type Aliases
 
-type __Name__ _(generic-declaration)?_  
-= __Type__  
-_(generic-restriction)?_ ;
+type **Name** *(generic-declaration)?*  
+= **Type**  
+*(generic-restriction)?* ;
 
 ### Type Invocation
 
-Type invocation refers to the expression produces a type value.
+Type invocation refers to an expression that produces a type value.
 This could be function calls or type variable replacements.
 
-_contract-marker?_ __Name__ _(< __Type,+ >)?_
+*contract-marker?* **Name** *( < **Type**,+ > )?*
 
-_contract-marker?_ _function-invocation_
+*contract-marker?* *function-invocation*
 
-_contract-marker?_ & __Type__
+*contract-marker?* & **Type**
 
 ## Function Declaration
 
-_contract-marker?_ fn __Name__ _(generic-declaration)?_  
-( _self,?_ (__var-name__: __Type__),* ) (-> __Type__)?  
-_(generic-restriction)?_  
-{ _function-body_ }
+All function declarations **require explicit type annotations** on every parameter and the return type.
+The return type may not be omitted.
 
-_contract-marker?_ extern fn __Name__ ( (__var-name__: __Type__),* ) (-> __Type__)? ;
+*contract-marker?* fn **Name** *(generic-declaration)?*  
+( *self,?* ( **var-name** : **Type** ),* ) `->` **Type**  
+*(generic-restriction)?*  
+{ *function-body* }
+
+*contract-marker?* extern fn **Name** ( ( **var-name** : **Type** ),* ) `->` **Type** ;
+
+### Contract Prefix Desugaring
+
+A contract marker before `fn` is **syntactic sugar** that wraps the declared return type:
+
+```
+<contract> fn foo(...) -> T   ≡   fn foo(...) -> <contract> T
+```
+
+| Written | Desugars to | Notes |
+|---------|-------------|-------|
+| `async fn foo() -> i32` | `fn foo() -> async i32` | preferred form |
+| `fn foo() -> async i32` | (same) | explicit form, also valid |
+| `async fn foo() -> async i32` | `fn foo() -> async (async i32)` | nested async — genuinely doubly-deferred |
+| `runtime fn foo() -> ()` | `fn foo() -> runtime ()` | preferred form |
+| `runtime fn foo() -> runtime ()` | `fn foo() -> runtime (runtime ())` ≡ `fn foo() -> runtime ()` | idempotent — same as above |
+
+Write the contract **once** (either as prefix or in the return type) to avoid accidental nesting.
+
+### Type Annotations
+
+- Parameter types: **required** (no bare `x`, must be `x: Type`)
+- Return type: **required** (the `-> Type` clause is mandatory)
+- Generic constraints: expressed via inline bounds or `where` clauses
+
+Annotations are enforced at HIR lowering.
+Type inference still applies within function bodies.
 
 ### `self` Parameter
 
@@ -115,9 +267,10 @@ The `self` parameter comes in two forms:
 
 runtime &self
 
-self: __Type__
+self: **Type**
 
 **Rules**:
+
 - `self` parameters must be marked `runtime` (methods are runtime-only)
 - `&self` takes an immutable reference to the receiver
 - `self: Type` allows custom receiver types
@@ -127,91 +280,142 @@ self: __Type__
 ### Block Expression
 
 {  
-&emsp;&emsp;_statements_?  
+&emsp;&emsp;*statements*?  
 }
 
 ### Grouped Expression
 
-( _expression_ )
+( *expression* )
 
 ### Tuple Expression
 
-( _expression,+_ _expression_? )
+( *expression,* *expression,+* )
 
 ### Operator Expression
 
 **Borrow**  
-& _expression_
+& *expression*
 
 **Dereference**  
-\* _expression_
+\* *expression*
 
 **Unary Arithmetic and Logical**  
-! _expression_  
-\- _expression_
+! *expression*  
+\- *expression*
 
 **Binary Arithmetic and Logical**  
-_expression_ ( + - * / % & ^ | << >>) _expression_
+*expression* ( `+` `-` `*` `/` `%` `&` `^` `|` `<<` `>>` ) *expression*
 
 **Comparison**  
-_expression_ ( == != > < >= <= ) _expression_
+*expression* ( `==` `!=` `>` `<` `>=` `<=` ) *expression*
 
 **Lazy Boolean**  
-_expression_ ( || && ) _expression_
+*expression* ( `||` `&&` ) *expression*
 
-**Assignment**
-_expression_ = _expression_
+**Assignment**  
+*expression* `=` *expression*
 
 ### Constructor
 
-&emsp;| __Name__  
-&emsp;| __Name__ { (__Name__: _expression_),* }  
-&emsp;| __Name__ ( (_expression_),* )  
+&emsp;| **Name**  
+&emsp;| **Name** { ( **Name** : *expression* ),*}  
+&emsp;| **Name** ( *expression*,* )
+
+### Lambda Expression
+
+A lambda creates an anonymous function inline using the `lambda` keyword.
+Type annotations on parameters are optional when inferable from context:
+
+`lambda` `(` ( **var-name** (`:` **Type**)? ),* `)` *block-expression*
+
+```rust
+lambda(x: i32) { x + 1 }
+lambda(x: i32, y: i32) { x + y }
+lambda(x) { x * 2 }                // type inferred from context
+```
+
+Lambdas capture immutable bindings from their enclosing scope.
+
+### Match Expression
+
+A `match` expression deconstructs a value by pattern.
+Arms are checked exhaustively. The expression evaluates to the body of the first matching arm.
+
+`match` *expression* `{`  
+&emsp;( *pattern* `=>` *expression* `,` )*  
+&emsp;*pattern* `=>` *expression* `,`?  
+`}`
+
+```rust
+match s {
+    Circle { radius: r }              => 3.14159 * r * r,
+    Rectangle { width: w, height: h } => w * h,
+    Point                             => 0.0,
+}
+```
+
+A wildcard arm `_ => expr` satisfies exhaustiveness for any remaining cases.
 
 ### Call Expression
 
-_expression_ _turbofish_? ( (_expression_),* )
-_expression_ . _path-segment_ _turbofish_? ( (_expression_),* )
+*expression* *turbofish*? ( *expression*,*)  
+*expression* `.` *path-segment* *turbofish*? ( *expression*,* )
 
 ### Turbofish Expression
 
-::< __Type__,* >
+`::`< **Type**,* >
 
 ### Control Expression
 
-loop _block-expression_
+if *expression* *block-expression*  
+( else if *expression* *block-expression* )*  
+( else *block-expression* )?
 
-if _expression_ _block-expression_  
-(else if _expression_ _block-expression_)*  
-(else _block-expression_)?
+loop *block-expression*
 
 ## Statement
 
-| _declaration_
-| _let-statement_
-| _expression-statement_
+| *declaration*  
+| *let-statement*  
+| *expression-statement*
 
 ### Expression Statement
 
-| _expr-with-block_ (;)?
-| _expr-without-block_ ;
+| *expr-with-block* (`;`)?  
+| *expr-without-block* `;`
 
 ### Let Statement
 
-Binding declarations support two forms (similar to JavaScript):
+All bindings use `let`. Every binding is immutable — a name is bound once and cannot be reassigned.
 
-const __Name__ (: __Type__)? (= _expression)?;
-
-let __Name__ (: __Type__)? (= _expression)?;
+`let` **Name** ( `:` **Type** )? ( `=` *expression* )? `;`
 
 **Rules**:
-- `const` declares an immutable binding (cannot be reassigned)
-- `let` declares a mutable binding (can be reassigned)
-- Type constructors (`async`, `runtime`) can be used with both
+
+- Type annotation is optional when the type can be inferred
+- Type constructors (`async`, `runtime`, `const`) can be used in the type position
+
+## Patterns
+
+Patterns appear in `match` arms, lambda parameters, and `let` bindings.
+
+| Pattern | Description |
+|---------|-------------|
+| `_` | Wildcard — matches anything, binds nothing |
+| *name* | Variable — matches anything, binds to *name* |
+| *literal* | Literal — matches an exact value (`0`, `true`, `"hi"`) |
+| **Name** | Nullary constructor |
+| **Name** `{` *name* `:` *pat*,* `}` | Named-field constructor |
+| **Name** `(` *pat*,* `)` | Positional constructor |
+| `(` *pat*,* `)` | Tuple |
+| *pat* `\|` *pat* | Or-pattern — matches either branch |
+| *name* `@` *pattern* | As-pattern — binds whole value to *name*, also matches inner pattern |
 
 ## Token List
 
-- Operator: `!` `+` `-` `*` `/` `=` `^` `|` `&` `%` `<<` `>>` `<` `>` `<=` `>=` `!=` `==` `||` `&&` `.` `::` `,` `;` `->`
-- Keywords: `const` `let` `async` `fn` `where` `extern` `if` `else` `return` `loop` `struct` `enum` `type`
-- Identifier
-- Brackets: `( )` `[ ]` `{ }`
+- **Operators**: `!` `+` `-` `*` `/` `=` `^` `|` `&` `%` `<<` `>>` `<` `>` `<=` `>=` `!=` `==` `||` `&&` `.` `::` `,` `;` `->` `=>` `@`
+- **Keywords**: `let` `async` `runtime` `sync` `fn` `where` `extern` `if` `else` `match` `loop` `struct` `enum` `type` `return` `self` `lambda`
+- **Contract Aliases** (not statement keywords): `const` (≡ `!runtime`), `sync` (≡ `!async`)
+- **Identifier**: starts with a lowercase letter or underscore
+- **Constructor**: starts with an uppercase letter
+- **Brackets**: `( )` `[ ]` `{ }`
