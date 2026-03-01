@@ -10,6 +10,14 @@ Cicest treats keywords — including `const`, `async`, and their variants — as
 
 See [the language documentation](docs/language/index.md) for more information.
 
+## Third Party Dependencies
+
+This project depends on the following third-party libraries:
+
+- [`llvm`](https://github.com/llvm/llvm-project) for code generation and optimization.
+
+> **Note:** The compiler currently supports pure ASCII source input only.
+
 ## License
 
 This project is licensed under the [Apache-2.0](LICENSE-APACHE) license or the [MIT](LICENSE-MIT) license.

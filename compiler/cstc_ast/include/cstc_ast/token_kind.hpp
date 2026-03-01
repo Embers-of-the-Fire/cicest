@@ -1,0 +1,6 @@
+#ifndef CICEST_COMPILER_CSTC_AST_TOKEN_KIND_HPP
+#define CICEST_COMPILER_CSTC_AST_TOKEN_KIND_HPP
+
+namespace cstc::ast {} // namespace cstc::ast
+
+#endif // CICEST_COMPILER_CSTC_AST_TOKEN_KIND_HPP

@@ -17,10 +17,7 @@
         llvmPackages_latest.compiler-rt
         llvmPackages_latest.libunwind
       ];
-      parser-dependencies = with pkgs; [
-        # taocpp/PEGTL
-        pegtl
-      ];
+      parser-dependencies = with pkgs; [ ];
       make-dependencies = with pkgs; [
         cmake
         gnumake

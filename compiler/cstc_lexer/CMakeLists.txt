@@ -1,12 +1,14 @@
-add_library(cstc_ast INTERFACE)
-add_library(cicest::compiler::ast ALIAS cstc_ast)
+add_library(cstc_lexer
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cursor.cpp
+)
+add_library(cicest::compiler::lexer ALIAS cstc_lexer)
 
-target_include_directories(cstc_ast INTERFACE
+target_include_directories(cstc_lexer PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
-target_link_libraries(cstc_ast
-    INTERFACE
+target_link_libraries(cstc_lexer
+    PRIVATE
         cicest_options
         cicest_warnings
 )
@@ -17,7 +19,6 @@ if(CICEST_BUILD_TESTS)
     foreach(test_source ${glob_test_sources})
         get_filename_component(test_name ${test_source} NAME_WE)
         add_executable(${test_name} ${test_source})
-        target_link_libraries(${test_name} PRIVATE cstc_ast cicest_options cicest_warnings)
+        target_link_libraries(${test_name} PRIVATE cstc_lexer cicest_options cicest_warnings)
     endforeach()
 endif()
-
