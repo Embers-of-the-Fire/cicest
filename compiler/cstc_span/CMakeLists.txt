@@ -1,14 +1,12 @@
-add_library(cstc_span
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/registry.cpp
-)
+add_library(cstc_span INTERFACE)
 add_library(cicest::compiler::span ALIAS cstc_span)
 
-target_include_directories(cstc_span PUBLIC
+target_include_directories(cstc_span INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
 target_link_libraries(cstc_span
-    PRIVATE
+    INTERFACE
         cicest_options
         cicest_warnings
 )
