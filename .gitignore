@@ -9,4 +9,5 @@
 
 compile_commands.json
 /.cache
+/.claude
 

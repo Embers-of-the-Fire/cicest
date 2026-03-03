@@ -9,6 +9,7 @@ target_link_libraries(cstc_ast
     INTERFACE
         cicest_options
         cicest_warnings
+        cstc_span
 )
 
 if(CICEST_BUILD_TESTS)
