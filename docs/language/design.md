@@ -104,7 +104,7 @@ let resolved: i32       = sync { deferred };   // explicit force (same as implic
 let ct: const i32       = const { factorial(10) };  // explicit compile-time assertion
 ```
 
-`__await` remains available as a lower-level intrinsic for fine-grained polling control.
+`__await` remains available as a lower-level function for fine-grained polling control.
 
 ### Type Construction Rules
 

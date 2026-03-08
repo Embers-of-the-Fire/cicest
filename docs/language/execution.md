@@ -78,7 +78,7 @@ fn main() -> () {
 }
 ```
 
-`__await` and `__poll_once` remain available as lower-level intrinsics for fine-grained polling.
+`__await` and `__poll_once` remain available as lower-level functions for fine-grained polling.
 
 ## Generic Resolution and Compile-Time Execution
 
@@ -86,6 +86,7 @@ fn main() -> () {
 
 Generics are resolved using lazy substitution, similar to C++ template instantiation.
 When a generic function or type is invoked with concrete type arguments, the compiler:
+
 1. Records the type substitution without immediate evaluation
 2. Performs type checking and contract validation with substituted types
 3. Generates specialized code only when the type is actually used
@@ -97,6 +98,7 @@ All functions without a `runtime` marker are compile-time evaluatable.
 The compiler's VM is invoked during compilation to run these functions, which enables using them as **compile-time predicates** in `where` clauses.
 
 When a generic function with a predicate constraint is instantiated, the compiler:
+
 1. Substitutes the concrete type argument
 2. Evaluates the predicate function(s) in the `where` clause via the VM
 3. If any predicate returns `false`, a compile error is emitted at the call site
@@ -117,6 +119,7 @@ There is no separate `const` parameter syntax — the `runtime` distinction alre
 
 Compile-time code (values not qualified `runtime`) is executed based on HIR.
 The execution uses the following strategy:
+
 1. **Lazy Evaluation**: Code is only evaluated when its result is needed
 2. **Compilation to LIR**: When execution is required, code is compiled to LIR
 3. **VM Execution**: LIR is transferred to the VM and interpreted
@@ -130,6 +133,7 @@ Both generic resolution and compile-time evaluation follow the same lazy princip
 The contract is validated during HIR lowering.
 
 Given a keyword generic `keyword<K>`, generally there are the following rules:
+
 1. A type is `keyword<K>` if one of the fields is `keyword` or `K` evaluates to `Contract::Success`.
 2. A function is `keyword<K>` if one of the direct parameters or one of the direct statements is `keyword` or `K` evaluates to `Contract::Success`.
 3. Branching expressions are always evaluated to `K: Contract::Success` if one of the branches has a contract of `keyword`.
@@ -160,6 +164,7 @@ let future = fetch_data();  // future has type `async i32`
 ### Polling Model
 
 Asynchronous values are executed through **polling**:
+
 - **Field Access Polling**: Accessing a field of an `async T` value polls the computation and returns the inner value
 - **Single-threaded**: All polling is coordinated by a single-threaded event loop
 - **No multithreading**: The language does not support concurrent execution across multiple threads
@@ -170,13 +175,6 @@ When immediate resolution is needed, the `sync { }` block is the standard mechan
 
 ```rust
 let v: i32 = sync { future };     // drives the event loop until the future resolves
-```
-
-For fine-grained control, compiler-intrinsic functions are also available:
-
-```rust
-__await(future: async T) -> T               // Force immediate resolution
-__poll_once(future: mut async T) -> Poll<T> // Poll once; returns Done or Pending
 ```
 
 ## Pattern Match Compilation
