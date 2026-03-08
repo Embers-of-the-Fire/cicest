@@ -5,12 +5,14 @@
     - [Contract Blocks](#contract-blocks)
   - [Type Declaration](#type-declaration)
     - [Generic](#generic)
+    - [Concepts](#concepts)
     - [Structures](#structures)
       - [Marker Structures](#marker-structures)
       - [Named Structures](#named-structures)
       - [Unnamed Structures](#unnamed-structures)
     - [Enums](#enums)
     - [Type Aliases](#type-aliases)
+    - [With Blocks](#with-blocks)
     - [Type Invocation](#type-invocation)
   - [Function Declaration](#function-declaration)
     - [Type Annotations](#type-annotations)
@@ -130,18 +132,17 @@ There are two primary types: structures (product types) and enumerations (sum ty
 
 To declare generic type variables:
 
-< ( **Name** ( : *(generic-restriction)*+ )? ),* >
+< ( **Name** ),* >
 
 To declare standalone restrictions:
 
 where  
-&emsp;&emsp;( **Type** : *(generic-restriction)*+ )+  
-&emsp;&emsp;( *compile-time-bool-expression-over-type-params* )+
+&emsp;&emsp;( *compile-time-bool-expression-over-type-params* ),*
 
 `where` clauses accept two forms:
 
-- **Trait bounds**: `T: Constraint` — requires `T` to implement a trait
 - **Type-level predicates**: arbitrary compile-time boolean expressions that mention only type parameters (not value parameters)
+- **Concept checks** via intrinsic expression: `concept(Foo)` or `concept(Foo::<T>)`
 
 Type parameters are compile-time values (like Zig's `comptime`), so compiler intrinsics like `sizeof(T)` and `alignof(T)` may appear inside `where`.
 Any non-`runtime` function whose arguments are derived solely from type parameters is valid in a predicate.
@@ -150,9 +151,35 @@ Any non-`runtime` function whose arguments are derived solely from type paramete
 fn<T> foo(x: T) -> T where sizeof(T) == 4 { x }
 fn<T, U> compatible() -> bool where sizeof(T) == sizeof(U) { true }
 fn<T> aligned() -> T where is_power_of_two(sizeof(T)) { /* ... */ }
+fn<T> sortable(x: T) -> T where concept(Sortable::<T>) { x }
 
 // ERROR — value parameter `n` is not a type parameter:
 // fn bar(n: i32) -> i32 where is_positive(n) { n }
+```
+
+`concept` is a reserved keyword and is parsed as a compiler intrinsic in expression position.
+
+### Concepts
+
+Concepts declare compile-time interface requirements.
+The concept body only allows function signatures (no function bodies).
+
+concept **Name** *(generic-declaration)?*  
+*(generic-restriction)?*  
+{  
+&emsp;&emsp;( *contract-marker?* fn **name** *(generic-declaration)?* ( *self,?* ( **var-name** : **Type** ),* ) `->` **Type** *(generic-restriction)?* `;` )*  
+}
+
+Use concept predicates in generic constraints with the intrinsic expression `concept(...)`:
+
+```rust
+concept Comparable<T> {
+    fn compare(lhs: T, rhs: T) -> i32;
+}
+
+fn<T> max(a: T, b: T) -> T
+    where concept(Comparable::<T>)
+{ /* ... */ }
 ```
 
 #### Const Generics
@@ -212,6 +239,41 @@ type **Name** *(generic-declaration)?*
 = **Type**  
 *(generic-restriction)?* ;
 
+### With Blocks
+
+`with` binds a set of function definitions to a target type.
+
+with *(generic-declaration)?* **Type** *(generic-restriction)?*  
+{  
+&emsp;&emsp;( *contract-marker?* fn **Name** *(generic-declaration)?* ( *self,?* ( **var-name** : **Type** ),* ) `->` **Type** *(generic-restriction)?* *block-expression* )*  
+}
+
+Desugaring model (documented behavior):
+
+- A non-static function that takes `self` is desugared to a plain function whose first parameter is the receiver value.
+- Method-call syntax desugars to a plain call: `value.func(args...)` → `func(value, args...)`.
+
+Blanket implementation rule:
+
+- A `with` target type may not be a bare generic parameter.
+- `with<T> T { ... }` is forbidden (blanket impl on all types).
+- This prohibition also applies when a `where` clause is present on the `with` block.
+
+```rust
+with Point {
+    fn length(self: Point) -> f64 { /* ... */ }
+}
+
+// desugars conceptually to:
+// fn length(self: Point) -> f64 { ... }
+// p.length()  ==> length(p)
+
+// INVALID (forbidden blanket impl):
+// with<T> T {
+//     fn show(self: T) -> () { /* ... */ }
+// }
+```
+
 ### Type Invocation
 
 Type invocation refers to an expression that produces a type value.
@@ -257,7 +319,7 @@ Write the contract **once** (either as prefix or in the return type) to avoid ac
 
 - Parameter types: **required** (no bare `x`, must be `x: Type`)
 - Return type: **required** (the `-> Type` clause is mandatory)
-- Generic constraints: expressed via inline bounds or `where` clauses
+- Generic constraints: expressed via `where` clauses
 
 Annotations are enforced at HIR lowering.
 Type inference still applies within function bodies.
@@ -415,7 +477,7 @@ Patterns appear in `match` arms, lambda parameters, and `let` bindings.
 ## Token List
 
 - **Operators**: `!` `+` `-` `*` `/` `=` `^` `:` `|` `&` `%` `<<` `>>` `<` `>` `<=` `>=` `!=` `==` `||` `&&` `.` `::` `,` `;` `->` `=>` `@` `.` `~`
-- **Keywords**: `let` `async` `runtime` `sync` `fn` `where` `extern` `if` `else` `match` `loop` `struct` `enum` `type` `return` `self` `lambda`
+- **Keywords**: `let` `async` `runtime` `sync` `fn` `where` `extern` `if` `else` `match` `loop` `struct` `enum` `type` `with` `concept` `return` `self` `lambda`
 - **Contract Aliases** (not statement keywords): `const` (≡ `!runtime`), `sync` (≡ `!async`)
 - **Identifier**: starts with a lowercase letter or underscore
 - **Constructor**: starts with an uppercase letter

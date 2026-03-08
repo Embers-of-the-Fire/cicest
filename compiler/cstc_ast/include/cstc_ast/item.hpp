@@ -89,6 +89,14 @@ struct FnItem {
     Block body;
 };
 
+/// A concept method requirement: `(keyword*) fn name<...>(...) -> Type where ...;`.
+struct ConceptMethod {
+    std::vector<KeywordModifier> keywords;
+    Symbol name;
+    Generics generics;
+    FnSig sig;
+};
+
 /// An extern function declaration: `(keyword*) extern fn name(...) -> Type;`.
 struct ExternFnItem {
     std::vector<KeywordModifier> keywords;
@@ -130,9 +138,26 @@ struct TypeAliasItem {
     std::unique_ptr<TypeNode> ty;
 };
 
+/// A concept declaration:
+/// `concept Name<...> where ... { fn requirement(...); }`.
+struct ConceptItem {
+    Symbol name;
+    Generics generics;
+    std::vector<ConceptMethod> methods;
+};
+
+/// A member function bundle bound to a type:
+/// `with<...> Type where ... { fn ... }`.
+struct WithItem {
+    std::optional<GenericParams> generic_params;
+    std::unique_ptr<TypeNode> target_ty;
+    std::optional<WhereClause> where_clause;
+    std::vector<FnItem> methods;
+};
+
 /// Discriminated union of all item (declaration) forms.
 using ItemKind = std::variant<FnItem, ExternFnItem, MarkerStructItem, NamedStructItem,
-    TupleStructItem, EnumItem, TypeAliasItem>;
+    TupleStructItem, EnumItem, TypeAliasItem, ConceptItem, WithItem>;
 
 // ---------------------------------------------------------------------------
 // Item

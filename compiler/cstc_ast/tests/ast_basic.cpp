@@ -118,9 +118,113 @@ static void test_keyword_modifiers() {
     assert(!km.type_var.has_value());
 }
 
+static void test_concept_and_with_items() {
+    NodeIdAllocator ids;
+    SymbolTable syms;
+
+    const auto concept_sym = syms.intern("Comparable");
+    const auto method_sym = syms.intern("compare");
+    const auto type_sym = syms.intern("Point");
+    const auto with_method_sym = syms.intern("length");
+
+    auto ret_ty = std::make_unique<TypeNode>(TypeNode{
+        .id = ids.next(),
+        .span = SourceSpan{0, 0},
+        .kind = TupleType{.elements = {}},
+    });
+
+    ConceptMethod method{
+        .keywords = {},
+        .name = method_sym,
+        .generics = Generics{},
+        .sig =
+            FnSig{
+                     .self_param = std::nullopt,
+                     .params = {},
+                     .ret_ty = std::move(ret_ty),
+                     },
+    };
+
+    std::vector<ConceptMethod> concept_methods;
+    concept_methods.push_back(std::move(method));
+
+    Item concept_item{
+        .id = ids.next(),
+        .span = SourceSpan{0,        0                    },
+        .kind =
+            ConceptItem{
+                           .name = concept_sym,
+                           .generics = Generics{},.methods = std::move(concept_methods),
+                           },
+    };
+
+    assert(std::holds_alternative<ConceptItem>(concept_item.kind));
+    const auto& concept_data = std::get<ConceptItem>(concept_item.kind);
+    assert(concept_data.name == concept_sym);
+    assert(concept_data.methods.size() == 1);
+
+    auto point_ty = std::make_unique<TypeNode>(TypeNode{
+        .id = ids.next(),
+        .span = SourceSpan{0, 0},
+        .kind =
+            PathType{
+                           .path =
+                    Path{
+                        .span = SourceSpan{0, 0},
+                        .segments = {PathSegment{.span = SourceSpan{0, 0}, .name = type_sym}},
+                    }, .args = std::nullopt,
+                           },
+    });
+
+    auto with_ret_ty = std::make_unique<TypeNode>(TypeNode{
+        .id = ids.next(),
+        .span = SourceSpan{0, 0},
+        .kind = TupleType{.elements = {}},
+    });
+
+    FnItem with_method{
+        .keywords = {},
+        .name = with_method_sym,
+        .generics = Generics{},
+        .sig =
+            FnSig{
+                     .self_param = std::nullopt,
+                     .params = {},
+                     .ret_ty = std::move(with_ret_ty),
+                     },
+        .body =
+            Block{
+                     .id = ids.next(),
+                     .span = SourceSpan{0, 0},
+                     .stmts = {},
+                     },
+    };
+
+    std::vector<FnItem> with_methods;
+    with_methods.push_back(std::move(with_method));
+
+    Item with_item{
+        .id = ids.next(),
+        .span = SourceSpan{0, 0},
+        .kind =
+            WithItem{
+                           .generic_params = std::nullopt,
+                           .target_ty = std::move(point_ty),
+                           .where_clause = std::nullopt,
+                           .methods = std::move(with_methods),
+                           },
+    };
+
+    assert(std::holds_alternative<WithItem>(with_item.kind));
+    const auto& with = std::get<WithItem>(with_item.kind);
+    assert(with.methods.size() == 1);
+    assert(std::holds_alternative<PathType>(with.target_ty->kind));
+}
+
 int main() {
     test_fn_main();
     test_crate();
     test_keyword_modifiers();
+    test_concept_and_with_items();
     return 0;
 }

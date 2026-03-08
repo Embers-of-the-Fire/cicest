@@ -18,10 +18,10 @@ namespace {
 template <typename T>
 using ParseResult = std::expected<T, ParseError>;
 
-constexpr std::array<std::string_view, 21> RESERVED_KEYWORDS = {
-    "let",    "async",  "runtime", "sync",   "const", "fn",     "where",
-    "extern", "if",     "else",    "match",  "loop",  "struct", "enum",
-    "type",   "return", "self",    "lambda", "true",  "false",  "_",
+constexpr std::array<std::string_view, 23> RESERVED_KEYWORDS = {
+    "let",     "async",  "runtime", "sync",   "const",  "fn",    "where", "extern",
+    "if",      "else",   "match",   "loop",   "struct", "enum",  "type",  "with",
+    "concept", "return", "self",    "lambda", "true",   "false", "_",
 };
 
 [[nodiscard]] bool is_reserved_keyword(std::string_view text) noexcept {
@@ -186,6 +186,10 @@ private:
     [[nodiscard]] ParseResult<cstc::ast::Item> parse_enum_item(cstc::span::SourceSpan start_span);
     [[nodiscard]] ParseResult<cstc::ast::Item>
         parse_type_alias_item(cstc::span::SourceSpan start_span);
+    [[nodiscard]] ParseResult<cstc::ast::Item>
+        parse_concept_item(cstc::span::SourceSpan start_span);
+    [[nodiscard]] ParseResult<cstc::ast::ConceptMethod> parse_concept_method();
+    [[nodiscard]] ParseResult<cstc::ast::Item> parse_with_item(cstc::span::SourceSpan start_span);
 
     [[nodiscard]] ParseResult<cstc::ast::Block> parse_block();
     [[nodiscard]] ParseResult<cstc::ast::Stmt> parse_stmt();
@@ -518,7 +522,8 @@ bool Parser::is_item_start() const noexcept {
     if (check_ident_at(index, "extern") && check_ident_at(index + 1, "fn"))
         return true;
     return check_ident_at(index, "fn") || check_ident_at(index, "struct")
-        || check_ident_at(index, "enum") || check_ident_at(index, "type");
+        || check_ident_at(index, "enum") || check_ident_at(index, "type")
+        || check_ident_at(index, "concept") || check_ident_at(index, "with");
 }
 
 ParseResult<LexedToken> Parser::expect(cstc::lexer::TokenKind kind, std::string_view expectation) {
@@ -1135,6 +1140,10 @@ ParseResult<cstc::ast::Item> Parser::parse_item() {
         return parse_enum_item(start_span);
     if (match_ident("type"))
         return parse_type_alias_item(start_span);
+    if (match_ident("concept"))
+        return parse_concept_item(start_span);
+    if (match_ident("with"))
+        return parse_with_item(start_span);
 
     return fail<cstc::ast::Item>("expected item declaration");
 }
@@ -1458,6 +1467,156 @@ ParseResult<cstc::ast::Item> Parser::parse_type_alias_item(cstc::span::SourceSpa
         .id = node_ids_.next(),
         .span = merge_spans(start_span, semi_result->span),
         .kind = std::move(alias_item),
+    };
+}
+
+ParseResult<cstc::ast::ConceptMethod> Parser::parse_concept_method() {
+    auto keywords_result = parse_keyword_modifiers();
+    if (!keywords_result)
+        return std::unexpected(std::move(keywords_result.error()));
+
+    if (!match_ident("fn"))
+        return fail<cstc::ast::ConceptMethod>("expected `fn` in concept body");
+
+    auto name_result = parse_identifier("concept method name");
+    if (!name_result)
+        return std::unexpected(std::move(name_result.error()));
+
+    cstc::ast::Generics generics{};
+    auto generic_params_result = parse_optional_generic_params();
+    if (!generic_params_result)
+        return std::unexpected(std::move(generic_params_result.error()));
+    generics.params = std::move(*generic_params_result);
+
+    auto sig_result = parse_fn_sig();
+    if (!sig_result)
+        return std::unexpected(std::move(sig_result.error()));
+
+    auto where_clause_result = parse_optional_where_clause();
+    if (!where_clause_result)
+        return std::unexpected(std::move(where_clause_result.error()));
+    generics.where_clause = std::move(*where_clause_result);
+
+    auto semi_result = expect(cstc::lexer::TokenKind::Semi, "`;` after concept method signature");
+    if (!semi_result)
+        return std::unexpected(std::move(semi_result.error()));
+
+    return cstc::ast::ConceptMethod{
+        .keywords = std::move(*keywords_result),
+        .name = name_result->symbol,
+        .generics = std::move(generics),
+        .sig = std::move(*sig_result),
+    };
+}
+
+ParseResult<cstc::ast::Item> Parser::parse_concept_item(cstc::span::SourceSpan start_span) {
+    auto name_result = parse_identifier("concept name");
+    if (!name_result)
+        return std::unexpected(std::move(name_result.error()));
+
+    cstc::ast::Generics generics{};
+    auto generic_params_result = parse_optional_generic_params();
+    if (!generic_params_result)
+        return std::unexpected(std::move(generic_params_result.error()));
+    generics.params = std::move(*generic_params_result);
+
+    auto where_clause_result = parse_optional_where_clause();
+    if (!where_clause_result)
+        return std::unexpected(std::move(where_clause_result.error()));
+    generics.where_clause = std::move(*where_clause_result);
+
+    auto open_result = expect(cstc::lexer::TokenKind::OpenBrace, "`{` to start concept body");
+    if (!open_result)
+        return std::unexpected(std::move(open_result.error()));
+
+    std::vector<cstc::ast::ConceptMethod> methods;
+    while (!check(cstc::lexer::TokenKind::CloseBrace)) {
+        if (at_end())
+            return fail<cstc::ast::Item>("unexpected end of input in concept body");
+
+        auto method_result = parse_concept_method();
+        if (!method_result)
+            return std::unexpected(std::move(method_result.error()));
+
+        methods.push_back(std::move(*method_result));
+    }
+
+    auto close_result = expect(cstc::lexer::TokenKind::CloseBrace, "`}` after concept body");
+    if (!close_result)
+        return std::unexpected(std::move(close_result.error()));
+
+    cstc::ast::ConceptItem concept_item{
+        .name = name_result->symbol,
+        .generics = std::move(generics),
+        .methods = std::move(methods),
+    };
+
+    return cstc::ast::Item{
+        .id = node_ids_.next(),
+        .span = merge_spans(start_span, close_result->span),
+        .kind = std::move(concept_item),
+    };
+}
+
+ParseResult<cstc::ast::Item> Parser::parse_with_item(cstc::span::SourceSpan start_span) {
+    auto generic_params_result = parse_optional_generic_params();
+    if (!generic_params_result)
+        return std::unexpected(std::move(generic_params_result.error()));
+    auto generic_params = std::move(*generic_params_result);
+
+    auto target_type_result = parse_type();
+    if (!target_type_result)
+        return std::unexpected(std::move(target_type_result.error()));
+
+    auto where_clause_result = parse_optional_where_clause();
+    if (!where_clause_result)
+        return std::unexpected(std::move(where_clause_result.error()));
+    auto where_clause = std::move(*where_clause_result);
+
+    auto open_result = expect(cstc::lexer::TokenKind::OpenBrace, "`{` to start with-body");
+    if (!open_result)
+        return std::unexpected(std::move(open_result.error()));
+
+    std::vector<cstc::ast::FnItem> methods;
+    while (!check(cstc::lexer::TokenKind::CloseBrace)) {
+        if (at_end())
+            return fail<cstc::ast::Item>("unexpected end of input in with-body");
+
+        const auto method_start = peek().span;
+        auto keywords_result = parse_keyword_modifiers();
+        if (!keywords_result)
+            return std::unexpected(std::move(keywords_result.error()));
+
+        if (!match_ident("fn"))
+            return fail<cstc::ast::Item>("expected `fn` item in with-body");
+
+        auto method_item_result = parse_fn_item(std::move(*keywords_result), method_start);
+        if (!method_item_result)
+            return std::unexpected(std::move(method_item_result.error()));
+
+        auto method_item = std::move(*method_item_result);
+        if (!std::holds_alternative<cstc::ast::FnItem>(method_item.kind)) {
+            return fail<cstc::ast::Item>("internal parser error: with-body produced non-fn item");
+        }
+
+        methods.push_back(std::get<cstc::ast::FnItem>(std::move(method_item.kind)));
+    }
+
+    auto close_result = expect(cstc::lexer::TokenKind::CloseBrace, "`}` after with-body");
+    if (!close_result)
+        return std::unexpected(std::move(close_result.error()));
+
+    cstc::ast::WithItem with_item{
+        .generic_params = std::move(generic_params),
+        .target_ty = std::move(*target_type_result),
+        .where_clause = std::move(where_clause),
+        .methods = std::move(methods),
+    };
+
+    return cstc::ast::Item{
+        .id = node_ids_.next(),
+        .span = merge_spans(start_span, close_result->span),
+        .kind = std::move(with_item),
     };
 }
 
@@ -1976,6 +2135,22 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_primary_expr() {
 
     if (looks_like_keyword_block_expr())
         return parse_keyword_block_expr();
+
+    if (match_ident("concept")) {
+        const auto concept_token = previous();
+        cstc::ast::PathSegment segment{
+            .span = concept_token.span,
+            .name = symbols_.intern(concept_token.text),
+        };
+        cstc::ast::Path path{
+            .span = concept_token.span,
+            .segments = {std::move(segment)},
+        };
+        return make_expr(
+            concept_token.span, cstc::ast::PathExpr{
+                                    .path = std::move(path),
+                                });
+    }
 
     if (check(cstc::lexer::TokenKind::LitInt) || check(cstc::lexer::TokenKind::LitFloat)
         || check(cstc::lexer::TokenKind::LitStr)

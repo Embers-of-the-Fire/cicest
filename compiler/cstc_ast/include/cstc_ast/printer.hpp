@@ -151,6 +151,38 @@ private:
         }
     }
 
+    void print_generic_params(const std::optional<GenericParams>& params) {
+        if (!params.has_value()) {
+            line("params: (none)");
+            return;
+        }
+
+        line("params");
+        const IndentScope params_scope{*this};
+        if (params->params.empty()) {
+            line("(empty)");
+        } else {
+            for (const auto& param : params->params)
+                line(symbol_text(param.name));
+        }
+    }
+
+    void print_where_clause(const std::optional<WhereClause>& where_clause) {
+        if (!where_clause.has_value()) {
+            line("where: (none)");
+            return;
+        }
+
+        line("where");
+        const IndentScope where_scope{*this};
+        if (where_clause->predicates.empty()) {
+            line("(empty)");
+        } else {
+            for (const auto& predicate : where_clause->predicates)
+                print_expr(*predicate.expr);
+        }
+    }
+
     void print_generics(const Generics& generics) {
         if (!generics.params.has_value() && !generics.where_clause.has_value()) {
             line("generics: (none)");
@@ -159,30 +191,8 @@ private:
 
         line("generics");
         const IndentScope scope{*this};
-
-        if (generics.params.has_value()) {
-            line("params");
-            {
-                const IndentScope params_scope{*this};
-                if (generics.params->params.empty()) {
-                    line("(empty)");
-                } else {
-                    for (const auto& param : generics.params->params)
-                        line(symbol_text(param.name));
-                }
-            }
-        }
-
-        if (generics.where_clause.has_value()) {
-            line("where");
-            const IndentScope where_scope{*this};
-            if (generics.where_clause->predicates.empty()) {
-                line("(empty)");
-            } else {
-                for (const auto& predicate : generics.where_clause->predicates)
-                    print_expr(*predicate.expr);
-            }
-        }
+        print_generic_params(generics.params);
+        print_where_clause(generics.where_clause);
     }
 
     void print_fn_sig(const FnSig& sig) {
@@ -319,6 +329,51 @@ private:
                     const IndentScope scope{*this};
                     print_generics(kind.generics);
                     print_type(*kind.ty);
+                } else if constexpr (std::is_same_v<Kind, ConceptItem>) {
+                    line("item concept " + symbol_text(kind.name));
+                    const IndentScope scope{*this};
+                    print_generics(kind.generics);
+                    line("methods");
+                    {
+                        const IndentScope method_scope{*this};
+                        if (kind.methods.empty()) {
+                            line("(empty)");
+                        } else {
+                            for (const auto& method : kind.methods) {
+                                line("concept method " + symbol_text(method.name));
+                                const IndentScope sig_scope{*this};
+                                print_keyword_modifiers(method.keywords);
+                                print_generics(method.generics);
+                                print_fn_sig(method.sig);
+                            }
+                        }
+                    }
+                } else if constexpr (std::is_same_v<Kind, WithItem>) {
+                    line("item with");
+                    const IndentScope scope{*this};
+                    print_generic_params(kind.generic_params);
+                    line("target");
+                    {
+                        const IndentScope target_scope{*this};
+                        print_type(*kind.target_ty);
+                    }
+                    print_where_clause(kind.where_clause);
+                    line("methods");
+                    {
+                        const IndentScope method_scope{*this};
+                        if (kind.methods.empty()) {
+                            line("(empty)");
+                        } else {
+                            for (const auto& method : kind.methods) {
+                                line("with method " + symbol_text(method.name));
+                                const IndentScope fn_scope{*this};
+                                print_keyword_modifiers(method.keywords);
+                                print_generics(method.generics);
+                                print_fn_sig(method.sig);
+                                print_block(method.body);
+                            }
+                        }
+                    }
                 }
             },
             item.kind);

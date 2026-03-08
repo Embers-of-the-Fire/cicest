@@ -183,9 +183,9 @@ Because `runtime` is idempotent (`runtime (runtime T)` ≡ `runtime T`), `runtim
 Because `async` nesting is **not** idempotent, `async fn -> async T` produces `async (async T)` — a genuinely doubly-deferred computation requiring two resolution steps.
 
 The convention is to write the contract only **once** to avoid confusion:
+
 - `async fn foo() -> i32` — preferred (prefix provides the wrapper)
 - `fn foo() -> async i32` — equivalent, also valid
-
 
 ## Asynchronous Execution
 
@@ -428,11 +428,52 @@ When a generic function or type is instantiated:
 
 Generic parameters can have constraints via:
 
-- **where clauses**: `fn<T> foo(x: T) -> T where T: Copyable { ... }`
-- **inline bounds**: `fn<T: Copyable> foo(x: T) -> T { ... }`
+- **type-level `where` predicates**: `fn<T> foo(x: T) -> T where sizeof(T) == 4 { ... }`
+- **concept predicates** via intrinsic expression: `fn<T> foo(x: T) -> T where concept(Foo::<T>) { ... }`
 
 Constraints are validated during HIR lowering for the abstract generic definition.
 At monomorphization time, constraints are re-validated with concrete types.
+
+## Concepts and With Blocks
+
+Cicest supports a C++-style concept surface, expressed through two declarations:
+
+1. **`concept`** — declares function-signature requirements
+2. **`with`** — attaches function definitions to a target type
+
+Concept checking in generic constraints is expressed with a compiler intrinsic expression in `where` clauses:
+
+```rust
+concept Comparable<T> {
+    fn compare(lhs: T, rhs: T) -> i32;
+}
+
+fn<T> max(a: T, b: T) -> T
+    where concept(Comparable::<T>)
+{ /* ... */ }
+```
+
+`with` blocks define associated functions for a type:
+
+```rust
+with Point {
+    fn length(self: Point) -> f64 { /* ... */ }
+}
+```
+
+Blanket impls over all types are forbidden:
+
+- `with<T> T { ... }` is not allowed.
+- A bare type-parameter target is rejected even if the block has a `where` clause.
+
+This keeps concept resolution coherent and avoids overlap/ambiguity at the interface level.
+
+For non-static functions that take `self`, the call model is defined by desugaring:
+
+- A method definition is treated as a plain function whose first parameter is the receiver value.
+- `value.func(args...)` desugars to `func(value, args...)`.
+
+This keeps method syntax as surface sugar while preserving the core function-based model.
 
 ### Types as Values
 
@@ -519,7 +560,6 @@ Type constructors (`async`, `runtime`) form part of the type directly and propag
        print_int(x);        // implicit sync: print_int(sync { x })
    }
    ```
-
 
 ### Const Generics
 

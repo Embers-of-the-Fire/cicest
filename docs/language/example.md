@@ -167,12 +167,14 @@ fn main() -> () {
 ## 5. Generics
 
 Generic functions use type variables in angle brackets.
-Constraints are expressed with inline bounds or `where` clauses.
+Constraints are expressed with `where` clauses.
 
 ```rust
 fn<T> identity(x: T) -> T { x }
 
-fn<T: Printable> print_twice(x: T) -> () {
+fn<T> print_twice(x: T) -> ()
+    where concept(Printable::<T>)
+{
     print(x);
     print(x);
 }
@@ -188,6 +190,29 @@ fn<A, B> swap(pair: Pair<A, B>) -> Pair<B, A> {
 The compiler records each distinct set of type arguments used at call sites.
 Code for `identity::<i32>` and `identity::<String>` is generated separately, only when those instantiations are actually reached.
 Identical instantiations are deduplicated.
+
+### Concepts and `with`
+
+Concepts define signature-only requirements:
+
+```rust
+concept Printable<T> {
+    fn print(x: T) -> ();
+}
+```
+
+`with` blocks attach function definitions to a type:
+
+```rust
+with Point {
+    fn length(self: Point) -> f64 {
+        sqrt(self.x * self.x + self.y * self.y)
+    }
+}
+
+let p = Point { x: 3.0, y: 4.0 };
+let n = p.length();   // desugars to: length(p)
+```
 
 ---
 
