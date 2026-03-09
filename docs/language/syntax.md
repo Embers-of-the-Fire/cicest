@@ -34,12 +34,12 @@
   - [Patterns](#patterns)
   - [Token List](#token-list)
 
-Note: The syntax reference is not comprehensive and is just a guide instead of a strict rule for this language.
+This document describes the normative surface syntax used by the language design.
 
 ## Compiler Contract Marker
 
 The language supports two type constructors: `async` and `runtime`.
-To support higher-level generics, the following variants are allowed: `async<A>` and `runtime<R>`, where `A` and `R` are type variables.
+Type-constructor application forms are preserved in syntax, including `async<A>` and `runtime<R>`, where `A` and `R` denote type-level values.
 
 **Negative declarations** assert the *absence* of a contract: `!async` and `!runtime`.
 Negative declarations do not accept type variables.
@@ -73,7 +73,7 @@ When the receiver is `async T`, the compiler automatically lifts the accessor:
 T::a : (async T) -> async A
 ```
 
-```rust
+```cicest
 struct Rec { a: i32 }
 // generates: Rec::a : (!async Rec) -> i32
 
@@ -90,7 +90,7 @@ let sv = sync { ar }.a;    // sync { ar }: !async Rec → sv: i32
 Compiler-intrinsic functions that query type information require a `!runtime` (`const`) type argument.
 All plain types satisfy `!runtime` by default.
 
-```rust
+```cicest
 let s = sizeof(i32);        // OK: i32 is !runtime (const)
 let a = alignof(Point);     // OK
 
@@ -115,7 +115,7 @@ Where *contract-keyword* is one of: `async` | `sync` | `runtime` | `const` | `!a
 
 `sync { }` and `const { }` are the preferred aliases for `!async { }` and `!runtime { }`.
 
-```rust
+```cicest
 let f: async i32   = async { 42 };           // i32  → async i32
 let v: i32         = sync { f };             // explicit force (optional: implicit coercion also works)
 let r: runtime i32 = runtime { read_int() }; // i32 → runtime i32
@@ -137,23 +137,23 @@ To declare generic type variables:
 To declare standalone restrictions:
 
 where  
-&emsp;&emsp;( *compile-time-bool-expression-over-type-params* ),*
+&emsp;&emsp;( *compile-time-bool-expression* ),*
 
-`where` clauses accept two forms:
+`where` clauses are lists of expressions evaluated at compile time to `bool`.
+Evaluation is performed by the HIR interpreter on the VM.
+All predicates must evaluate to `true`, or substitution fails.
 
-- **Type-level predicates**: arbitrary compile-time boolean expressions that mention only type parameters (not value parameters)
-- **Concept checks** via intrinsic expression: `concept(Foo)` or `concept(Foo::<T>)`
+Predicates may use compile-time intrinsics such as `sizeof`, `alignof`, `is_async`, `is_runtime`, `make_async`, and `make_runtime`, plus concept checks via intrinsic expression (`concept(Foo)` / `concept(Foo::<T>)`).
+Calling `runtime` functions or reading `runtime` values inside `where` is invalid.
 
-Type parameters are compile-time values (like Zig's `comptime`), so compiler intrinsics like `sizeof(T)` and `alignof(T)` may appear inside `where`.
-Any non-`runtime` function whose arguments are derived solely from type parameters is valid in a predicate.
-
-```rust
+```cicest
 fn<T> foo(x: T) -> T where sizeof(T) == 4 { x }
 fn<T, U> compatible() -> bool where sizeof(T) == sizeof(U) { true }
 fn<T> aligned() -> T where is_power_of_two(sizeof(T)) { /* ... */ }
 fn<T> sortable(x: T) -> T where concept(Sortable::<T>) { x }
 
-// ERROR — value parameter `n` is not a type parameter:
+// ERROR — runtime-dependent predicate:
+// runtime fn is_positive(n: i32) -> bool { n > 0 }
 // fn bar(n: i32) -> i32 where is_positive(n) { n }
 ```
 
@@ -167,12 +167,12 @@ The concept body only allows function signatures (no function bodies).
 concept **Name** *(generic-declaration)?*  
 *(generic-restriction)?*  
 {  
-&emsp;&emsp;( *contract-marker?* fn **name** *(generic-declaration)?* ( *self,?* ( **var-name** : **Type** ),* ) `->` **Type** *(generic-restriction)?* `;` )*  
+&emsp;&emsp;( *contract-marker?* fn **name** *(generic-declaration)?* ( *self,?* ( **var-name** : **Type** ),*) `->` **Type** *(generic-restriction)?* `;` )*  
 }
 
 Use concept predicates in generic constraints with the intrinsic expression `concept(...)`:
 
-```rust
+```cicest
 concept Comparable<T> {
     fn compare(lhs: T, rhs: T) -> i32;
 }
@@ -185,7 +185,7 @@ fn<T> max(a: T, b: T) -> T
 #### Const Generics
 
 There is no separate `const N` or `const fn` generic parameter syntax.
-Const-generic-style constraints are expressed entirely through type-level `where` predicates, using the fact that types are compile-time values.
+Const-generic-style constraints are expressed through compile-time `where` predicates, commonly over type-derived values.
 The compiler evaluates all `where` predicates via the VM at each call site.
 
 ### Structures
@@ -245,7 +245,7 @@ type **Name** *(generic-declaration)?*
 
 with *(generic-declaration)?* **Type** *(generic-restriction)?*  
 {  
-&emsp;&emsp;( *contract-marker?* fn **Name** *(generic-declaration)?* ( *self,?* ( **var-name** : **Type** ),* ) `->` **Type** *(generic-restriction)?* *block-expression* )*  
+&emsp;&emsp;( *contract-marker?* fn **Name** *(generic-declaration)?* ( *self,?* ( **var-name** : **Type** ),*) `->` **Type** *(generic-restriction)?* *block-expression* )*  
 }
 
 Desugaring model (documented behavior):
@@ -259,7 +259,7 @@ Blanket implementation rule:
 - `with<T> T { ... }` is forbidden (blanket impl on all types).
 - This prohibition also applies when a `where` clause is present on the `with` block.
 
-```rust
+```cicest
 with Point {
     fn length(self: Point) -> f64 { /* ... */ }
 }
@@ -328,15 +328,16 @@ Type inference still applies within function bodies.
 
 The `self` parameter comes in two forms:
 
-runtime &self
+&self
 
 self: **Type**
 
 **Rules**:
 
-- `self` parameters must be marked `runtime` (methods are runtime-only)
 - `&self` takes an immutable reference to the receiver
 - `self: Type` allows custom receiver types
+- Conceptually, bare `self` is syntactic sugar for `self: Self`
+- Method calls desugar to static calls: `value.func(args...)` → `Type::func(value, args...)`
 
 ## Expression
 
@@ -375,9 +376,6 @@ self: **Type**
 **Lazy Boolean**  
 *expression* ( `||` `&&` ) *expression*
 
-**Assignment**  
-*expression* `=` *expression*
-
 ### Constructor
 
 &emsp;| **Name**  
@@ -391,7 +389,7 @@ Type annotations on parameters are optional when inferable from context:
 
 `lambda` `(` ( **var-name** (`:` **Type**)? ),* `)` *block-expression*
 
-```rust
+```cicest
 lambda(x: i32) { x + 1 }
 lambda(x: i32, y: i32) { x + y }
 lambda(x) { x * 2 }                // type inferred from context
@@ -409,7 +407,7 @@ Arms are checked exhaustively. The expression evaluates to the body of the first
 &emsp;*pattern* `=>` *expression* `,`?  
 `}`
 
-```rust
+```cicest
 match s {
     Circle { radius: r }              => 3.14159 * r * r,
     Rectangle { width: w, height: h } => w * h,
@@ -451,7 +449,7 @@ loop *block-expression*
 
 All bindings use `let`. Every binding is immutable — a name is bound once and cannot be reassigned.
 
-`let` **Name** ( `:` **Type** )? ( `=` *expression* )? `;`
+`let` *pattern* ( `:` **Type** )? ( `=` *expression* )? `;`
 
 **Rules**:
 
@@ -460,7 +458,7 @@ All bindings use `let`. Every binding is immutable — a name is bound once and 
 
 ## Patterns
 
-Patterns appear in `match` arms, lambda parameters, and `let` bindings.
+Patterns appear in `match` arms and `let` bindings.
 
 | Pattern | Description |
 |---------|-------------|

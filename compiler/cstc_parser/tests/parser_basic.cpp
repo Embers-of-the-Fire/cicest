@@ -127,9 +127,23 @@ fn max<T>(a: T, b: T) -> T
     assert(std::holds_alternative<CallExpr>(fn.generics.where_clause->predicates[0].expr->kind));
 }
 
+static void test_assignment_expression_is_rejected() {
+    constexpr std::string_view source = R"(
+fn main() -> () {
+    let x: i32 = 1;
+    x = 2;
+}
+)";
+
+    SymbolTable symbols;
+    const auto parsed = parse_source(source, symbols);
+    assert(!parsed.has_value());
+}
+
 int main() {
     test_parse_main_function();
     test_parse_keyword_and_match();
     test_parse_concept_with_and_intrinsic();
+    test_assignment_expression_is_rejected();
     return 0;
 }

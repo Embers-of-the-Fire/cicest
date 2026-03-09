@@ -17,7 +17,7 @@ If the program, instead, targets the native platform, the LIR will then be conve
 
 ## Async-by-Default Execution Model
 
-Cicest treats **all operations as async by default**.
+Cicest treats code as **async-compatible by default**.
 The VM and native runtime operate on a cooperative, single-threaded event loop.
 Values may be deferred (`async T`) or immediately resolved (`!async T` / `sync T`).
 
@@ -25,14 +25,14 @@ Values may be deferred (`async T`) or immediately resolved (`!async T` / `sync T
 
 Creating an `async T` value is a **no-op** — it packages a computation without running it:
 
-```rust
+```cicest
 let a = fetch(url1);  // type: async i32 — nothing executed
 let b = fetch(url2);  // type: async i32 — another deferred computation
 ```
 
 **Implicit coercion:** when `async T` is used where `T` is expected (passed as a function argument, returned from a non-`async` function, used in an expression), the compiler automatically inserts a `sync { }` at that site. This means ordinary code looks synchronous even when it involves async operations:
 
-```rust
+```cicest
 async fn fetch(url: String) -> i32 { /* ... */ }
 fn print_int(x: i32) -> () { /* ... */ }
 
@@ -43,14 +43,14 @@ runtime fn main() -> () {
 }
 ```
 
-The `sync { }` is inserted by the compiler in the compiled output; you do not write it unless you want explicit control.
+`sync { }` insertion is implicit only at surface syntax. Typed HIR and LIR represent all forcing sites explicitly.
 
 ### Explicit `sync { }` (optional)
 
 `sync { expr: async T }` is still valid and forces resolution at a specific point.
 Use it when order of evaluation matters or for documentation clarity:
 
-```rust
+```cicest
 let a = fetch(url1);
 let b = fetch(url2);
 let ra = sync { a };  // force a explicitly before b
@@ -59,19 +59,17 @@ let rb = sync { b };
 
 ### Program entry point
 
-`main` cannot literally return `async ()` — the OS expects a plain `()`.
-Writing `fn main() -> async ()` is syntactic sugar that is desugared to `fn main() -> ()`.
-The body remains an async context; all implicit coercions inside apply as normal.
-The event loop is bootstrapped at the first forced value in `main`'s body.
+The entrypoint implicitly syncs its final result so the asynchronous event loop is executed.
+If `main` evaluates to an `async` value, the launcher forces that final value before process exit.
 
-```rust
+```cicest
 // Written:
 fn main() -> async () {
     let result = fetch("http://example.com");
     print_int(result);  // implicit sync here
 }
 
-// Equivalent after desugaring + coercion:
+// Equivalent launcher behavior:
 fn main() -> () {
     let result = fetch("http://example.com");
     print_int(sync { result });
@@ -82,7 +80,7 @@ fn main() -> () {
 
 ## Generic Resolution and Compile-Time Execution
 
-### Lazy Substitution (C++ Template-style)
+### Lazy Substitution
 
 Generics are resolved using lazy substitution, similar to C++ template instantiation.
 When a generic function or type is invoked with concrete type arguments, the compiler:
@@ -95,7 +93,7 @@ When a generic function or type is invoked with concrete type arguments, the com
 ### Const Generic Resolution
 
 All functions without a `runtime` marker are compile-time evaluatable.
-The compiler's VM is invoked during compilation to run these functions, which enables using them as **compile-time predicates** in `where` clauses.
+The HIR interpreter on the compiler VM evaluates these functions during compilation, which enables using them as **compile-time predicates** in `where` clauses.
 
 When a generic function with a predicate constraint is instantiated, the compiler:
 
@@ -104,7 +102,7 @@ When a generic function with a predicate constraint is instantiated, the compile
 3. If any predicate returns `false`, a compile error is emitted at the call site
 4. Otherwise, proceeds with monomorphization as normal
 
-```rust
+```cicest
 fn is_small(n: i32) -> bool { n < 256 }
 
 // sizeof(T) derives a compile-time integer from the type parameter T — valid in where.
@@ -130,15 +128,14 @@ Both generic resolution and compile-time evaluation follow the same lazy princip
 
 ## Contract Validation
 
-The contract is validated during HIR lowering.
+Contract validation is performed during HIR lowering and HIR type validation.
 
-Given a keyword generic `keyword<K>`, generally there are the following rules:
+Core rules:
 
-1. A type is `keyword<K>` if one of the fields is `keyword` or `K` evaluates to `Contract::Success`.
-2. A function is `keyword<K>` if one of the direct parameters or one of the direct statements is `keyword` or `K` evaluates to `Contract::Success`.
-3. Branching expressions are always evaluated to `K: Contract::Success` if one of the branches has a contract of `keyword`.
-
-Explicit contract narrowing is accepted.
+1. `runtime` and `async` are type constructors; constructor structure participates in ordinary type checking.
+2. `runtime T` is distinct from `T`; default values are `!runtime` unless explicitly constructed or derived from `runtime` inputs.
+3. `runtime (runtime T)` is flattened to `runtime T` during type normalization.
+4. Surface implicit async forcing is lowered into explicit `sync` nodes before LIR generation.
 
 ## Type Annotation Validation
 
@@ -155,7 +152,7 @@ Asynchronous execution in Cicest is based on a **delayed evaluation model**.
 When an `async fn` is called with a return type `R`, the result is a value of type `async R` rather than `R` itself.
 This value represents a deferred computation that has not yet been executed.
 
-```rust
+```cicest
 async fn fetch_data() -> i32 { /* ... */ }
 
 let future = fetch_data();  // future has type `async i32`
@@ -165,7 +162,7 @@ let future = fetch_data();  // future has type `async i32`
 
 Asynchronous values are executed through **polling**:
 
-- **Field Access Polling**: Accessing a field of an `async T` value polls the computation and returns the inner value
+- **Accessor Lifting**: Accessing a field of an `async T` value yields `async FieldType`; forcing occurs only at a `sync` site
 - **Single-threaded**: All polling is coordinated by a single-threaded event loop
 - **No multithreading**: The language does not support concurrent execution across multiple threads
 
@@ -173,7 +170,7 @@ Asynchronous values are executed through **polling**:
 
 When immediate resolution is needed, the `sync { }` block is the standard mechanism:
 
-```rust
+```cicest
 let v: i32 = sync { future };     // drives the event loop until the future resolves
 ```
 

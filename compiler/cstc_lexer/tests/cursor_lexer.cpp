@@ -69,7 +69,7 @@ static void test_smoke() {
     });
 }
 
-// `#` introduces a line comment that runs to (but does not include) the newline.
+// `#` and `//` introduce a line comment that runs to (but does not include) the newline.
 static void test_line_comment() {
     check_lexing(
         "# line comment\nfoo", {
@@ -91,6 +91,30 @@ static void test_line_comment() {
                      { .kind = TokenKind::Whitespace, .len = 1},
                      {      .kind = TokenKind::Ident, .len = 2},
                      {        .kind = TokenKind::Eof, .len = 0},
+    });
+
+    check_lexing(
+        "// line comment\nfoo", {
+                                    {.kind = TokenKind::LineComment, .len = 15},
+                                    { .kind = TokenKind::Whitespace,  .len = 1},
+                                    {      .kind = TokenKind::Ident,  .len = 3},
+                                    {        .kind = TokenKind::Eof,  .len = 0},
+    });
+}
+
+// `/* ... */` is lexed as block-comment trivia.
+static void test_block_comment() {
+    check_lexing(
+        "/* hello */foo", {
+                             {.kind = TokenKind::BlockComment, .len = 11},
+                             {       .kind = TokenKind::Ident, .len = 3},
+                             {         .kind = TokenKind::Eof, .len = 0},
+    });
+
+    check_lexing(
+        "/* unterminated", {
+                              {.kind = TokenKind::BlockComment, .len = 15},
+                              {         .kind = TokenKind::Eof, .len = 0},
     });
 }
 
@@ -129,7 +153,7 @@ static void test_integer_literals() {
     });
 }
 
-// Float literals: require a non-zero leading digit followed by `.`.
+// Float literals may include fractional and/or exponent parts.
 static void test_float_literals() {
     check_lexing(
         "1.0 1.25 2.5e3 1.0e-2", {
@@ -153,6 +177,18 @@ static void test_float_literals() {
         "3.0e+4", {
                       {.kind = TokenKind::LitFloat, .len = 6},
                       {     .kind = TokenKind::Eof, .len = 0},
+    });
+    // Float with a zero leading digit.
+    check_lexing(
+        "0.0", {
+                   {.kind = TokenKind::LitFloat, .len = 3},
+                   {     .kind = TokenKind::Eof, .len = 0},
+    });
+    // Float with exponent and no fractional part.
+    check_lexing(
+        "1e3", {
+                   {.kind = TokenKind::LitFloat, .len = 3},
+                   {     .kind = TokenKind::Eof, .len = 0},
     });
 }
 
@@ -254,6 +290,7 @@ int main() {
     test_original();
     test_smoke();
     test_line_comment();
+    test_block_comment();
     test_whitespace();
     test_integer_literals();
     test_float_literals();

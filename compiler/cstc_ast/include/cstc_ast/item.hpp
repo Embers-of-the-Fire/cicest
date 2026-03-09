@@ -23,8 +23,6 @@ namespace cstc::ast {
 /// Self-parameter forms: `&self` or `self: Type`.
 struct SelfParam {
     cstc::span::SourceSpan span;
-    /// Keyword modifiers on self, e.g. `runtime` in `runtime &self`.
-    std::vector<KeywordModifier> keywords;
     /// True if `&self` (reference form).
     bool is_ref;
     /// Explicit type for `self: Type` form. Absent for `&self`.

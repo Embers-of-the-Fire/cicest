@@ -18,29 +18,31 @@ After these phases, the compiler has fully validated typed HIR.
 
 ## HIR Declaration Shape
 
-Each declaration is represented with explicit runtime and compile-time sections.
+Each declaration is represented with explicit body and constraint sections.
 
 ```text
 <declaration-header>
-<decl>::runtime {
-    <runtime expressions>
+<decl>::body {
+    <lowered executable expressions>
 }
-<decl>::const {
-    <compile-time expressions>
+<decl>::constraint {
+    <compile-time-bool-expr-1>
+    <compile-time-bool-expr-2>
+    ...
 }
 ```
 
 Rules:
 
-- `<decl>::runtime` contains runtime behavior.
-- `<decl>::const` contains compile-time behavior used by typing, constraints, and compile-time constants.
+- `<decl>::body` contains the lowered declaration body.
+- `<decl>::constraint` contains `where` predicates normalized to compile-time boolean expressions.
 - Both sections exist for every declaration; either section may be empty.
 
 ---
 
 ## Constraint Normalization
 
-Any `where` constraints are lowered into the declaration const section.
+Any `where` constraints are lowered into the declaration constraint section.
 
 Canonical form:
 
@@ -55,7 +57,7 @@ Canonical form:
 
 Example:
 
-```rust
+```cicest
 fn max<T>(a: T, b: T) -> T
     where sizeof(T) == 4, concept(Comparable::<T>)
 { a }
@@ -76,6 +78,18 @@ Constraint semantics:
 - Every constraint expression has compile-time boolean type.
 - Constraints are conjunctive; all expressions must evaluate to `true`.
 - Constraint expressions are evaluated lazily at concrete generic instantiation.
+
+---
+
+## Compile-Time Value Lifting
+
+HIR lowering identifies compile-time-available subexpressions inside declaration bodies.
+
+Rules:
+
+- compile-time-available values are lifted and pre-evaluated during HIR lowering when possible
+- lifted values are materialized as constants in typed HIR
+- failing compile-time evaluation of a required lifted value is a hard validation error
 
 ---
 
@@ -185,6 +199,7 @@ After solving:
 - every expression has a concrete type
 - every qualifier state is concrete
 - implicit async forcing sites are explicit (`sync()`)
+- compile-time-lifted constants are materialized in typed HIR
 - constraint expressions are typed and ready for compile-time evaluation
 
 ---
@@ -195,7 +210,7 @@ Type validation may require compile-time values to determine types or qualifiers
 
 Rules:
 
-- required compile-time expressions are read from `<decl>::const`
+- required compile-time expressions are read from `<decl>::constraint` and lifted compile-time body subexpressions
 - evaluation is on-demand and lazy
 - values produced here may participate in type and qualifier decisions
 - if compile-time evaluation cannot produce a valid compile-time value, validation fails

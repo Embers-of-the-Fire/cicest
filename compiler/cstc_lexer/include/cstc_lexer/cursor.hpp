@@ -104,7 +104,16 @@ public:
             case '+': return TokenKind::Plus;
             case '-': return TokenKind::Minus;
             case '*': return TokenKind::Star;
-            case '/': return TokenKind::Slash;
+            case '/':
+                if (first() == '/') {
+                    std::ignore = bump();
+                    return line_comment();
+                }
+                if (first() == '*') {
+                    std::ignore = bump();
+                    return block_comment();
+                }
+                return TokenKind::Slash;
             case '^': return TokenKind::Caret;
             case '~': return TokenKind::Tlide;
             case '%': return TokenKind::Percent;
@@ -200,46 +209,49 @@ private:
     }
 
     [[nodiscard]] TokenKind number(char first_digit) noexcept {
-        if (first_digit == '0') {
-            switch (first()) {
-            case '0' ... '9':
-            case '_': eat_decimal_digits(); break;
-            case '.':
-            case 'e':
-            case 'E': break;
-            default: return TokenKind::LitInt;
-            }
-            return TokenKind::LitInt;
-        }
+        std::ignore = first_digit;
 
+        eat_decimal_digits();
+
+        bool is_float = false;
         if (const auto first_char = first(); first_char == '.') {
             if (const auto second_char = second();
                 second_char != '.' && !chars::is_id_start(second_char)) {
                 std::ignore = bump();
-                if (const auto first_char = first(); '0' <= first_char && first_char <= '9') {
-                    eat_decimal_digits();
-                    switch (first()) {
-                    case 'e':
-                    case 'E':
-                        std::ignore = bump();
-                        eat_float_exponent();
-                        break;
-                    default: break;
-                    }
-                }
-                return TokenKind::LitFloat;
-            } else if (first_char == 'e' || first_char == 'E') {
-                std::ignore = bump();
-                eat_float_exponent();
-                return TokenKind::LitFloat;
+                eat_decimal_digits();
+                is_float = true;
             }
         }
-        return TokenKind::LitInt;
+
+        if (const auto first_char = first(); first_char == 'e' || first_char == 'E') {
+            const auto exponent_start = chars;
+            std::ignore = bump();
+            if (eat_float_exponent()) {
+                is_float = true;
+            } else {
+                chars = exponent_start;
+            }
+        }
+
+        return is_float ? TokenKind::LitFloat : TokenKind::LitInt;
     }
 
     [[nodiscard]] TokenKind line_comment() noexcept {
         eat_until('\n');
         return TokenKind::LineComment;
+    }
+
+    [[nodiscard]] TokenKind block_comment() noexcept {
+        while (true) {
+            const auto ch = bump();
+            if (ch == EOF_CHAR)
+                break;
+            if (ch == '*' && first() == '/') {
+                std::ignore = bump();
+                break;
+            }
+        }
+        return TokenKind::BlockComment;
     }
 
     [[nodiscard]] TokenKind whitespace() noexcept {

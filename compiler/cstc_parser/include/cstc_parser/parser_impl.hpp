@@ -31,7 +31,8 @@ constexpr std::array<std::string_view, 23> RESERVED_KEYWORDS = {
 
 [[nodiscard]] bool is_trivia_token(cstc::lexer::TokenKind kind) noexcept {
     return kind == cstc::lexer::TokenKind::Whitespace
-        || kind == cstc::lexer::TokenKind::LineComment;
+        || kind == cstc::lexer::TokenKind::LineComment
+        || kind == cstc::lexer::TokenKind::BlockComment;
 }
 
 [[nodiscard]] cstc::span::SourceSpan
@@ -196,7 +197,6 @@ private:
     [[nodiscard]] ParseResult<cstc::ast::Stmt> parse_let_stmt(cstc::span::SourceSpan start_span);
 
     [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>> parse_expr();
-    [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>> parse_assignment_expr();
     [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>> parse_logical_or_expr();
     [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>> parse_logical_and_expr();
     [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>> parse_comparison_expr();
@@ -553,9 +553,15 @@ ParseResult<NameAndSpan>
 }
 
 ParseResult<cstc::ast::PathSegment> Parser::parse_path_segment() {
-    auto name_result = parse_identifier("path segment");
+    auto name_result = parse_identifier("path segment", true);
     if (!name_result)
         return std::unexpected(std::move(name_result.error()));
+
+    const auto name_text = symbols_.str(name_result->symbol);
+    if (is_reserved_keyword(name_text) && name_text != "self") {
+        return fail<cstc::ast::PathSegment>(
+            "keyword `" + std::string(name_text) + "` cannot be used as path segment");
+    }
 
     return cstc::ast::PathSegment{
         .span = name_result->span,
@@ -958,12 +964,6 @@ ParseResult<std::unique_ptr<cstc::ast::TypeNode>>
 ParseResult<std::optional<cstc::ast::SelfParam>> Parser::parse_optional_self_param() {
     const auto saved_cursor = cursor_;
 
-    auto keywords_result = parse_keyword_modifiers();
-    if (!keywords_result)
-        return std::unexpected(std::move(keywords_result.error()));
-
-    auto keywords = std::move(*keywords_result);
-
     if (match(cstc::lexer::TokenKind::Amp)) {
         const auto amp_span = previous().span;
         if (!match_ident("self")) {
@@ -972,9 +972,7 @@ ParseResult<std::optional<cstc::ast::SelfParam>> Parser::parse_optional_self_par
         }
 
         return cstc::ast::SelfParam{
-            .span =
-                merge_spans(keywords.empty() ? amp_span : keywords.front().span, previous().span),
-            .keywords = std::move(keywords),
+            .span = merge_spans(amp_span, previous().span),
             .is_ref = true,
             .explicit_ty = std::nullopt,
         };
@@ -993,10 +991,7 @@ ParseResult<std::optional<cstc::ast::SelfParam>> Parser::parse_optional_self_par
         explicit_ty = std::move(explicit_type);
 
         return cstc::ast::SelfParam{
-            .span = merge_spans(
-                keywords.empty() ? self_token.span : keywords.front().span,
-                explicit_ty->get()->span),
-            .keywords = std::move(keywords),
+            .span = merge_spans(self_token.span, explicit_ty->get()->span),
             .is_ref = false,
             .explicit_ty = std::move(explicit_ty),
         };
@@ -1150,15 +1145,30 @@ ParseResult<cstc::ast::Item> Parser::parse_item() {
 
 ParseResult<cstc::ast::Item> Parser::parse_fn_item(
     std::vector<cstc::ast::KeywordModifier> keywords, cstc::span::SourceSpan start_span) {
+    cstc::ast::Generics generics{};
+    std::optional<cstc::ast::GenericParams> leading_generic_params;
+    if (check(cstc::lexer::TokenKind::Lt)) {
+        auto leading_generic_params_result = parse_optional_generic_params();
+        if (!leading_generic_params_result)
+            return std::unexpected(std::move(leading_generic_params_result.error()));
+        leading_generic_params = std::move(*leading_generic_params_result);
+    }
+
     auto name_result = parse_identifier("function name");
     if (!name_result)
         return std::unexpected(std::move(name_result.error()));
 
-    cstc::ast::Generics generics{};
-    auto generic_params_result = parse_optional_generic_params();
-    if (!generic_params_result)
-        return std::unexpected(std::move(generic_params_result.error()));
-    generics.params = std::move(*generic_params_result);
+    auto trailing_generic_params_result = parse_optional_generic_params();
+    if (!trailing_generic_params_result)
+        return std::unexpected(std::move(trailing_generic_params_result.error()));
+
+    if (leading_generic_params.has_value() && trailing_generic_params_result->has_value()) {
+        return fail<cstc::ast::Item>(
+            "generic parameters may appear either before or after the function name, not both");
+    }
+
+    generics.params = leading_generic_params.has_value() ? std::move(leading_generic_params)
+                                                         : std::move(*trailing_generic_params_result);
 
     auto sig_result = parse_fn_sig();
     if (!sig_result)
@@ -1478,15 +1488,30 @@ ParseResult<cstc::ast::ConceptMethod> Parser::parse_concept_method() {
     if (!match_ident("fn"))
         return fail<cstc::ast::ConceptMethod>("expected `fn` in concept body");
 
+    cstc::ast::Generics generics{};
+    std::optional<cstc::ast::GenericParams> leading_generic_params;
+    if (check(cstc::lexer::TokenKind::Lt)) {
+        auto leading_generic_params_result = parse_optional_generic_params();
+        if (!leading_generic_params_result)
+            return std::unexpected(std::move(leading_generic_params_result.error()));
+        leading_generic_params = std::move(*leading_generic_params_result);
+    }
+
     auto name_result = parse_identifier("concept method name");
     if (!name_result)
         return std::unexpected(std::move(name_result.error()));
 
-    cstc::ast::Generics generics{};
-    auto generic_params_result = parse_optional_generic_params();
-    if (!generic_params_result)
-        return std::unexpected(std::move(generic_params_result.error()));
-    generics.params = std::move(*generic_params_result);
+    auto trailing_generic_params_result = parse_optional_generic_params();
+    if (!trailing_generic_params_result)
+        return std::unexpected(std::move(trailing_generic_params_result.error()));
+
+    if (leading_generic_params.has_value() && trailing_generic_params_result->has_value()) {
+        return fail<cstc::ast::ConceptMethod>(
+            "generic parameters may appear either before or after the method name, not both");
+    }
+
+    generics.params = leading_generic_params.has_value() ? std::move(leading_generic_params)
+                                                         : std::move(*trailing_generic_params_result);
 
     auto sig_result = parse_fn_sig();
     if (!sig_result)
@@ -1731,23 +1756,16 @@ ParseResult<cstc::ast::Stmt> Parser::parse_stmt() {
 }
 
 ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_expr() {
-    return parse_assignment_expr();
-}
+    auto expr_result = parse_logical_or_expr();
+    if (!expr_result)
+        return std::unexpected(std::move(expr_result.error()));
 
-ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_assignment_expr() {
-    auto lhs_result = parse_logical_or_expr();
-    if (!lhs_result)
-        return std::unexpected(std::move(lhs_result.error()));
+    if (check(cstc::lexer::TokenKind::Eq)) {
+        return fail<std::unique_ptr<cstc::ast::Expr>>(
+            "assignment expressions are not supported; bindings are immutable");
+    }
 
-    if (!match_single_eq())
-        return std::move(*lhs_result);
-
-    auto rhs_result = parse_assignment_expr();
-    if (!rhs_result)
-        return std::unexpected(std::move(rhs_result.error()));
-
-    return make_binary_expr(
-        cstc::ast::BinaryOp::Assign, std::move(*lhs_result), std::move(*rhs_result));
+    return std::move(*expr_result);
 }
 
 ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_logical_or_expr() {

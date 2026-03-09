@@ -123,7 +123,6 @@ private:
         case BinaryOp::Ge: return "ge";
         case BinaryOp::And: return "and";
         case BinaryOp::Or: return "or";
-        case BinaryOp::Assign: return "assign";
         }
 
         return "unknown";
@@ -203,7 +202,6 @@ private:
             line(sig.self_param->is_ref ? "self: &self" : "self: typed");
             {
                 const IndentScope self_scope{*this};
-                print_keyword_modifiers(sig.self_param->keywords);
                 if (sig.self_param->explicit_ty.has_value())
                     print_type(*sig.self_param->explicit_ty->get());
             }

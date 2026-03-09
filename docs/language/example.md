@@ -9,7 +9,7 @@ Each example is accompanied by an explanation of the underlying mechanisms.
 
 All function declarations require explicit type annotations on every parameter and the return type.
 
-```rust
+```cicest
 fn add(x: i32, y: i32) -> i32 {
     x + y
 }
@@ -25,7 +25,7 @@ This lets the compiler type-check each function in isolation, without needing to
 
 Local bindings inside a body can omit annotations:
 
-```rust
+```cicest
 fn hypotenuse(a: f64, b: f64) -> f64 {
     let aa = a * a;   // type inferred as f64
     let bb = b * b;
@@ -42,7 +42,7 @@ fn hypotenuse(a: f64, b: f64) -> f64 {
 `enum` declares a sum type — a value that is exactly one of its variants.
 Each variant may carry different data.
 
-```rust
+```cicest
 enum Shape {
     | Circle { radius: f64 }
     | Rectangle { width: f64, height: f64 }
@@ -65,7 +65,7 @@ Generic `List<T>` is monomorphized lazily: `List<i32>` and `List<String>` are di
 Named fields generate **accessor functions**: `struct Point { x: f64, y: f64 }` generates `Point::x : (!async Point) -> f64` and `Point::y`.
 Dot-access `p.x` is sugar for calling `Point::x(p)`.
 
-```rust
+```cicest
 struct Point { x: f64, y: f64 }
 // Point::x : (!async Point) -> f64
 // Point::y : (!async Point) -> f64
@@ -81,7 +81,7 @@ struct Pair<A, B>(A, B);
 `match` deconstructs a value by its shape.
 Every case must be covered — the compiler enforces exhaustiveness.
 
-```rust
+```cicest
 fn area(s: Shape) -> f64 {
     match s {
         Circle { radius: r }              => 3.14159265 * r * r,
@@ -97,7 +97,7 @@ If any variant has no matching arm and no wildcard `_` arm is present, a compile
 
 Patterns compose: you can match nested constructors in a single arm.
 
-```rust
+```cicest
 fn sum_list(list: List<i32>) -> i32 {
     match list {
         Nil           => 0,
@@ -108,7 +108,7 @@ fn sum_list(list: List<i32>) -> i32 {
 
 The `_` wildcard and `name @ pattern` (as-pattern) are also available:
 
-```rust
+```cicest
 fn first_or_default(list: List<i32>, default: i32) -> i32 {
     match list {
         Cons(x, _) => x,
@@ -124,7 +124,7 @@ fn first_or_default(list: List<i32>, default: i32) -> i32 {
 `lambda` creates an anonymous function inline.
 The language is block-based, so the body is always a `{ }` block.
 
-```rust
+```cicest
 fn apply(f: fn(i32) -> i32, x: i32) -> i32 {
     f(x)
 }
@@ -136,7 +136,7 @@ fn main() -> () {
 
 Type annotations on lambda parameters are optional when the type can be inferred:
 
-```rust
+```cicest
 fn map_list(list: List<i32>, f: fn(i32) -> i32) -> List<i32> {
     match list {
         Nil           => Nil,
@@ -151,7 +151,7 @@ fn double_all(list: List<i32>) -> List<i32> {
 
 **Captures:** A lambda captures immutable bindings from its enclosing scope.
 
-```rust
+```cicest
 fn make_adder(n: i32) -> fn(i32) -> i32 {
     lambda(x) { x + n }   // `n` is captured by value
 }
@@ -169,7 +169,7 @@ fn main() -> () {
 Generic functions use type variables in angle brackets.
 Constraints are expressed with `where` clauses.
 
-```rust
+```cicest
 fn<T> identity(x: T) -> T { x }
 
 fn<T> print_twice(x: T) -> ()
@@ -195,7 +195,7 @@ Identical instantiations are deduplicated.
 
 Concepts define signature-only requirements:
 
-```rust
+```cicest
 concept Printable<T> {
     fn print(x: T) -> ();
 }
@@ -203,15 +203,19 @@ concept Printable<T> {
 
 `with` blocks attach function definitions to a type:
 
-```rust
+```cicest
 with Point {
     fn length(self: Point) -> f64 {
         sqrt(self.x * self.x + self.y * self.y)
     }
 }
 
-let p = Point { x: 3.0, y: 4.0 };
-let n = p.length();   // desugars to: length(p)
+fn demo_with() -> f64 {
+    let p = Point { x: 3.0, y: 4.0 };
+    p.length()   // desugars to: length(p)
+}
+
+// conceptually, `self` is sugar for `self: Self`
 ```
 
 ---
@@ -221,17 +225,19 @@ let n = p.length();   // desugars to: length(p)
 All functions that do not use `runtime`-qualified values are **compile-time evaluatable**.
 The compiler runs these through the built-in VM during compilation.
 
-```rust
+```cicest
 fn factorial(n: i32) -> i32 {
     if n <= 1 { 1 } else { n * factorial(n - 1) }
 }
 
-let FACT_10: i32 = factorial(10);   // evaluated entirely at compile time
+fn fact_10() -> i32 {
+    factorial(10)   // evaluated entirely at compile time
+}
 ```
 
 **How it works:**
 `factorial` has no `runtime` marker, so the compiler can execute it.
-`FACT_10` is a compile-time constant; the compiler compiles `factorial` to LIR, runs it in the VM, and folds the result (`3628800`) directly into the binary.
+`fact_10()` is compile-time evaluatable; the compiler compiles `factorial` to LIR, runs it in the VM, and folds the result (`3628800`) into generated code.
 
 ### Const Generics via Type-Level `where` Predicates
 
@@ -241,7 +247,7 @@ Compiler intrinsics like `sizeof(T)` and `alignof(T)` derive compile-time intege
 
 Because of this, `where` clauses can express rich type-level constraints using ordinary non-`runtime` functions:
 
-```rust
+```cicest
 fn is_power_of_two(n: i32) -> bool {
     n > 0 && (n & (n - 1)) == 0
 }
@@ -255,25 +261,26 @@ fn<T> aligned_element() -> T
 
 At each call site the compiler substitutes the concrete type, evaluates the predicate, and emits a compile error if it returns `false`:
 
-```rust
+```cicest
 aligned_element::<i32>();    // sizeof(i32) == 4, is_power_of_two(4) == true  ✓
 aligned_element::<u24>();    // sizeof(u24) == 3, is_power_of_two(3) == false ✗ COMPILE ERROR
 ```
 
 Multiple predicates can be combined:
 
-```rust
+```cicest
 fn<T, U> reinterpret(x: T) -> U
     where sizeof(T) == sizeof(U), alignof(T) == alignof(U)
 { /* ... */ }
 ```
 
 **What is NOT allowed in `where`:**
-The `where` clause only accepts expressions over *type parameters*, not over value parameters.
-Referencing a function's value argument is a compile error because `where` is purely type-level:
+Any predicate that depends on runtime evaluation is rejected. `where` predicates must be compile-time evaluatable and return `bool`:
 
-```rust
-// ERROR: n is a value parameter, not a type
+```cicest
+runtime fn is_positive(n: i32) -> bool { n > 0 }
+
+// ERROR: predicate calls a runtime function
 fn validate(n: i32) -> i32 where is_positive(n) { n }
 ```
 
@@ -292,7 +299,7 @@ T::a : (!async T) -> A
 
 `p.a` is syntactic sugar for `T::a(p)`. Because `T::a` expects a `!async T`, the type of `p` must satisfy `!async` — exactly as for any other function call.
 
-```rust
+```cicest
 struct Config { timeout: i32, retries: i32 }
 // Config::timeout : (!async Config) -> i32
 
@@ -310,7 +317,7 @@ T::a : (async T) -> async A
 This means calling the accessor on an `async` receiver is still valid — it just returns `async A`.
 With implicit coercion, this resolves naturally at the next usage site:
 
-```rust
+```cicest
 async fn load_config() -> Config { /* ... */ }
 
 fn use_async() -> () {
@@ -322,7 +329,7 @@ fn use_async() -> () {
 
 To get the field directly (without intermediate `async`), resolve the receiver first using an explicit annotation or `sync { }`:
 
-```rust
+```cicest
 fn use_async_explicit() -> () {
     let ac: async Config = load_config();
     let cfg: Config = sync { ac };   // explicit force → !async Config
@@ -341,14 +348,14 @@ All plain types satisfy `!runtime` by default. A `runtime`-qualified type does n
 
 Compiler intrinsics that query type information (`sizeof`, `alignof`, `typeof`) require their argument to be `!runtime`:
 
-```rust
+```cicest
 let s = sizeof(i32);        // i32 is !runtime → s: i32, evaluated at compile time
 let a = alignof(Point);     // Point is !runtime → a: i32, evaluated at compile time
 ```
 
 Attempting to query a `runtime` type is a compile error:
 
-```rust
+```cicest
 runtime fn bad() -> () {
     let t: runtime i32 = io::read_int();
     let s = sizeof(t);    // ERROR: typeof(t) is runtime i32, violates !runtime
@@ -375,18 +382,22 @@ In common usage, the compiler handles `async T` → `T` coercion implicitly at u
 
 `sync` is an alias for `!async`; `const` (block form) is an alias for `!runtime`.
 
-```rust
-// async { } — lift a plain value into a deferred computation
-let future: async i32 = async { 42 };
+```cicest
+fn demo_contract_blocks() -> () {
+    // async { } — lift a plain value into a deferred computation
+    let future: async i32 = async { 42 };
 
-// sync { } — explicit force (the compiler would insert this implicitly at a usage site)
-let value: i32 = sync { future };
+    // sync { } — explicit force (the compiler would insert this implicitly at a usage site)
+    let value: i32 = sync { future };
 
-// runtime { } — mark a value as runtime-only
-let rt: runtime i32 = runtime { read_int() };
+    // runtime { } — mark a value as runtime-only
+    let rt: runtime i32 = runtime { read_int() };
 
-// const { } — force compile-time evaluation
-let FACT: const i32 = const { factorial(10) };
+    // const { } — force compile-time evaluation
+    let fact: const i32 = const { factorial(10) };
+
+    ()
+}
 ```
 
 ---
@@ -402,7 +413,7 @@ The execution model is **async-by-default**: creating a future is a no-op; the e
 The compiler automatically inserts `sync { }` whenever `async T` is used where `T` is expected.
 Ordinary code looks synchronous even when it involves async operations:
 
-```rust
+```cicest
 async fn fetch_data(url: String) -> i32 {
     // ... deferred HTTP work ...
 }
@@ -420,12 +431,13 @@ fn main() -> async () {
 **How it works:**
 `fetch_data` returns a state machine (`async i32`) without starting any work.
 When `result` is passed to `print_int`, the compiler inserts an implicit `sync { }`, which drives the event loop until the computation resolves.
+At program entry, the launcher also implicitly syncs `main`'s final `async` result before process exit.
 
 ### Composing async computations
 
 Async functions compose naturally — each call produces a deferred value, resolved only when used:
 
-```rust
+```cicest
 async fn fetch_user(id: i32) -> String { /* ... */ }
 async fn fetch_score(user: String) -> i32 { /* ... */ }
 
@@ -440,7 +452,7 @@ async fn pipeline(id: i32) -> i32 {
 
 Use explicit `sync { }` when you need to control exactly when a value is forced:
 
-```rust
+```cicest
 async fn pipeline_ordered(id: i32) -> i32 {
     let user  = sync { fetch_user(id) };    // force user first, then...
     let score = sync { fetch_score(user) }; // ...force score
@@ -453,7 +465,7 @@ async fn pipeline_ordered(id: i32) -> i32 {
 `async (async T)` is a valid type — a computation that, when polled, yields another computation.
 Both layers must be resolved to get the inner value:
 
-```rust
+```cicest
 // fn outer() -> async (async i32)
 // prefix-free: return type explicitly states the nesting
 fn outer() -> async (async i32) {
@@ -473,7 +485,7 @@ fn main() -> async () {
 The `runtime` marker means a value or function **cannot** be evaluated at compile time.
 It is the opt-out from the default compile-time-eligible world.
 
-```rust
+```cicest
 runtime fn read_line() -> String { io::read_line() }
 runtime fn print_line(s: runtime String) -> () { io::print(s) }
 
@@ -499,7 +511,7 @@ The compiler automatically collapses redundant wrapping during type checking.
 
 `async` and `runtime` are independent type constructors that compose freely.
 
-```rust
+```cicest
 // A runtime-triggered async operation (e.g., network I/O):
 runtime fn http_get(url: runtime String) -> async i32 {
     io::http::get(url)

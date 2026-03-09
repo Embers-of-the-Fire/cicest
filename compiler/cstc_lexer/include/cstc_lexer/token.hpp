@@ -19,6 +19,9 @@ enum class TokenKind {
     /// `/`
     Slash,
     /// `=`
+    ///
+    /// Used as a lexical token in declarations (`let x = ...`, `type A = B`) and
+    /// multi-token operators (`==`, `=>`, `->`) recognized by the parser.
     Eq,
     /// `^`
     Caret,
@@ -71,8 +74,10 @@ enum class TokenKind {
     Ident,
 
     // --- Comments ---
-    /// `# foo` comments
+    /// Line comments (`# foo` and `// foo`)
     LineComment,
+    /// Block comments (`/* ... */`)
+    BlockComment,
 
     Whitespace,
     Eof,
