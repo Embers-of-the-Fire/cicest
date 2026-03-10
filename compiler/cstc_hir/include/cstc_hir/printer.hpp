@@ -58,9 +58,7 @@ private:
 
     [[nodiscard]] static std::string contract_kind_text(TypeContractKind kind) {
         switch (kind) {
-        case TypeContractKind::Async: return "async";
         case TypeContractKind::Runtime: return "runtime";
-        case TypeContractKind::NotAsync: return "!async";
         case TypeContractKind::NotRuntime: return "!runtime";
         }
 
@@ -69,8 +67,6 @@ private:
 
     [[nodiscard]] static std::string contract_block_kind_text(ContractBlockKind kind) {
         switch (kind) {
-        case ContractBlockKind::Async: return "async";
-        case ContractBlockKind::Sync: return "sync";
         case ContractBlockKind::Runtime: return "runtime";
         case ContractBlockKind::Const: return "const";
         }
@@ -120,16 +116,10 @@ private:
                     if (inner == nullptr)
                         return contract_kind_text(kind.kind) + " <missing-type>";
                     return contract_kind_text(kind.kind) + " " + format_type(*inner);
-                } else if constexpr (std::is_same_v<Kind, TupleType>) {
-                    std::string text = "(";
-                    for (std::size_t index = 0; index < kind.elements.size(); ++index) {
-                        if (index != 0)
-                            text += ", ";
-                        text += kind.elements[index] == nullptr ? "<missing-type>"
-                                                                : format_type(*kind.elements[index]);
-                    }
-                    text += ")";
-                    return text;
+                } else if constexpr (std::is_same_v<Kind, RefType>) {
+                    if (kind.inner == nullptr)
+                        return "&<missing-type>";
+                    return "&" + format_type(*kind.inner);
                 } else if constexpr (std::is_same_v<Kind, FunctionType>) {
                     std::string text = "fn(";
                     for (std::size_t index = 0; index < kind.params.size(); ++index) {
@@ -141,6 +131,8 @@ private:
                     text += ") -> ";
                     text += kind.result == nullptr ? "<missing-type>" : format_type(*kind.result);
                     return text;
+                } else if constexpr (std::is_same_v<Kind, InferredType>) {
+                    return "_";
                 }
 
                 return "<unknown-type>";
@@ -208,12 +200,10 @@ private:
                     return text;
                 } else if constexpr (std::is_same_v<Kind, ContractBlockExpr>) {
                     return contract_block_kind_text(kind.kind) + " { ... }";
-                } else if constexpr (std::is_same_v<Kind, SyncExpr>) {
-                    const std::string inner =
-                        kind.expr == nullptr ? "<missing-expr>" : format_expr_inline(*kind.expr);
-                    return "sync(" + inner + ")";
                 } else if constexpr (std::is_same_v<Kind, LiftedConstantExpr>) {
                     return "lifted " + kind.name + ": " + format_type(kind.type) + " = " + kind.value;
+                } else if constexpr (std::is_same_v<Kind, DeclConstraintExpr>) {
+                    return "decl_valid(" + format_type(kind.checked_type) + ")";
                 }
 
                 return "<unknown-expr>";
@@ -348,4 +338,3 @@ inline void print_hir(std::ostream& out, const Module& module) {
 } // namespace cstc::hir
 
 #endif // CICEST_COMPILER_CSTC_HIR_PRINTER_HPP
-

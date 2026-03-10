@@ -177,12 +177,20 @@ struct LoopExpr {
     Block body;
 };
 
+/// A C-style `for` loop: `for (init; cond; step) { body }`.
+struct ForExpr {
+    std::optional<std::unique_ptr<Expr>> init;
+    std::optional<std::unique_ptr<Expr>> cond;
+    std::optional<std::unique_ptr<Expr>> step;
+    Block body;
+};
+
 /// A return expression: `return expr`.
 struct ReturnExpr {
     std::optional<std::unique_ptr<Expr>> value;
 };
 
-/// A keyword-prefixed block expression: `async { expr }`, `runtime { expr }`.
+/// A keyword-prefixed block expression: `runtime { expr }`, `const { expr }`.
 struct KeywordBlockExpr {
     std::vector<KeywordModifier> keywords;
     Block body;
@@ -194,11 +202,17 @@ struct TurbofishExpr {
     GenericArgs args;
 };
 
+/// Compiler intrinsic expression: `decl(TypeExpr)`.
+struct DeclExpr {
+    std::unique_ptr<TypeNode> type_expr;
+};
+
 /// Discriminated union of all expression forms.
 using ExprKind = std::variant<
     LitExpr, PathExpr, BlockExpr, GroupedExpr, TupleExpr, UnaryExpr, BinaryExpr, CallExpr,
     MethodCallExpr, FieldExpr, ConstructorFieldsExpr, ConstructorPositionalExpr, LambdaExpr,
-    MatchExpr, IfExpr, LoopExpr, ReturnExpr, KeywordBlockExpr, TurbofishExpr>;
+    MatchExpr, IfExpr, LoopExpr, ForExpr, ReturnExpr, KeywordBlockExpr, TurbofishExpr,
+    DeclExpr>;
 
 // ---------------------------------------------------------------------------
 // Expr

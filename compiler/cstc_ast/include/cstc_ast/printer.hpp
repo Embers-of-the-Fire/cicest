@@ -83,9 +83,7 @@ private:
 
     [[nodiscard]] static std::string keyword_kind_text(KeywordKind kind) {
         switch (kind) {
-        case KeywordKind::Async: return "async";
         case KeywordKind::Runtime: return "runtime";
-        case KeywordKind::NotAsync: return "!async";
         case KeywordKind::NotRuntime: return "!runtime";
         }
 
@@ -451,15 +449,6 @@ private:
                     line("type ref");
                     const IndentScope scope{*this};
                     print_type(*kind.inner);
-                } else if constexpr (std::is_same_v<Kind, TupleType>) {
-                    line("type tuple");
-                    const IndentScope scope{*this};
-                    if (kind.elements.empty()) {
-                        line("(empty)");
-                    } else {
-                        for (const auto& element : kind.elements)
-                            print_type(*element);
-                    }
                 } else if constexpr (std::is_same_v<Kind, FnType>) {
                     line("type fn");
                     const IndentScope scope{*this};
@@ -715,6 +704,42 @@ private:
                     line("expr loop");
                     const IndentScope scope{*this};
                     print_block(kind.body);
+                } else if constexpr (std::is_same_v<Kind, ForExpr>) {
+                    line("expr for");
+                    const IndentScope scope{*this};
+
+                    line("init");
+                    {
+                        const IndentScope init_scope{*this};
+                        if (kind.init.has_value())
+                            print_expr(*kind.init->get());
+                        else
+                            line("(none)");
+                    }
+
+                    line("cond");
+                    {
+                        const IndentScope cond_scope{*this};
+                        if (kind.cond.has_value())
+                            print_expr(*kind.cond->get());
+                        else
+                            line("(none)");
+                    }
+
+                    line("step");
+                    {
+                        const IndentScope step_scope{*this};
+                        if (kind.step.has_value())
+                            print_expr(*kind.step->get());
+                        else
+                            line("(none)");
+                    }
+
+                    line("body");
+                    {
+                        const IndentScope body_scope{*this};
+                        print_block(kind.body);
+                    }
                 } else if constexpr (std::is_same_v<Kind, ReturnExpr>) {
                     line("expr return");
                     if (kind.value.has_value()) {
@@ -744,6 +769,10 @@ private:
                                 print_type(*arg);
                         }
                     }
+                } else if constexpr (std::is_same_v<Kind, DeclExpr>) {
+                    line("expr decl");
+                    const IndentScope scope{*this};
+                    print_type(*kind.type_expr);
                 }
             },
             expr.kind);

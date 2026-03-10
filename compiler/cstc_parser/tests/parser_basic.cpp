@@ -45,13 +45,15 @@ fn main() -> i32 {
     assert(std::holds_alternative<PathExpr>(tail_expr_stmt.expr->kind));
 }
 
-static void test_parse_keyword_and_match() {
+static void test_parse_for_and_decl_intrinsic() {
     constexpr std::string_view source = R"(
-async fn build() -> i32 {
-    let point = Point { x: 1, y: 2 };
-    match point {
-        Point { x: x, y: _ } => x,
-    }
+fn run<T>() -> i32
+    where decl(Vec<T>)
+{
+    for (; true; ) {
+        1;
+    };
+    0
 }
 )";
 
@@ -66,37 +68,32 @@ async fn build() -> i32 {
     assert(std::holds_alternative<FnItem>(item.kind));
 
     const auto& fn = std::get<FnItem>(item.kind);
-    assert(fn.keywords.size() == 1);
-    assert(fn.keywords.front().kind == KeywordKind::Async);
+    assert(fn.generics.where_clause.has_value());
+    assert(fn.generics.where_clause->predicates.size() == 1);
+    assert(std::holds_alternative<DeclExpr>(fn.generics.where_clause->predicates[0].expr->kind));
+
     assert(fn.body.stmts.size() == 2);
 
-    const auto& let_stmt = std::get<LetStmt>(fn.body.stmts[0].kind);
-    assert(let_stmt.init.has_value());
-    assert(std::holds_alternative<ConstructorFieldsExpr>((*let_stmt.init)->kind));
+    const auto& for_stmt = std::get<ExprStmt>(fn.body.stmts[0].kind);
+    assert(for_stmt.has_semi);
+    assert(std::holds_alternative<ForExpr>(for_stmt.expr->kind));
+
+    const auto& for_expr = std::get<ForExpr>(for_stmt.expr->kind);
+    assert(!for_expr.init.has_value());
+    assert(for_expr.cond.has_value());
+    assert(!for_expr.step.has_value());
+    assert(for_expr.body.stmts.size() == 1);
 
     const auto& tail_stmt = std::get<ExprStmt>(fn.body.stmts[1].kind);
     assert(!tail_stmt.has_semi);
-    assert(std::holds_alternative<MatchExpr>(tail_stmt.expr->kind));
-
-    const auto& match_expr = std::get<MatchExpr>(tail_stmt.expr->kind);
-    assert(match_expr.arms.size() == 1);
-    assert(std::holds_alternative<ConstructorFieldsPat>(match_expr.arms[0].pat->kind));
+    assert(std::holds_alternative<LitExpr>(tail_stmt.expr->kind));
 }
 
-static void test_parse_concept_with_and_intrinsic() {
+static void test_parse_constructor_fields_still_supported() {
     constexpr std::string_view source = R"(
-concept Comparable<T> {
-    fn compare(lhs: T, rhs: T) -> i32;
-}
-
-with Point {
-    fn length(self: Point) -> i32 { 0 }
-}
-
-fn max<T>(a: T, b: T) -> T
-    where concept(Comparable::<T>)
-{
-    a
+fn build() -> i32 {
+    let point = Point { x: 1, y: 2 };
+    1
 }
 )";
 
@@ -105,31 +102,77 @@ fn max<T>(a: T, b: T) -> T
     assert(parsed.has_value());
 
     const auto& crate = parsed.value();
-    assert(crate.items.size() == 3);
+    assert(crate.items.size() == 1);
 
-    const auto& concept_item = crate.items[0];
-    assert(std::holds_alternative<ConceptItem>(concept_item.kind));
-    const auto& concept_data = std::get<ConceptItem>(concept_item.kind);
-    assert(symbols.str(concept_data.name) == "Comparable");
-    assert(concept_data.methods.size() == 1);
+    const auto& item = crate.items.front();
+    assert(std::holds_alternative<FnItem>(item.kind));
 
-    const auto& with_item = crate.items[1];
-    assert(std::holds_alternative<WithItem>(with_item.kind));
-    const auto& with = std::get<WithItem>(with_item.kind);
-    assert(with.methods.size() == 1);
-    assert(symbols.str(with.methods[0].name) == "length");
+    const auto& fn = std::get<FnItem>(item.kind);
+    assert(fn.body.stmts.size() == 2);
 
-    const auto& fn_item = crate.items[2];
-    assert(std::holds_alternative<FnItem>(fn_item.kind));
-    const auto& fn = std::get<FnItem>(fn_item.kind);
-    assert(fn.generics.where_clause.has_value());
-    assert(fn.generics.where_clause->predicates.size() == 1);
-    assert(std::holds_alternative<CallExpr>(fn.generics.where_clause->predicates[0].expr->kind));
+    const auto& let_stmt = std::get<LetStmt>(fn.body.stmts[0].kind);
+    assert(let_stmt.init.has_value());
+    assert(std::holds_alternative<ConstructorFieldsExpr>((*let_stmt.init)->kind));
+}
+
+static void test_removed_features_are_rejected() {
+    constexpr std::string_view source = R"(
+type Number = i32;
+)";
+
+    SymbolTable symbols;
+    const auto parsed = parse_source(source, symbols);
+    assert(!parsed.has_value());
+
+    const auto lambda_source = R"(
+fn main() -> i32 {
+    let f = lambda(x) { x };
+    0
+}
+)";
+    assert(!parse_source(lambda_source, symbols).has_value());
+
+    const auto match_source = R"(
+fn main() -> i32 {
+    match 1 {
+        1 => 1,
+        _ => 0,
+    }
+}
+)";
+    assert(!parse_source(match_source, symbols).has_value());
+
+    const auto with_source = R"(
+with Point {
+    fn read(self: Point) -> i32 { 0 }
+}
+)";
+    assert(!parse_source(with_source, symbols).has_value());
+
+    const auto tuple_struct_source = R"(
+struct Pair(i32, i32);
+)";
+    assert(!parse_source(tuple_struct_source, symbols).has_value());
+
+    const auto tuple_expr_source = R"(
+fn main() -> i32 {
+    let v = (1, 2);
+    0
+}
+)";
+    assert(!parse_source(tuple_expr_source, symbols).has_value());
+
+    const auto method_source = R"(
+fn main(p: Point) -> i32 {
+    p.advance(1)
+}
+)";
+    assert(!parse_source(method_source, symbols).has_value());
 }
 
 static void test_assignment_expression_is_rejected() {
     constexpr std::string_view source = R"(
-fn main() -> () {
+fn main() -> i32 {
     let x: i32 = 1;
     x = 2;
 }
@@ -142,8 +185,9 @@ fn main() -> () {
 
 int main() {
     test_parse_main_function();
-    test_parse_keyword_and_match();
-    test_parse_concept_with_and_intrinsic();
+    test_parse_for_and_decl_intrinsic();
+    test_parse_constructor_fields_still_supported();
+    test_removed_features_are_rejected();
     test_assignment_expression_is_rejected();
     return 0;
 }

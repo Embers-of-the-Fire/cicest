@@ -4,7 +4,7 @@
 
 This language grew out of exploring Rust and Zig, where I noticed powerful compiler-intrinsic operations like keyword generics and `comptime`. I wondered: could we generalize these capabilities as first-class features?
 
-Cicest treats keywords — including `const`, `async`, and their variants — as first-class citizens alongside types. By design, operations are evaluated at compile time whenever possible, enabling early evaluation and potentially allowing asynchronously computed compile-time values. While this may introduce soundness and correctness challenges, the benefits could be substantial.
+Cicest treats keywords — especially `const`/`runtime` contracts — as first-class citizens alongside types. The current direction is const-evaluation by default, so code is compile-time oriented unless explicitly marked runtime.
 
 ## Language
 

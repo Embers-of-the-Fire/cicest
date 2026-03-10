@@ -57,7 +57,7 @@ static void test_example_markdown_cicest_blocks_parse() {
     assert(!blocks.empty());
 
     for (std::size_t index = 0; index < blocks.size(); ++index) {
-        const std::string wrapped = "fn __example_block_" + std::to_string(index) + "() -> () {\n"
+        const std::string wrapped = "fn __example_block_" + std::to_string(index) + "() -> i32 {\n"
             + blocks[index] + "\n}\n";
 
         SymbolTable symbols;

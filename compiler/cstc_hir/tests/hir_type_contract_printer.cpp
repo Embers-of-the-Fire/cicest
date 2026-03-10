@@ -38,7 +38,7 @@ int main() {
     std::vector<FnParam> params;
     params.push_back(FnParam{
         .name = "value",
-        .type = contract_type(TypeContractKind::Async, path_type("i32")),
+        .type = contract_type(TypeContractKind::Runtime, path_type("i32")),
     });
 
     std::vector<Declaration> declarations;
@@ -59,7 +59,7 @@ int main() {
 
     const std::string printed = format_hir(module);
     const std::string expected =
-        "fn normalize_contracts(value: async i32) -> runtime i32\n"
+        "fn normalize_contracts(value: runtime i32) -> runtime i32\n"
         "normalize_contracts::body {\n"
         "}\n"
         "normalize_contracts::constraint {\n"

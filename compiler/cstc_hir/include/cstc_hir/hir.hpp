@@ -20,9 +20,7 @@ using ExprPtr = std::unique_ptr<Expr>;
 // ---------------------------------------------------------------------------
 
 enum class TypeContractKind {
-    Async,
     Runtime,
-    NotAsync,
     NotRuntime,
 };
 
@@ -36,8 +34,8 @@ struct ContractType {
     TypePtr inner;
 };
 
-struct TupleType {
-    std::vector<TypePtr> elements;
+struct RefType {
+    TypePtr inner;
 };
 
 struct FunctionType {
@@ -45,7 +43,9 @@ struct FunctionType {
     TypePtr result;
 };
 
-using TypeKind = std::variant<PathType, ContractType, TupleType, FunctionType>;
+struct InferredType {};
+
+using TypeKind = std::variant<PathType, ContractType, RefType, FunctionType, InferredType>;
 
 struct Type {
     TypeKind kind;
@@ -56,8 +56,6 @@ struct Type {
 // ---------------------------------------------------------------------------
 
 enum class ContractBlockKind {
-    Async,
-    Sync,
     Runtime,
     Const,
 };
@@ -114,19 +112,19 @@ struct ContractBlockExpr {
     std::vector<ExprPtr> body;
 };
 
-struct SyncExpr {
-    ExprPtr expr;
-};
-
 struct LiftedConstantExpr {
     std::string name;
     Type type;
     std::string value;
 };
 
+struct DeclConstraintExpr {
+    Type checked_type;
+};
+
 using ExprKind = std::variant<RawExpr, LiteralExpr, PathExpr, BinaryExpr, CallExpr,
     MemberAccessExpr, MemberCallExpr, StaticMemberAccessExpr, StaticMemberCallExpr,
-    ContractBlockExpr, SyncExpr, LiftedConstantExpr>;
+    ContractBlockExpr, LiftedConstantExpr, DeclConstraintExpr>;
 
 struct Expr {
     ExprKind kind;
@@ -180,4 +178,3 @@ struct Module {
 } // namespace cstc::hir
 
 #endif // CICEST_COMPILER_CSTC_HIR_HIR_HPP
-

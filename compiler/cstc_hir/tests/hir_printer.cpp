@@ -73,12 +73,10 @@ int main() {
         std::vector<ExprPtr> fetch_args;
         fetch_args.push_back(path_expr("a"));
 
-        auto fetch_call = make_expr(CallExpr{
+        body.push_back(make_expr(CallExpr{
             .callee = path_expr("fetch"),
             .args = std::move(fetch_args),
-        });
-
-        body.push_back(make_expr(SyncExpr{.expr = std::move(fetch_call)}));
+        }));
     }
 
     {
@@ -101,7 +99,9 @@ int main() {
 
     std::vector<ExprPtr> constraints;
     constraints.push_back(raw_expr("sizeof(T) == 4"));
-    constraints.push_back(raw_expr("concept(Comparable::<T>)"));
+    constraints.push_back(make_expr(DeclConstraintExpr{
+        .checked_type = path_type("Comparable"),
+    }));
 
     std::vector<FnParam> max_params;
     max_params.push_back(FnParam{.name = "a", .type = path_type("T")});
@@ -122,7 +122,7 @@ int main() {
     declarations.push_back(Declaration{
         .header = RawDecl{
             .name = "noop",
-            .text = "fn noop() -> ()",
+            .text = "fn noop() -> i32",
         },
         .body = {},
         .constraints = {},
@@ -140,17 +140,17 @@ int main() {
         "  T::compare(a, b)\n"
         "  member_access(a, point)\n"
         "  member_call(a, advance, 1)\n"
-        "  sync(fetch(a))\n"
+        "  fetch(a)\n"
         "  runtime {\n"
         "    stage(a)\n"
         "  }\n"
         "}\n"
         "max::constraint {\n"
         "  sizeof(T) == 4\n"
-        "  concept(Comparable::<T>)\n"
+        "  decl_valid(Comparable)\n"
         "}\n"
         "\n"
-        "fn noop() -> ()\n"
+        "fn noop() -> i32\n"
         "noop::body {\n"
         "}\n"
         "noop::constraint {\n"

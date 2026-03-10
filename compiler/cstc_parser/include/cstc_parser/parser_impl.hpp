@@ -19,9 +19,9 @@ template <typename T>
 using ParseResult = std::expected<T, ParseError>;
 
 constexpr std::array<std::string_view, 23> RESERVED_KEYWORDS = {
-    "let",     "async",  "runtime", "sync",   "const",  "fn",    "where", "extern",
-    "if",      "else",   "match",   "loop",   "struct", "enum",  "type",  "with",
-    "concept", "return", "self",    "lambda", "true",   "false", "_",
+    "let",    "runtime", "const",  "fn",      "where",  "extern", "if",    "else",
+    "match",  "loop",    "for",    "struct",  "enum",   "type",   "with",  "concept",
+    "return", "self",    "lambda", "decl",    "true",   "false",  "_",
 };
 
 [[nodiscard]] bool is_reserved_keyword(std::string_view text) noexcept {
@@ -226,9 +226,13 @@ private:
     [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>>
         parse_loop_expr(cstc::span::SourceSpan loop_span);
     [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>>
+        parse_for_expr(cstc::span::SourceSpan for_span);
+    [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>>
         parse_return_expr(cstc::span::SourceSpan return_span);
     [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>>
         parse_lambda_expr(cstc::span::SourceSpan lambda_span);
+    [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Expr>>
+        parse_decl_expr(cstc::span::SourceSpan decl_span);
 
     [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Pat>> parse_pattern();
     [[nodiscard]] ParseResult<std::unique_ptr<cstc::ast::Pat>> parse_or_pattern();
@@ -475,7 +479,7 @@ bool Parser::match_turbofish_start() noexcept {
 std::optional<std::size_t> Parser::keyword_modifier_length_at(std::size_t index) const noexcept {
     const auto& token = token_at(index);
     if (token.kind == cstc::lexer::TokenKind::Ident) {
-        if (token.text == "async" || token.text == "runtime") {
+        if (token.text == "runtime") {
             if (token_at(index + 1).kind == cstc::lexer::TokenKind::Lt
                 && token_at(index + 2).kind == cstc::lexer::TokenKind::Ident
                 && token_at(index + 3).kind == cstc::lexer::TokenKind::Gt) {
@@ -483,14 +487,14 @@ std::optional<std::size_t> Parser::keyword_modifier_length_at(std::size_t index)
             }
             return 1;
         }
-        if (token.text == "sync" || token.text == "const")
+        if (token.text == "const")
             return 1;
         return std::nullopt;
     }
 
     if (token.kind == cstc::lexer::TokenKind::Bang
         && token_at(index + 1).kind == cstc::lexer::TokenKind::Ident
-        && (token_at(index + 1).text == "async" || token_at(index + 1).text == "runtime")) {
+        && token_at(index + 1).text == "runtime") {
         return 2;
     }
 
@@ -522,8 +526,7 @@ bool Parser::is_item_start() const noexcept {
     if (check_ident_at(index, "extern") && check_ident_at(index + 1, "fn"))
         return true;
     return check_ident_at(index, "fn") || check_ident_at(index, "struct")
-        || check_ident_at(index, "enum") || check_ident_at(index, "type")
-        || check_ident_at(index, "concept") || check_ident_at(index, "with");
+        || check_ident_at(index, "enum");
 }
 
 ParseResult<LexedToken> Parser::expect(cstc::lexer::TokenKind kind, std::string_view expectation) {
@@ -624,10 +627,9 @@ ParseResult<cstc::ast::Lit> Parser::parse_literal() {
 }
 
 ParseResult<std::optional<cstc::ast::KeywordModifier>> Parser::parse_keyword_modifier() {
-    if (check_ident("async") || check_ident("runtime")) {
+    if (check_ident("runtime")) {
         const auto keyword = advance();
-        const auto kind = keyword.text == "async" ? cstc::ast::KeywordKind::Async
-                                                  : cstc::ast::KeywordKind::Runtime;
+        const auto kind = cstc::ast::KeywordKind::Runtime;
 
         std::optional<cstc::ast::Symbol> type_var;
         auto end_span = keyword.span;
@@ -653,10 +655,9 @@ ParseResult<std::optional<cstc::ast::KeywordModifier>> Parser::parse_keyword_mod
         };
     }
 
-    if (check_ident("sync") || check_ident("const")) {
+    if (check_ident("const")) {
         const auto keyword = advance();
-        const auto kind = keyword.text == "sync" ? cstc::ast::KeywordKind::NotAsync
-                                                 : cstc::ast::KeywordKind::NotRuntime;
+        const auto kind = cstc::ast::KeywordKind::NotRuntime;
 
         return cstc::ast::KeywordModifier{
             .span = keyword.span,
@@ -665,12 +666,10 @@ ParseResult<std::optional<cstc::ast::KeywordModifier>> Parser::parse_keyword_mod
         };
     }
 
-    if (check(cstc::lexer::TokenKind::Bang)
-        && (check_ident("async", 1) || check_ident("runtime", 1))) {
+    if (check(cstc::lexer::TokenKind::Bang) && check_ident("runtime", 1)) {
         const auto bang = advance();
         const auto keyword = advance();
-        const auto kind = keyword.text == "async" ? cstc::ast::KeywordKind::NotAsync
-                                                  : cstc::ast::KeywordKind::NotRuntime;
+        const auto kind = cstc::ast::KeywordKind::NotRuntime;
 
         return cstc::ast::KeywordModifier{
             .span = merge_spans(bang.span, keyword.span),
@@ -919,8 +918,7 @@ ParseResult<std::unique_ptr<cstc::ast::TypeNode>> Parser::parse_type_atom() {
 ParseResult<std::unique_ptr<cstc::ast::TypeNode>>
     Parser::parse_parenthesized_type(cstc::span::SourceSpan open_span) {
     if (match(cstc::lexer::TokenKind::CloseParen)) {
-        return make_type(
-            merge_spans(open_span, previous().span), cstc::ast::TupleType{.elements = {}});
+        return fail<std::unique_ptr<cstc::ast::TypeNode>>("tuple types are not supported");
     }
 
     auto first_result = parse_type();
@@ -935,30 +933,7 @@ ParseResult<std::unique_ptr<cstc::ast::TypeNode>>
         return std::move(*first_result);
     }
 
-    std::vector<std::unique_ptr<cstc::ast::TypeNode>> elements;
-    elements.push_back(std::move(*first_result));
-
-    if (!check(cstc::lexer::TokenKind::CloseParen)) {
-        while (true) {
-            auto element_result = parse_type();
-            if (!element_result)
-                return std::unexpected(std::move(element_result.error()));
-            elements.push_back(std::move(*element_result));
-
-            if (!match(cstc::lexer::TokenKind::Comma))
-                break;
-            if (check(cstc::lexer::TokenKind::CloseParen))
-                break;
-        }
-    }
-
-    auto close_result = expect(cstc::lexer::TokenKind::CloseParen, "`)` after tuple type");
-    if (!close_result)
-        return std::unexpected(std::move(close_result.error()));
-
-    return make_type(
-        merge_spans(open_span, close_result->span),
-        cstc::ast::TupleType{.elements = std::move(elements)});
+    return fail<std::unique_ptr<cstc::ast::TypeNode>>("tuple types are not supported");
 }
 
 ParseResult<std::optional<cstc::ast::SelfParam>> Parser::parse_optional_self_param() {
@@ -1026,45 +1001,27 @@ ParseResult<cstc::ast::FnSig> Parser::parse_fn_sig() {
     if (!open_result)
         return std::unexpected(std::move(open_result.error()));
 
-    std::optional<cstc::ast::SelfParam> self_param;
     std::vector<cstc::ast::FnParam> params;
 
     if (!check(cstc::lexer::TokenKind::CloseParen)) {
-        auto self_result = parse_optional_self_param();
-        if (!self_result)
-            return std::unexpected(std::move(self_result.error()));
+        if ((check(cstc::lexer::TokenKind::Amp) && check_ident("self", 1))
+            || check_ident("self")) {
+            return fail<cstc::ast::FnSig>("`self` parameters are not supported");
+        }
 
-        if (self_result->has_value()) {
-            self_param = std::move(**self_result);
-            if (match(cstc::lexer::TokenKind::Comma)
-                && !check(cstc::lexer::TokenKind::CloseParen)) {
-                while (true) {
-                    auto param_result = parse_fn_param();
-                    if (!param_result)
-                        return std::unexpected(std::move(param_result.error()));
-                    params.push_back(std::move(*param_result));
+        auto first_param_result = parse_fn_param();
+        if (!first_param_result)
+            return std::unexpected(std::move(first_param_result.error()));
+        params.push_back(std::move(*first_param_result));
 
-                    if (!match(cstc::lexer::TokenKind::Comma))
-                        break;
-                    if (check(cstc::lexer::TokenKind::CloseParen))
-                        break;
-                }
-            }
-        } else {
-            auto first_param_result = parse_fn_param();
-            if (!first_param_result)
-                return std::unexpected(std::move(first_param_result.error()));
-            params.push_back(std::move(*first_param_result));
+        while (match(cstc::lexer::TokenKind::Comma)) {
+            if (check(cstc::lexer::TokenKind::CloseParen))
+                break;
 
-            while (match(cstc::lexer::TokenKind::Comma)) {
-                if (check(cstc::lexer::TokenKind::CloseParen))
-                    break;
-
-                auto param_result = parse_fn_param();
-                if (!param_result)
-                    return std::unexpected(std::move(param_result.error()));
-                params.push_back(std::move(*param_result));
-            }
+            auto param_result = parse_fn_param();
+            if (!param_result)
+                return std::unexpected(std::move(param_result.error()));
+            params.push_back(std::move(*param_result));
         }
     }
 
@@ -1080,7 +1037,7 @@ ParseResult<cstc::ast::FnSig> Parser::parse_fn_sig() {
         return std::unexpected(std::move(ret_type_result.error()));
 
     return cstc::ast::FnSig{
-        .self_param = std::move(self_param),
+        .self_param = std::nullopt,
         .params = std::move(params),
         .ret_ty = std::move(*ret_type_result),
     };
@@ -1133,12 +1090,12 @@ ParseResult<cstc::ast::Item> Parser::parse_item() {
         return parse_struct_item(start_span);
     if (match_ident("enum"))
         return parse_enum_item(start_span);
-    if (match_ident("type"))
-        return parse_type_alias_item(start_span);
-    if (match_ident("concept"))
-        return parse_concept_item(start_span);
-    if (match_ident("with"))
-        return parse_with_item(start_span);
+    if (check_ident("type"))
+        return fail<cstc::ast::Item>("type aliases are not supported");
+    if (check_ident("concept"))
+        return fail<cstc::ast::Item>("concept declarations are not supported");
+    if (check_ident("with"))
+        return fail<cstc::ast::Item>("with-block methods are not supported");
 
     return fail<cstc::ast::Item>("expected item declaration");
 }
@@ -1287,46 +1244,11 @@ ParseResult<cstc::ast::Item> Parser::parse_struct_item(cstc::span::SourceSpan st
         };
     }
 
-    if (match(cstc::lexer::TokenKind::OpenParen)) {
-        std::vector<std::unique_ptr<cstc::ast::TypeNode>> field_types;
-        if (!check(cstc::lexer::TokenKind::CloseParen)) {
-            while (true) {
-                auto field_type_result = parse_type();
-                if (!field_type_result)
-                    return std::unexpected(std::move(field_type_result.error()));
-                field_types.push_back(std::move(*field_type_result));
-
-                if (!match(cstc::lexer::TokenKind::Comma))
-                    break;
-                if (check(cstc::lexer::TokenKind::CloseParen))
-                    break;
-            }
-        }
-
-        auto close_paren_result =
-            expect(cstc::lexer::TokenKind::CloseParen, "`)` after tuple struct fields");
-        if (!close_paren_result)
-            return std::unexpected(std::move(close_paren_result.error()));
-
-        auto semi_result =
-            expect(cstc::lexer::TokenKind::Semi, "`;` after tuple struct declaration");
-        if (!semi_result)
-            return std::unexpected(std::move(semi_result.error()));
-
-        cstc::ast::TupleStructItem tuple_item{
-            .name = name_result->symbol,
-            .generics = std::move(generics),
-            .fields = std::move(field_types),
-        };
-
-        return cstc::ast::Item{
-            .id = node_ids_.next(),
-            .span = merge_spans(start_span, semi_result->span),
-            .kind = std::move(tuple_item),
-        };
+    if (check(cstc::lexer::TokenKind::OpenParen)) {
+        return fail<cstc::ast::Item>("tuple structs are not supported");
     }
 
-    return fail<cstc::ast::Item>("expected `;`, `{`, or `(` after struct declaration header");
+    return fail<cstc::ast::Item>("expected `;` or `{` after struct declaration header");
 }
 
 ParseResult<cstc::ast::Item> Parser::parse_enum_item(cstc::span::SourceSpan start_span) {
@@ -1334,16 +1256,10 @@ ParseResult<cstc::ast::Item> Parser::parse_enum_item(cstc::span::SourceSpan star
     if (!name_result)
         return std::unexpected(std::move(name_result.error()));
 
-    cstc::ast::Generics generics{};
-    auto generic_params_result = parse_optional_generic_params();
-    if (!generic_params_result)
-        return std::unexpected(std::move(generic_params_result.error()));
-    generics.params = std::move(*generic_params_result);
-
-    auto where_clause_result = parse_optional_where_clause();
-    if (!where_clause_result)
-        return std::unexpected(std::move(where_clause_result.error()));
-    generics.where_clause = std::move(*where_clause_result);
+    if (check(cstc::lexer::TokenKind::Lt))
+        return fail<cstc::ast::Item>("enum generics are not supported");
+    if (check_ident("where"))
+        return fail<cstc::ast::Item>("enum `where` clauses are not supported");
 
     auto open_result = expect(cstc::lexer::TokenKind::OpenBrace, "`{` to start enum body");
     if (!open_result)
@@ -1351,76 +1267,33 @@ ParseResult<cstc::ast::Item> Parser::parse_enum_item(cstc::span::SourceSpan star
 
     std::vector<cstc::ast::EnumVariant> variants;
     while (!check(cstc::lexer::TokenKind::CloseBrace)) {
-        std::ignore = match(cstc::lexer::TokenKind::Pipe);
-        if (check(cstc::lexer::TokenKind::CloseBrace))
-            break;
+        if (match(cstc::lexer::TokenKind::Pipe))
+            return fail<cstc::ast::Item>("`|` enum variant prefix is not supported");
 
         auto variant_name_result = parse_identifier("enum variant name");
         if (!variant_name_result)
             return std::unexpected(std::move(variant_name_result.error()));
 
         auto variant_span = variant_name_result->span;
-        cstc::ast::VariantKind variant_kind = cstc::ast::UnitVariant{};
-
-        if (match(cstc::lexer::TokenKind::OpenBrace)) {
-            std::vector<cstc::ast::StructField> fields;
-            if (!check(cstc::lexer::TokenKind::CloseBrace)) {
-                while (true) {
-                    auto field_result = parse_struct_field();
-                    if (!field_result)
-                        return std::unexpected(std::move(field_result.error()));
-                    fields.push_back(std::move(*field_result));
-
-                    if (!match(cstc::lexer::TokenKind::Comma))
-                        break;
-                    if (check(cstc::lexer::TokenKind::CloseBrace))
-                        break;
-                }
-            }
-
-            auto close_result =
-                expect(cstc::lexer::TokenKind::CloseBrace, "`}` after variant fields");
-            if (!close_result)
-                return std::unexpected(std::move(close_result.error()));
-            variant_kind = cstc::ast::FieldsVariant{.fields = std::move(fields)};
-            variant_span = merge_spans(variant_span, close_result->span);
-        } else if (match(cstc::lexer::TokenKind::OpenParen)) {
-            std::vector<std::unique_ptr<cstc::ast::TypeNode>> tuple_types;
-            if (!check(cstc::lexer::TokenKind::CloseParen)) {
-                while (true) {
-                    auto type_result = parse_type();
-                    if (!type_result)
-                        return std::unexpected(std::move(type_result.error()));
-                    tuple_types.push_back(std::move(*type_result));
-
-                    if (!match(cstc::lexer::TokenKind::Comma))
-                        break;
-                    if (check(cstc::lexer::TokenKind::CloseParen))
-                        break;
-                }
-            }
-
-            auto close_result =
-                expect(cstc::lexer::TokenKind::CloseParen, "`)` after tuple variant fields");
-            if (!close_result)
-                return std::unexpected(std::move(close_result.error()));
-            variant_kind = cstc::ast::TupleVariant{.types = std::move(tuple_types)};
-            variant_span = merge_spans(variant_span, close_result->span);
+        if (check(cstc::lexer::TokenKind::OpenBrace) || check(cstc::lexer::TokenKind::OpenParen)) {
+            return fail<cstc::ast::Item>("enum variant payloads are not supported");
         }
 
         variants.push_back(
             cstc::ast::EnumVariant{
                 .span = variant_span,
                 .name = variant_name_result->symbol,
-                .kind = std::move(variant_kind),
+                .kind = cstc::ast::UnitVariant{},
             });
 
-        if (match(cstc::lexer::TokenKind::Comma))
-            continue;
-        if (check(cstc::lexer::TokenKind::Pipe) || check(cstc::lexer::TokenKind::CloseBrace))
-            continue;
+        if (!match(cstc::lexer::TokenKind::Comma)) {
+            if (!check(cstc::lexer::TokenKind::CloseBrace))
+                return fail<cstc::ast::Item>("expected `,` or `}` after enum variant");
+            break;
+        }
 
-        return fail<cstc::ast::Item>("expected `,`, `|`, or `}` after enum variant");
+        if (check(cstc::lexer::TokenKind::CloseBrace))
+            break;
     }
 
     auto close_result = expect(cstc::lexer::TokenKind::CloseBrace, "`}` after enum body");
@@ -1429,7 +1302,7 @@ ParseResult<cstc::ast::Item> Parser::parse_enum_item(cstc::span::SourceSpan star
 
     cstc::ast::EnumItem enum_item{
         .name = name_result->symbol,
-        .generics = std::move(generics),
+        .generics = cstc::ast::Generics{},
         .variants = std::move(variants),
     };
 
@@ -1673,9 +1546,20 @@ ParseResult<cstc::ast::Block> Parser::parse_block() {
 }
 
 ParseResult<cstc::ast::Stmt> Parser::parse_let_stmt(cstc::span::SourceSpan start_span) {
-    auto pattern_result = parse_pattern();
-    if (!pattern_result)
-        return std::unexpected(std::move(pattern_result.error()));
+    std::unique_ptr<cstc::ast::Pat> binding_pattern;
+    if (check(cstc::lexer::TokenKind::Ident) && peek().text == "_") {
+        const auto wildcard = advance();
+        binding_pattern = make_pat(wildcard.span, cstc::ast::WildcardPat{});
+    } else {
+        auto binding_result = parse_identifier("let binding name");
+        if (!binding_result)
+            return std::unexpected(std::move(binding_result.error()));
+
+        binding_pattern = make_pat(
+            binding_result->span, cstc::ast::BindingPat{
+                                     .name = binding_result->symbol,
+                                 });
+    }
 
     std::optional<std::unique_ptr<cstc::ast::TypeNode>> stmt_type;
     if (match(cstc::lexer::TokenKind::Colon)) {
@@ -1702,7 +1586,7 @@ ParseResult<cstc::ast::Stmt> Parser::parse_let_stmt(cstc::span::SourceSpan start
         .span = merge_spans(start_span, semi_result->span),
         .kind =
             cstc::ast::LetStmt{
-                               .pat = std::move(*pattern_result),
+                               .pat = std::move(binding_pattern),
                                .ty = std::move(stmt_type),
                                .init = std::move(init_expr),
                                },
@@ -2055,21 +1939,11 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_postfix_expr() {
             const auto close_span = args_result->second;
             const auto call_span = merge_spans(expr->span, close_span);
 
-            if (auto* path_expr = std::get_if<cstc::ast::PathExpr>(&expr->kind);
-                path_expr != nullptr && is_constructor_path(path_expr->path)) {
-                auto constructor = std::move(path_expr->path);
-                expr = make_expr(
-                    call_span, cstc::ast::ConstructorPositionalExpr{
-                                   .constructor = std::move(constructor),
-                                   .args = std::move(args),
-                               });
-            } else {
-                expr = make_expr(
-                    call_span, cstc::ast::CallExpr{
-                                   .callee = std::move(expr),
-                                   .args = std::move(args),
-                               });
-            }
+            expr = make_expr(
+                call_span, cstc::ast::CallExpr{
+                               .callee = std::move(expr),
+                               .args = std::move(args),
+                           });
             continue;
         }
 
@@ -2078,39 +1952,10 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_postfix_expr() {
             if (!member_name_result)
                 return std::unexpected(std::move(member_name_result.error()));
 
-            cstc::ast::PathSegment method_segment{
-                .span = member_name_result->span,
-                .name = member_name_result->symbol,
-            };
-
-            std::optional<cstc::ast::GenericArgs> turbofish;
-            if (check_turbofish_start()) {
-                auto args_result = parse_turbofish_args_after_prefix();
-                if (!args_result)
-                    return std::unexpected(std::move(args_result.error()));
-                turbofish = std::move(*args_result);
-            }
-
-            if (match(cstc::lexer::TokenKind::OpenParen)) {
-                auto args_result = parse_expr_arguments_after_open_paren();
-                if (!args_result)
-                    return std::unexpected(std::move(args_result.error()));
-
-                const auto call_span = merge_spans(expr->span, args_result->second);
-                expr = make_expr(
-                    call_span, cstc::ast::MethodCallExpr{
-                                   .receiver = std::move(expr),
-                                   .method = std::move(method_segment),
-                                   .turbofish = std::move(turbofish),
-                                   .args = std::move(args_result->first),
-                               });
-                continue;
-            }
-
-            if (turbofish.has_value()) {
-                return fail<std::unique_ptr<cstc::ast::Expr>>(
-                    "turbofish after `.` requires a method call");
-            }
+            if (check_turbofish_start())
+                return fail<std::unique_ptr<cstc::ast::Expr>>("method turbofish is not supported");
+            if (check(cstc::lexer::TokenKind::OpenParen))
+                return fail<std::unique_ptr<cstc::ast::Expr>>("method calls are not supported");
 
             expr = make_expr(
                 merge_spans(expr->span, member_name_result->span),
@@ -2140,34 +1985,28 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_primary_expr() {
         return parse_if_expr(previous().span);
 
     if (match_ident("match"))
-        return parse_match_expr(previous().span);
+        return fail<std::unique_ptr<cstc::ast::Expr>>("match expressions are not supported");
 
     if (match_ident("loop"))
         return parse_loop_expr(previous().span);
+
+    if (match_ident("for"))
+        return parse_for_expr(previous().span);
 
     if (match_ident("return"))
         return parse_return_expr(previous().span);
 
     if (match_ident("lambda"))
-        return parse_lambda_expr(previous().span);
+        return fail<std::unique_ptr<cstc::ast::Expr>>("lambda expressions are not supported");
+
+    if (match_ident("decl"))
+        return parse_decl_expr(previous().span);
 
     if (looks_like_keyword_block_expr())
         return parse_keyword_block_expr();
 
     if (match_ident("concept")) {
-        const auto concept_token = previous();
-        cstc::ast::PathSegment segment{
-            .span = concept_token.span,
-            .name = symbols_.intern(concept_token.text),
-        };
-        cstc::ast::Path path{
-            .span = concept_token.span,
-            .segments = {std::move(segment)},
-        };
-        return make_expr(
-            concept_token.span, cstc::ast::PathExpr{
-                                    .path = std::move(path),
-                                });
+        return fail<std::unique_ptr<cstc::ast::Expr>>("concept intrinsics are not supported");
     }
 
     if (check(cstc::lexer::TokenKind::LitInt) || check(cstc::lexer::TokenKind::LitFloat)
@@ -2209,8 +2048,7 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_primary_expr() {
 ParseResult<std::unique_ptr<cstc::ast::Expr>>
     Parser::parse_group_or_tuple_expr(cstc::span::SourceSpan open_span) {
     if (match(cstc::lexer::TokenKind::CloseParen)) {
-        return make_expr(
-            merge_spans(open_span, previous().span), cstc::ast::TupleExpr{.elements = {}});
+        return fail<std::unique_ptr<cstc::ast::Expr>>("tuple expressions are not supported");
     }
 
     auto first_result = parse_expr();
@@ -2229,30 +2067,7 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>>
                                                         });
     }
 
-    std::vector<std::unique_ptr<cstc::ast::Expr>> elements;
-    elements.push_back(std::move(*first_result));
-
-    if (!check(cstc::lexer::TokenKind::CloseParen)) {
-        while (true) {
-            auto element_result = parse_expr();
-            if (!element_result)
-                return std::unexpected(std::move(element_result.error()));
-            elements.push_back(std::move(*element_result));
-
-            if (!match(cstc::lexer::TokenKind::Comma))
-                break;
-            if (check(cstc::lexer::TokenKind::CloseParen))
-                break;
-        }
-    }
-
-    auto close_result = expect(cstc::lexer::TokenKind::CloseParen, "`)` after tuple expression");
-    if (!close_result)
-        return std::unexpected(std::move(close_result.error()));
-
-    return make_expr(
-        merge_spans(open_span, close_result->span),
-        cstc::ast::TupleExpr{.elements = std::move(elements)});
+    return fail<std::unique_ptr<cstc::ast::Expr>>("tuple expressions are not supported");
 }
 
 ParseResult<std::unique_ptr<cstc::ast::Expr>>
@@ -2431,6 +2246,62 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>>
 }
 
 ParseResult<std::unique_ptr<cstc::ast::Expr>>
+    Parser::parse_for_expr(cstc::span::SourceSpan for_span) {
+    auto open_result = expect(cstc::lexer::TokenKind::OpenParen, "`(` after `for`");
+    if (!open_result)
+        return std::unexpected(std::move(open_result.error()));
+
+    std::optional<std::unique_ptr<cstc::ast::Expr>> init;
+    std::optional<std::unique_ptr<cstc::ast::Expr>> cond;
+    std::optional<std::unique_ptr<cstc::ast::Expr>> step;
+
+    if (!check(cstc::lexer::TokenKind::Semi)) {
+        auto init_result = parse_expr();
+        if (!init_result)
+            return std::unexpected(std::move(init_result.error()));
+        init = std::move(*init_result);
+    }
+
+    auto first_semi = expect(cstc::lexer::TokenKind::Semi, "`;` after for-loop initializer");
+    if (!first_semi)
+        return std::unexpected(std::move(first_semi.error()));
+
+    if (!check(cstc::lexer::TokenKind::Semi)) {
+        auto cond_result = parse_expr();
+        if (!cond_result)
+            return std::unexpected(std::move(cond_result.error()));
+        cond = std::move(*cond_result);
+    }
+
+    auto second_semi = expect(cstc::lexer::TokenKind::Semi, "`;` after for-loop condition");
+    if (!second_semi)
+        return std::unexpected(std::move(second_semi.error()));
+
+    if (!check(cstc::lexer::TokenKind::CloseParen)) {
+        auto step_result = parse_expr();
+        if (!step_result)
+            return std::unexpected(std::move(step_result.error()));
+        step = std::move(*step_result);
+    }
+
+    auto close_result = expect(cstc::lexer::TokenKind::CloseParen, "`)` after for-loop header");
+    if (!close_result)
+        return std::unexpected(std::move(close_result.error()));
+
+    auto body_result = parse_block();
+    if (!body_result)
+        return std::unexpected(std::move(body_result.error()));
+
+    return make_expr(
+        merge_spans(for_span, body_result->span), cstc::ast::ForExpr{
+                                                    .init = std::move(init),
+                                                    .cond = std::move(cond),
+                                                    .step = std::move(step),
+                                                    .body = std::move(*body_result),
+                                                });
+}
+
+ParseResult<std::unique_ptr<cstc::ast::Expr>>
     Parser::parse_return_expr(cstc::span::SourceSpan return_span) {
     std::optional<std::unique_ptr<cstc::ast::Expr>> value;
     cstc::span::SourceSpan end_span = return_span;
@@ -2500,6 +2371,26 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>>
                                                          .params = std::move(params),
                                                          .body = std::move(*body_result),
                                                      });
+}
+
+ParseResult<std::unique_ptr<cstc::ast::Expr>>
+    Parser::parse_decl_expr(cstc::span::SourceSpan decl_span) {
+    auto open_result = expect(cstc::lexer::TokenKind::OpenParen, "`(` after `decl`");
+    if (!open_result)
+        return std::unexpected(std::move(open_result.error()));
+
+    auto type_result = parse_type();
+    if (!type_result)
+        return std::unexpected(std::move(type_result.error()));
+
+    auto close_result = expect(cstc::lexer::TokenKind::CloseParen, "`)` after `decl` argument");
+    if (!close_result)
+        return std::unexpected(std::move(close_result.error()));
+
+    return make_expr(
+        merge_spans(decl_span, close_result->span), cstc::ast::DeclExpr{
+                                                        .type_expr = std::move(*type_result),
+                                                    });
 }
 
 ParseResult<std::unique_ptr<cstc::ast::Pat>> Parser::parse_pattern() { return parse_or_pattern(); }

@@ -8,18 +8,25 @@
 using namespace cstc::ast;
 using cstc::span::SourceSpan;
 
-/// Build a minimal AST for: `fn main() -> () { 42 }`
+/// Build a minimal AST for: `fn main() -> i32 { 42 }`
 static void test_fn_main() {
     NodeIdAllocator ids;
     SymbolTable syms;
 
     const auto main_sym = syms.intern("main");
+    const auto i32_sym = syms.intern("i32");
 
-    // --- Return type: () ---
+    // --- Return type: i32 ---
     auto ret_ty = std::make_unique<TypeNode>(TypeNode{
         .id = ids.next(),
         .span = SourceSpan{0, 0},
-        .kind = TupleType{.elements = {}},
+        .kind = PathType{
+            .path = Path{
+                .span = SourceSpan{0, 0},
+                .segments = {PathSegment{.span = SourceSpan{0, 0}, .name = i32_sym}},
+            },
+            .args = std::nullopt,
+        },
     });
 
     // --- Body: { 42 } ---
@@ -95,10 +102,11 @@ static void test_fn_main() {
     assert(le.lit.kind == LitKind::Int);
     assert(le.lit.value == "42");
 
-    // Return type is a unit tuple.
-    assert(std::holds_alternative<TupleType>(fn.sig.ret_ty->kind));
-    const auto& tt = std::get<TupleType>(fn.sig.ret_ty->kind);
-    assert(tt.elements.empty());
+    // Return type is i32.
+    assert(std::holds_alternative<PathType>(fn.sig.ret_ty->kind));
+    const auto& ret = std::get<PathType>(fn.sig.ret_ty->kind);
+    assert(ret.path.segments.size() == 1);
+    assert(ret.path.segments[0].name == i32_sym);
 }
 
 /// Test Crate construction.
@@ -111,59 +119,19 @@ static void test_crate() {
 static void test_keyword_modifiers() {
     KeywordModifier km{
         .span = SourceSpan{0, 5},
-        .kind = KeywordKind::Async,
+        .kind = KeywordKind::Runtime,
         .type_var = std::nullopt,
     };
-    assert(km.kind == KeywordKind::Async);
+    assert(km.kind == KeywordKind::Runtime);
     assert(!km.type_var.has_value());
 }
 
-static void test_concept_and_with_items() {
+static void test_for_and_decl_expr_nodes() {
     NodeIdAllocator ids;
     SymbolTable syms;
 
-    const auto concept_sym = syms.intern("Comparable");
-    const auto method_sym = syms.intern("compare");
-    const auto type_sym = syms.intern("Point");
-    const auto with_method_sym = syms.intern("length");
-
-    auto ret_ty = std::make_unique<TypeNode>(TypeNode{
-        .id = ids.next(),
-        .span = SourceSpan{0, 0},
-        .kind = TupleType{.elements = {}},
-    });
-
-    ConceptMethod method{
-        .keywords = {},
-        .name = method_sym,
-        .generics = Generics{},
-        .sig =
-            FnSig{
-                     .self_param = std::nullopt,
-                     .params = {},
-                     .ret_ty = std::move(ret_ty),
-                     },
-    };
-
-    std::vector<ConceptMethod> concept_methods;
-    concept_methods.push_back(std::move(method));
-
-    Item concept_item{
-        .id = ids.next(),
-        .span = SourceSpan{0,        0                    },
-        .kind =
-            ConceptItem{
-                           .name = concept_sym,
-                           .generics = Generics{},.methods = std::move(concept_methods),
-                           },
-    };
-
-    assert(std::holds_alternative<ConceptItem>(concept_item.kind));
-    const auto& concept_data = std::get<ConceptItem>(concept_item.kind);
-    assert(concept_data.name == concept_sym);
-    assert(concept_data.methods.size() == 1);
-
-    auto point_ty = std::make_unique<TypeNode>(TypeNode{
+    const auto vec_sym = syms.intern("Vec");
+    auto decl_type = std::make_unique<TypeNode>(TypeNode{
         .id = ids.next(),
         .span = SourceSpan{0, 0},
         .kind =
@@ -171,27 +139,44 @@ static void test_concept_and_with_items() {
                            .path =
                     Path{
                         .span = SourceSpan{0, 0},
-                        .segments = {PathSegment{.span = SourceSpan{0, 0}, .name = type_sym}},
+                        .segments = {PathSegment{.span = SourceSpan{0, 0}, .name = vec_sym}},
                     }, .args = std::nullopt,
                            },
     });
 
-    auto with_ret_ty = std::make_unique<TypeNode>(TypeNode{
+    auto decl_expr = std::make_unique<Expr>(Expr{
         .id = ids.next(),
         .span = SourceSpan{0, 0},
-        .kind = TupleType{.elements = {}},
+        .kind =
+            DeclExpr{
+                           .type_expr = std::move(decl_type),
+                           },
     });
 
-    FnItem with_method{
-        .keywords = {},
-        .name = with_method_sym,
-        .generics = Generics{},
-        .sig =
-            FnSig{
-                     .self_param = std::nullopt,
-                     .params = {},
-                     .ret_ty = std::move(with_ret_ty),
-                     },
+    auto init_expr = std::make_unique<Expr>(Expr{
+        .id = ids.next(),
+        .span = SourceSpan{0, 0},
+        .kind =
+            LitExpr{
+                           .lit =
+                    Lit{
+                        .span = SourceSpan{0, 0},
+                        .kind = LitKind::Int,
+                        .value = "0",
+                    },
+                           },
+    });
+
+    auto cond_expr = std::make_unique<Expr>(Expr{
+        .id = ids.next(),
+        .span = SourceSpan{0, 0},
+        .kind = LitExpr{.lit = Lit{.span = SourceSpan{0, 0}, .kind = LitKind::Bool, .value = "true"}},
+    });
+
+    ForExpr for_expr{
+        .init = std::move(init_expr),
+        .cond = std::move(cond_expr),
+        .step = std::nullopt,
         .body =
             Block{
                      .id = ids.next(),
@@ -200,31 +185,19 @@ static void test_concept_and_with_items() {
                      },
     };
 
-    std::vector<FnItem> with_methods;
-    with_methods.push_back(std::move(with_method));
+    assert(std::holds_alternative<DeclExpr>(decl_expr->kind));
+    const auto& decl = std::get<DeclExpr>(decl_expr->kind);
+    assert(std::holds_alternative<PathType>(decl.type_expr->kind));
 
-    Item with_item{
-        .id = ids.next(),
-        .span = SourceSpan{0, 0},
-        .kind =
-            WithItem{
-                           .generic_params = std::nullopt,
-                           .target_ty = std::move(point_ty),
-                           .where_clause = std::nullopt,
-                           .methods = std::move(with_methods),
-                           },
-    };
-
-    assert(std::holds_alternative<WithItem>(with_item.kind));
-    const auto& with = std::get<WithItem>(with_item.kind);
-    assert(with.methods.size() == 1);
-    assert(std::holds_alternative<PathType>(with.target_ty->kind));
+    assert(for_expr.init.has_value());
+    assert(for_expr.cond.has_value());
+    assert(!for_expr.step.has_value());
 }
 
 int main() {
     test_fn_main();
     test_crate();
     test_keyword_modifiers();
-    test_concept_and_with_items();
+    test_for_and_decl_expr_nodes();
     return 0;
 }

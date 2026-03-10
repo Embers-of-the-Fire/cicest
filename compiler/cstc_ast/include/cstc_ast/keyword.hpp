@@ -11,22 +11,18 @@ namespace cstc::ast {
 
 /// The kind of keyword modifier on a type or expression.
 enum class KeywordKind {
-    /// `async` or `async<A>`
-    Async,
     /// `runtime` or `runtime<R>`
     Runtime,
-    /// `!async` or `sync`
-    NotAsync,
     /// `!runtime` or `const`
     NotRuntime,
 };
 
-/// A single keyword modifier occurrence, e.g. `async<A>` or `sync`.
-/// Positive forms (`Async`, `Runtime`) may carry an optional type variable.
+/// A single keyword modifier occurrence, e.g. `runtime<R>` or `const`.
+/// Positive forms may carry an optional type variable.
 struct KeywordModifier {
     cstc::span::SourceSpan span;
     KeywordKind kind;
-    /// Optional type variable on positive forms: `async<A>`, `runtime<R>`.
+    /// Optional type variable on positive forms: `runtime<R>`.
     /// Always `std::nullopt` for negative forms.
     std::optional<Symbol> type_var;
 };
