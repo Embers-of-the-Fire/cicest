@@ -17,7 +17,9 @@
         llvmPackages_latest.compiler-rt
         llvmPackages_latest.libunwind
       ];
-      parser-dependencies = with pkgs; [ ];
+      parser-dependencies = with pkgs; [
+        argparse
+      ];
       make-dependencies = with pkgs; [
         cmake
         gnumake
@@ -33,7 +35,7 @@
         file
         gnupg
       ];
-      dependencies = llvm-dependencies ++ make-dependencies ++ misc-dependencies;
+      dependencies = llvm-dependencies ++ parser-dependencies ++ make-dependencies ++ misc-dependencies;
     in
     {
       apps.${system} = {
