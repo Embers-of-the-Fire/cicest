@@ -17,4 +17,3 @@ fn outer() -> i32 {
     assert(hir.find("outer::body {") != std::string::npos);
     return 0;
 }
-

@@ -12,19 +12,21 @@ namespace {
 
 Type path_type(std::string name) {
     return Type{
-        .kind = PathType{
-            .segments = {std::move(name)},
-            .args = {},
-        },
+        .kind =
+            PathType{
+                     .segments = {std::move(name)},
+                     .args = {},
+                     },
     };
 }
 
 Type contract_type(TypeContractKind kind, Type inner) {
     return Type{
-        .kind = ContractType{
-            .kind = kind,
-            .inner = make_type(std::move(inner.kind)),
-        },
+        .kind =
+            ContractType{
+                         .kind = kind,
+                         .inner = make_type(std::move(inner.kind)),
+                         },
     };
 }
 
@@ -32,25 +34,27 @@ Type contract_type(TypeContractKind kind, Type inner) {
 
 int main() {
     Type nested_runtime = contract_type(
-        TypeContractKind::Runtime,
-        contract_type(TypeContractKind::Runtime, path_type("i32")));
+        TypeContractKind::Runtime, contract_type(TypeContractKind::Runtime, path_type("i32")));
 
     std::vector<FnParam> params;
-    params.push_back(FnParam{
-        .name = "value",
-        .type = contract_type(TypeContractKind::Runtime, path_type("i32")),
-    });
+    params.push_back(
+        FnParam{
+            .name = "value",
+            .type = contract_type(TypeContractKind::Runtime, path_type("i32")),
+        });
 
     std::vector<Declaration> declarations;
-    declarations.push_back(Declaration{
-        .header = FunctionDecl{
-            .name = "normalize_contracts",
-            .generic_params = {},
-            .params = std::move(params),
-            .return_type = std::move(nested_runtime),
-        },
-        .body = {},
-        .constraints = {},
+    declarations.push_back(
+        Declaration{
+            .header =
+                FunctionDecl{
+                             .name = "normalize_contracts",
+                             .generic_params = {},
+                             .params = std::move(params),
+                             .return_type = std::move(nested_runtime),
+                             },
+            .body = {},
+            .constraints = {},
     });
 
     const Module module{
@@ -58,12 +62,11 @@ int main() {
     };
 
     const std::string printed = format_hir(module);
-    const std::string expected =
-        "fn normalize_contracts(value: runtime i32) -> runtime i32\n"
-        "normalize_contracts::body {\n"
-        "}\n"
-        "normalize_contracts::constraint {\n"
-        "}\n";
+    const std::string expected = "fn normalize_contracts(value: runtime i32) -> runtime i32\n"
+                                 "normalize_contracts::body {\n"
+                                 "}\n"
+                                 "normalize_contracts::constraint {\n"
+                                 "}\n";
 
     assert(printed == expected);
     return 0;

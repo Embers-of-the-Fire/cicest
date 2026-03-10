@@ -115,6 +115,97 @@ fn build() -> i32 {
     assert(std::holds_alternative<ConstructorFieldsExpr>((*let_stmt.init)->kind));
 }
 
+static void test_parse_function_pointer_type() {
+    constexpr std::string_view source = R"(
+fn takes_callback(cb: fn(i32, bool)->i32) -> i32 {
+    0
+}
+)";
+
+    SymbolTable symbols;
+    const auto parsed = parse_source(source, symbols);
+    assert(parsed.has_value());
+
+    const auto& crate = parsed.value();
+    assert(crate.items.size() == 1);
+
+    const auto& item = crate.items.front();
+    assert(std::holds_alternative<FnItem>(item.kind));
+
+    const auto& fn = std::get<FnItem>(item.kind);
+    assert(fn.sig.params.size() == 1);
+
+    const auto& param_type = fn.sig.params.front().ty;
+    assert(std::holds_alternative<FnPointerType>(param_type->kind));
+
+    const auto& fn_ptr = std::get<FnPointerType>(param_type->kind);
+    assert(fn_ptr.params.size() == 2);
+    assert(std::holds_alternative<PathType>(fn_ptr.ret->kind));
+}
+
+static void test_parse_lambda_without_capture() {
+    constexpr std::string_view source = R"(
+fn make() -> i32 {
+    let f = lambda(x: i32) {
+        x + 1
+    };
+    0
+}
+)";
+
+    SymbolTable symbols;
+    const auto parsed = parse_source(source, symbols);
+    assert(parsed.has_value());
+
+    const auto& crate = parsed.value();
+    assert(crate.items.size() == 1);
+
+    const auto& fn = std::get<FnItem>(crate.items.front().kind);
+    assert(fn.body.stmts.size() == 2);
+
+    const auto& let_stmt = std::get<LetStmt>(fn.body.stmts[0].kind);
+    assert(let_stmt.init.has_value());
+    assert(std::holds_alternative<LambdaExpr>((*let_stmt.init)->kind));
+
+    const auto& lambda_expr = std::get<LambdaExpr>((*let_stmt.init)->kind);
+    assert(lambda_expr.params.size() == 1);
+}
+
+static void test_lambda_capture_is_rejected() {
+    constexpr std::string_view source = R"(
+fn make() -> i32 {
+    let y = 41;
+    let f = lambda(x: i32) {
+        x + y
+    };
+    0
+}
+)";
+
+    SymbolTable symbols;
+    const auto parsed = parse_source(source, symbols);
+    assert(!parsed.has_value());
+}
+
+static void test_lambda_may_call_global_function() {
+    constexpr std::string_view source = R"(
+fn id(x: i32) -> i32 {
+    x
+}
+
+fn make() -> i32 {
+    let f = lambda(x: i32) {
+        id(x)
+    };
+    0
+}
+)";
+
+    SymbolTable symbols;
+    const auto parsed = parse_source(source, symbols);
+    assert(parsed.has_value());
+}
+
 static void test_removed_features_are_rejected() {
     constexpr std::string_view source = R"(
 type Number = i32;
@@ -123,14 +214,6 @@ type Number = i32;
     SymbolTable symbols;
     const auto parsed = parse_source(source, symbols);
     assert(!parsed.has_value());
-
-    const auto lambda_source = R"(
-fn main() -> i32 {
-    let f = lambda(x) { x };
-    0
-}
-)";
-    assert(!parse_source(lambda_source, symbols).has_value());
 
     const auto match_source = R"(
 fn main() -> i32 {
@@ -187,6 +270,10 @@ int main() {
     test_parse_main_function();
     test_parse_for_and_decl_intrinsic();
     test_parse_constructor_fields_still_supported();
+    test_parse_function_pointer_type();
+    test_parse_lambda_without_capture();
+    test_lambda_capture_is_rejected();
+    test_lambda_may_call_global_function();
     test_removed_features_are_rejected();
     test_assignment_expression_is_rejected();
     return 0;

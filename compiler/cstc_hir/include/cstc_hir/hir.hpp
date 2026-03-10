@@ -38,14 +38,14 @@ struct RefType {
     TypePtr inner;
 };
 
-struct FunctionType {
+struct FnPointerType {
     std::vector<TypePtr> params;
     TypePtr result;
 };
 
 struct InferredType {};
 
-using TypeKind = std::variant<PathType, ContractType, RefType, FunctionType, InferredType>;
+using TypeKind = std::variant<PathType, ContractType, RefType, FnPointerType, InferredType>;
 
 struct Type {
     TypeKind kind;

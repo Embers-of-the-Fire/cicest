@@ -23,9 +23,10 @@ Special handling:
 Parser-level removals are reflected by builder input (these constructs are rejected before lowering):
 
 - pattern matching and rich enum payloads
-- lambdas
 - trait/method-system declarations and method call syntax
 - type aliases
 - unnamed tuple types, tuple expressions, and tuple structs
+
+Lambdas are accepted, but must be non-capturing so they remain function-pointer-convertible.
 
 The builder remains permissive for some legacy AST variants, but the parser is now the gatekeeper for the simplified language subset.

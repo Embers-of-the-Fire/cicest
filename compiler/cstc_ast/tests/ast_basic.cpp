@@ -20,13 +20,14 @@ static void test_fn_main() {
     auto ret_ty = std::make_unique<TypeNode>(TypeNode{
         .id = ids.next(),
         .span = SourceSpan{0, 0},
-        .kind = PathType{
-            .path = Path{
-                .span = SourceSpan{0, 0},
-                .segments = {PathSegment{.span = SourceSpan{0, 0}, .name = i32_sym}},
-            },
-            .args = std::nullopt,
-        },
+        .kind =
+            PathType{
+                           .path =
+                    Path{
+                        .span = SourceSpan{0, 0},
+                        .segments = {PathSegment{.span = SourceSpan{0, 0}, .name = i32_sym}},
+                    }, .args = std::nullopt,
+                           },
     });
 
     // --- Body: { 42 } ---
@@ -163,14 +164,14 @@ static void test_for_and_decl_expr_nodes() {
                         .span = SourceSpan{0, 0},
                         .kind = LitKind::Int,
                         .value = "0",
-                    },
-                           },
+                    }, },
     });
 
     auto cond_expr = std::make_unique<Expr>(Expr{
         .id = ids.next(),
         .span = SourceSpan{0, 0},
-        .kind = LitExpr{.lit = Lit{.span = SourceSpan{0, 0}, .kind = LitKind::Bool, .value = "true"}},
+        .kind =
+            LitExpr{.lit = Lit{.span = SourceSpan{0, 0}, .kind = LitKind::Bool, .value = "true"}},
     });
 
     ForExpr for_expr{
@@ -179,10 +180,10 @@ static void test_for_and_decl_expr_nodes() {
         .step = std::nullopt,
         .body =
             Block{
-                     .id = ids.next(),
-                     .span = SourceSpan{0, 0},
-                     .stmts = {},
-                     },
+                  .id = ids.next(),
+                  .span = SourceSpan{0, 0},
+                  .stmts = {},
+                  },
     };
 
     assert(std::holds_alternative<DeclExpr>(decl_expr->kind));
@@ -194,10 +195,63 @@ static void test_for_and_decl_expr_nodes() {
     assert(!for_expr.step.has_value());
 }
 
+static void test_fn_pointer_type_node() {
+    NodeIdAllocator ids;
+    SymbolTable syms;
+
+    const auto i32_sym = syms.intern("i32");
+    const auto bool_sym = syms.intern("bool");
+
+    auto i32_type = std::make_unique<TypeNode>(TypeNode{
+        .id = ids.next(),
+        .span = SourceSpan{0, 0},
+        .kind =
+            PathType{
+                           .path =
+                    Path{
+                        .span = SourceSpan{0, 0},
+                        .segments = {PathSegment{.span = SourceSpan{0, 0}, .name = i32_sym}},
+                    }, .args = std::nullopt,
+                           },
+    });
+
+    auto bool_type = std::make_unique<TypeNode>(TypeNode{
+        .id = ids.next(),
+        .span = SourceSpan{0, 0},
+        .kind =
+            PathType{
+                           .path =
+                    Path{
+                        .span = SourceSpan{0, 0},
+                        .segments = {PathSegment{.span = SourceSpan{0, 0}, .name = bool_sym}},
+                    }, .args = std::nullopt,
+                           },
+    });
+
+    std::vector<std::unique_ptr<TypeNode>> params;
+    params.push_back(std::move(i32_type));
+
+    TypeNode fn_ptr_type{
+        .id = ids.next(),
+        .span = SourceSpan{0, 0},
+        .kind =
+            FnPointerType{
+                           .params = std::move(params),
+                           .ret = std::move(bool_type),
+                           },
+    };
+
+    assert(std::holds_alternative<FnPointerType>(fn_ptr_type.kind));
+    const auto& fn_ptr = std::get<FnPointerType>(fn_ptr_type.kind);
+    assert(fn_ptr.params.size() == 1);
+    assert(std::holds_alternative<PathType>(fn_ptr.ret->kind));
+}
+
 int main() {
     test_fn_main();
     test_crate();
     test_keyword_modifiers();
     test_for_and_decl_expr_nodes();
+    test_fn_pointer_type_node();
     return 0;
 }

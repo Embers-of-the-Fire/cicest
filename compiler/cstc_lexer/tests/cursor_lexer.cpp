@@ -106,15 +106,15 @@ static void test_line_comment() {
 static void test_block_comment() {
     check_lexing(
         "/* hello */foo", {
-                             {.kind = TokenKind::BlockComment, .len = 11},
-                             {       .kind = TokenKind::Ident, .len = 3},
-                             {         .kind = TokenKind::Eof, .len = 0},
+                              {.kind = TokenKind::BlockComment, .len = 11},
+                              {       .kind = TokenKind::Ident,  .len = 3},
+                              {         .kind = TokenKind::Eof,  .len = 0},
     });
 
     check_lexing(
         "/* unterminated", {
-                              {.kind = TokenKind::BlockComment, .len = 15},
-                              {         .kind = TokenKind::Eof, .len = 0},
+                               {.kind = TokenKind::BlockComment, .len = 15},
+                               {         .kind = TokenKind::Eof,  .len = 0},
     });
 }
 

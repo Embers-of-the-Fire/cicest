@@ -275,10 +275,19 @@ private:
         cstc::ast::UnaryOp op, cstc::span::SourceSpan op_span,
         std::unique_ptr<cstc::ast::Expr> operand);
 
+    void push_local_scope();
+    void pop_local_scope();
+    void bind_local_symbol(cstc::ast::Symbol symbol);
+    [[nodiscard]] bool scope_contains_symbol(
+        std::size_t scope_index, cstc::ast::Symbol symbol) const;
+    [[nodiscard]] bool is_lambda_capture_path(const cstc::ast::Path& path) const;
+
     [[nodiscard]] bool is_constructor_path(const cstc::ast::Path& path) const;
 
     cstc::ast::SymbolTable& symbols_;
     cstc::ast::NodeIdAllocator node_ids_;
+    std::vector<std::vector<cstc::ast::Symbol>> local_scopes_;
+    std::vector<std::size_t> lambda_scope_base_depths_;
     std::vector<LexedToken> tokens_;
     std::size_t cursor_ = 0;
 };
@@ -473,6 +482,51 @@ bool Parser::match_turbofish_start() noexcept {
         cursor_ += 3;
         return true;
     }
+    return false;
+}
+
+void Parser::push_local_scope() { local_scopes_.emplace_back(); }
+
+void Parser::pop_local_scope() {
+    if (!local_scopes_.empty())
+        local_scopes_.pop_back();
+}
+
+void Parser::bind_local_symbol(cstc::ast::Symbol symbol) {
+    if (local_scopes_.empty())
+        return;
+
+    auto& scope = local_scopes_.back();
+    if (std::find(scope.begin(), scope.end(), symbol) != scope.end())
+        return;
+    scope.push_back(symbol);
+}
+
+bool Parser::scope_contains_symbol(std::size_t scope_index, cstc::ast::Symbol symbol) const {
+    if (scope_index >= local_scopes_.size())
+        return false;
+
+    const auto& scope = local_scopes_[scope_index];
+    return std::find(scope.begin(), scope.end(), symbol) != scope.end();
+}
+
+bool Parser::is_lambda_capture_path(const cstc::ast::Path& path) const {
+    if (lambda_scope_base_depths_.empty() || path.segments.size() != 1)
+        return false;
+
+    const auto symbol = path.segments.front().name;
+    const auto base_depth = lambda_scope_base_depths_.back();
+
+    for (std::size_t index = local_scopes_.size(); index > base_depth; --index) {
+        if (scope_contains_symbol(index - 1, symbol))
+            return false;
+    }
+
+    for (std::size_t index = std::min(base_depth, local_scopes_.size()); index > 0; --index) {
+        if (scope_contains_symbol(index - 1, symbol))
+            return true;
+    }
+
     return false;
 }
 
@@ -865,19 +919,20 @@ ParseResult<std::unique_ptr<cstc::ast::TypeNode>> Parser::parse_type_atom() {
         }
 
         auto close_result =
-            expect(cstc::lexer::TokenKind::CloseParen, "`)` after function type params");
+            expect(cstc::lexer::TokenKind::CloseParen, "`)` after function pointer type params");
         if (!close_result)
             return std::unexpected(std::move(close_result.error()));
 
         if (!match_arrow())
-            return fail<std::unique_ptr<cstc::ast::TypeNode>>("expected `->` in function type");
+            return fail<std::unique_ptr<cstc::ast::TypeNode>>(
+                "expected `->` in function pointer type");
 
         auto ret_result = parse_type();
         if (!ret_result)
             return std::unexpected(std::move(ret_result.error()));
 
         return make_type(
-            merge_spans(fn_token.span, (*ret_result)->span), cstc::ast::FnType{
+            merge_spans(fn_token.span, (*ret_result)->span), cstc::ast::FnPointerType{
                                                                  .params = std::move(params),
                                                                  .ret = std::move(*ret_result),
                                                              });
@@ -1136,9 +1191,17 @@ ParseResult<cstc::ast::Item> Parser::parse_fn_item(
         return std::unexpected(std::move(where_clause_result.error()));
     generics.where_clause = std::move(*where_clause_result);
 
+    push_local_scope();
+    for (const auto& param : sig_result->params)
+        bind_local_symbol(param.name);
+
     auto body_result = parse_block();
-    if (!body_result)
+    if (!body_result) {
+        pop_local_scope();
         return std::unexpected(std::move(body_result.error()));
+    }
+
+    pop_local_scope();
 
     cstc::ast::FnItem fn_item{
         .keywords = std::move(keywords),
@@ -1523,20 +1586,30 @@ ParseResult<cstc::ast::Block> Parser::parse_block() {
     if (!open_result)
         return std::unexpected(std::move(open_result.error()));
 
+    push_local_scope();
+
     std::vector<cstc::ast::Stmt> stmts;
     while (!check(cstc::lexer::TokenKind::CloseBrace)) {
-        if (at_end())
+        if (at_end()) {
+            pop_local_scope();
             return fail<cstc::ast::Block>("unexpected end of input in block");
+        }
 
         auto stmt_result = parse_stmt();
-        if (!stmt_result)
+        if (!stmt_result) {
+            pop_local_scope();
             return std::unexpected(std::move(stmt_result.error()));
+        }
         stmts.push_back(std::move(*stmt_result));
     }
 
     auto close_result = expect(cstc::lexer::TokenKind::CloseBrace, "`}` to close block");
-    if (!close_result)
+    if (!close_result) {
+        pop_local_scope();
         return std::unexpected(std::move(close_result.error()));
+    }
+
+    pop_local_scope();
 
     return cstc::ast::Block{
         .id = node_ids_.next(),
@@ -1580,6 +1653,9 @@ ParseResult<cstc::ast::Stmt> Parser::parse_let_stmt(cstc::span::SourceSpan start
     auto semi_result = expect(cstc::lexer::TokenKind::Semi, "`;` after let statement");
     if (!semi_result)
         return std::unexpected(std::move(semi_result.error()));
+
+    if (const auto* binding = std::get_if<cstc::ast::BindingPat>(&binding_pattern->kind))
+        bind_local_symbol(binding->name);
 
     return cstc::ast::Stmt{
         .id = node_ids_.next(),
@@ -1997,7 +2073,7 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_primary_expr() {
         return parse_return_expr(previous().span);
 
     if (match_ident("lambda"))
-        return fail<std::unique_ptr<cstc::ast::Expr>>("lambda expressions are not supported");
+        return parse_lambda_expr(previous().span);
 
     if (match_ident("decl"))
         return parse_decl_expr(previous().span);
@@ -2029,6 +2105,12 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>> Parser::parse_primary_expr() {
         auto path_result = parse_path();
         if (!path_result)
             return std::unexpected(std::move(path_result.error()));
+
+        if (is_lambda_capture_path(*path_result)) {
+            const auto name = symbols_.str(path_result->segments.front().name);
+            return fail<std::unique_ptr<cstc::ast::Expr>>(
+                "lambda cannot capture outer variable `" + std::string(name) + "`");
+        }
 
         if (check(cstc::lexer::TokenKind::OpenBrace) && is_constructor_path(*path_result))
             return parse_constructor_fields_expr(std::move(*path_result));
@@ -2362,9 +2444,21 @@ ParseResult<std::unique_ptr<cstc::ast::Expr>>
     if (!close_result)
         return std::unexpected(std::move(close_result.error()));
 
+    const auto lambda_scope_base = local_scopes_.size();
+    push_local_scope();
+    for (const auto& param : params)
+        bind_local_symbol(param.name);
+    lambda_scope_base_depths_.push_back(lambda_scope_base);
+
     auto body_result = parse_block();
-    if (!body_result)
+    if (!body_result) {
+        lambda_scope_base_depths_.pop_back();
+        pop_local_scope();
         return std::unexpected(std::move(body_result.error()));
+    }
+
+    lambda_scope_base_depths_.pop_back();
+    pop_local_scope();
 
     return make_expr(
         merge_spans(lambda_span, body_result->span), cstc::ast::LambdaExpr{

@@ -15,4 +15,3 @@ fn make_some() -> Option<i32> {
     assert(hir.find("Some(1)") != std::string::npos);
     return 0;
 }
-

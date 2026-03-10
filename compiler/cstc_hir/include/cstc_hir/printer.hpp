@@ -120,7 +120,7 @@ private:
                     if (kind.inner == nullptr)
                         return "&<missing-type>";
                     return "&" + format_type(*kind.inner);
-                } else if constexpr (std::is_same_v<Kind, FunctionType>) {
+                } else if constexpr (std::is_same_v<Kind, FnPointerType>) {
                     std::string text = "fn(";
                     for (std::size_t index = 0; index < kind.params.size(); ++index) {
                         if (index != 0)

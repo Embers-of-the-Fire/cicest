@@ -62,8 +62,8 @@ struct RefType {
     std::unique_ptr<TypeNode> inner;
 };
 
-/// A function type, e.g. `fn(i32, bool) -> i32`.
-struct FnType {
+/// A function pointer type, e.g. `fn(i32, bool) -> i32`.
+struct FnPointerType {
     std::vector<std::unique_ptr<TypeNode>> params;
     std::unique_ptr<TypeNode> ret;
 };
@@ -72,7 +72,7 @@ struct FnType {
 struct InferredType {};
 
 /// Discriminated union of all type forms.
-using TypeKind = std::variant<PathType, KeywordType, RefType, FnType, InferredType>;
+using TypeKind = std::variant<PathType, KeywordType, RefType, FnPointerType, InferredType>;
 
 // ---------------------------------------------------------------------------
 // TypeNode

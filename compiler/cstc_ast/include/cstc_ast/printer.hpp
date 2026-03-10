@@ -449,7 +449,7 @@ private:
                     line("type ref");
                     const IndentScope scope{*this};
                     print_type(*kind.inner);
-                } else if constexpr (std::is_same_v<Kind, FnType>) {
+                } else if constexpr (std::is_same_v<Kind, FnPointerType>) {
                     line("type fn");
                     const IndentScope scope{*this};
                     line("params");

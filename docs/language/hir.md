@@ -17,7 +17,7 @@ Current HIR type forms:
 - `PathType`
 - `ContractType`
 - `RefType`
-- `FunctionType`
+- `FnPointerType`
 - `InferredType`
 
 ## Expressions
@@ -51,7 +51,6 @@ This records that the type expression must be valid during constraint checking.
 HIR may still keep general-purpose node categories, but source parsing no longer accepts:
 
 - `match`/pattern matching
-- lambda expressions
 - method-system declarations (`concept`, `with`) and method-call syntax
 - type aliases
 - rich enum payloads

@@ -8,7 +8,6 @@ The following are intentionally **not supported**:
 
 - Pattern matching (`match`) and pattern-based destructuring
 - Rich enum payloads (enum variants with fields or tuple data)
-- Lambda expressions (`lambda`)
 - OOP-style trait/method system (`concept`, `with`, `self` receiver methods, method-call syntax)
 - Type aliases (`type Name = ...`)
 - Unnamed tuple types, tuple expressions, and tuple structs (`(A, B)`, `(a, b)`, `struct S(T)`)
@@ -29,6 +28,14 @@ fn name<T>(arg1: Type, arg2: Type) -> Type
 
 ```cicest
 extern fn puts(v: i32) -> i32;
+```
+
+## Type Expressions
+
+Supported special intrinsic type syntax includes function pointers:
+
+```cicest
+fn(i32, bool)->i32
 ```
 
 ### Struct
@@ -94,9 +101,21 @@ Supported expression forms:
 - `loop` expression
 - C-style `for` expression
 - `return`
+- Lambda expression (`lambda(x: i32) { x + 1 }`)
 - Keyword blocks (`runtime {}`, `const {}`)
 - Turbofish (`f::<T>(x)`)
 - `decl(TypeExpr)` intrinsic
+
+### Lambda Expressions
+
+```cicest
+let plus_one = lambda(x: i32) {
+    x + 1
+};
+```
+
+- Lambdas are **non-capturing**: referencing outer local variables is rejected.
+- This keeps lambdas convertible to plain function pointers.
 
 ### C-Style `for`
 

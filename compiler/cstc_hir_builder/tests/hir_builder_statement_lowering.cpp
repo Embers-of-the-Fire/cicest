@@ -16,7 +16,8 @@ fn body_stmts() -> i32 {
 
     assert(hir.find("let x: i32 = 1") != std::string::npos);
     assert(hir.find("let y = x + 1") != std::string::npos);
-    assert(hir.find("body_stmts::body {\n  let x: i32 = 1\n  let y = x + 1\n  y\n}") != std::string::npos);
+    assert(
+        hir.find("body_stmts::body {\n  let x: i32 = 1\n  let y = x + 1\n  y\n}")
+        != std::string::npos);
     return 0;
 }
-

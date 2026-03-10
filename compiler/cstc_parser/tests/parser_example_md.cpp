@@ -1,7 +1,7 @@
 #include <cassert>
 #include <fstream>
-#include <iterator>
 #include <iostream>
+#include <iterator>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -58,15 +58,13 @@ static void test_example_markdown_cicest_blocks_parse() {
 
     for (std::size_t index = 0; index < blocks.size(); ++index) {
         const std::string wrapped = "fn __example_block_" + std::to_string(index) + "() -> i32 {\n"
-            + blocks[index] + "\n}\n";
+                                  + blocks[index] + "\n}\n";
 
         SymbolTable symbols;
         const auto parsed = parse_source(wrapped, symbols);
         if (!parsed.has_value()) {
-            std::cerr << "Failed to parse docs/language/example.md cicest block " << index
-                      << "\n\n"
-                      << blocks[index]
-                      << "\nParse error: " << parsed.error().message << "\n";
+            std::cerr << "Failed to parse docs/language/example.md cicest block " << index << "\n\n"
+                      << blocks[index] << "\nParse error: " << parsed.error().message << "\n";
             assert(false);
         }
     }

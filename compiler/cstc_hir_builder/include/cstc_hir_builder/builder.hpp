@@ -128,7 +128,7 @@ private:
                     return out;
                 } else if constexpr (std::is_same_v<Kind, cstc::ast::RefType>) {
                     return "&" + format_type(*kind.inner);
-                } else if constexpr (std::is_same_v<Kind, cstc::ast::FnType>) {
+                } else if constexpr (std::is_same_v<Kind, cstc::ast::FnPointerType>) {
                     std::string out = "fn(";
                     for (std::size_t index = 0; index < kind.params.size(); ++index) {
                         if (index != 0)
@@ -463,8 +463,8 @@ private:
                                 .inner = cstc::hir::make_type(lower_type(*kind.inner).kind),
                             },
                     };
-                } else if constexpr (std::is_same_v<Kind, cstc::ast::FnType>) {
-                    cstc::hir::FunctionType fn;
+                } else if constexpr (std::is_same_v<Kind, cstc::ast::FnPointerType>) {
+                    cstc::hir::FnPointerType fn;
                     fn.params.reserve(kind.params.size());
                     for (const auto& param : kind.params)
                         fn.params.push_back(cstc::hir::make_type(lower_type(*param).kind));
