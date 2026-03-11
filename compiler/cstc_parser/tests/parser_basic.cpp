@@ -206,6 +206,43 @@ fn make() -> i32 {
     assert(parsed.has_value());
 }
 
+static void test_parse_import_and_export_fn() {
+    constexpr std::string_view source = R"(
+import { foo, bar as baz } from "./math.cst";
+
+export fn main() -> i32 {
+    foo();
+    baz();
+    0
+}
+)";
+
+    SymbolTable symbols;
+    const auto parsed = parse_source(source, symbols);
+    assert(parsed.has_value());
+
+    const auto& crate = parsed.value();
+    assert(crate.items.size() == 2);
+
+    assert(std::holds_alternative<ImportItem>(crate.items[0].kind));
+    const auto& import_named = std::get<ImportItem>(crate.items[0].kind);
+    assert(import_named.source == "\"./math.cst\"");
+    assert(import_named.specifiers.size() == 2);
+    assert(symbols.str(import_named.specifiers[0].imported_name) == "foo");
+    assert(!import_named.specifiers[0].local_name.has_value());
+    assert(symbols.str(import_named.specifiers[1].imported_name) == "bar");
+    assert(import_named.specifiers[1].local_name.has_value());
+    assert(symbols.str(*import_named.specifiers[1].local_name) == "baz");
+
+    assert(std::holds_alternative<FnItem>(crate.items[1].kind));
+    const auto& exported_fn = std::get<FnItem>(crate.items[1].kind);
+    assert(exported_fn.is_exported);
+    assert(symbols.str(exported_fn.name) == "main");
+
+    constexpr std::string_view side_effect_import = "import \"./prelude.cst\";";
+    assert(!parse_source(side_effect_import, symbols).has_value());
+}
+
 static void test_removed_features_are_rejected() {
     constexpr std::string_view source = R"(
 type Number = i32;
@@ -274,6 +311,7 @@ int main() {
     test_parse_lambda_without_capture();
     test_lambda_capture_is_rejected();
     test_lambda_may_call_global_function();
+    test_parse_import_and_export_fn();
     test_removed_features_are_rejected();
     test_assignment_expression_is_rejected();
     return 0;

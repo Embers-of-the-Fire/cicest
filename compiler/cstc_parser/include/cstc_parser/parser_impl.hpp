@@ -18,10 +18,11 @@ namespace {
 template <typename T>
 using ParseResult = std::expected<T, ParseError>;
 
-constexpr std::array<std::string_view, 23> RESERVED_KEYWORDS = {
+constexpr std::array<std::string_view, 26> RESERVED_KEYWORDS = {
     "let",    "runtime", "const",  "fn",      "where",  "extern", "if",    "else",
     "match",  "loop",    "for",    "struct",  "enum",   "type",   "with",  "concept",
-    "return", "self",    "lambda", "decl",    "true",   "false",  "_",
+    "return", "self",    "lambda", "decl",    "true",   "false",  "_",     "import",
+    "from",   "export",
 };
 
 [[nodiscard]] bool is_reserved_keyword(std::string_view text) noexcept {
@@ -179,8 +180,10 @@ private:
     [[nodiscard]] ParseResult<cstc::ast::StructField> parse_struct_field();
 
     [[nodiscard]] ParseResult<cstc::ast::Item> parse_item();
+    [[nodiscard]] ParseResult<cstc::ast::Item> parse_import_item(cstc::span::SourceSpan start_span);
     [[nodiscard]] ParseResult<cstc::ast::Item> parse_fn_item(
-        std::vector<cstc::ast::KeywordModifier> keywords, cstc::span::SourceSpan start_span);
+        std::vector<cstc::ast::KeywordModifier> keywords, cstc::span::SourceSpan start_span,
+        bool is_exported);
     [[nodiscard]] ParseResult<cstc::ast::Item> parse_extern_fn_item(
         std::vector<cstc::ast::KeywordModifier> keywords, cstc::span::SourceSpan start_span);
     [[nodiscard]] ParseResult<cstc::ast::Item> parse_struct_item(cstc::span::SourceSpan start_span);
@@ -570,6 +573,15 @@ bool Parser::looks_like_keyword_block_expr() const noexcept {
 
 bool Parser::is_item_start() const noexcept {
     std::size_t index = cursor_;
+    if (check_ident_at(index, "import"))
+        return true;
+
+    bool has_export = false;
+    if (check_ident_at(index, "export")) {
+        has_export = true;
+        ++index;
+    }
+
     while (true) {
         const auto modifier_len = keyword_modifier_length_at(index);
         if (!modifier_len.has_value())
@@ -578,8 +590,13 @@ bool Parser::is_item_start() const noexcept {
     }
 
     if (check_ident_at(index, "extern") && check_ident_at(index + 1, "fn"))
+        return !has_export;
+    if (check_ident_at(index, "fn"))
         return true;
-    return check_ident_at(index, "fn") || check_ident_at(index, "struct")
+    if (has_export)
+        return false;
+
+    return check_ident_at(index, "struct")
         || check_ident_at(index, "enum");
 }
 
@@ -1121,14 +1138,22 @@ ParseResult<cstc::ast::StructField> Parser::parse_struct_field() {
 ParseResult<cstc::ast::Item> Parser::parse_item() {
     const auto start_span = peek().span;
 
+    if (match_ident("import"))
+        return parse_import_item(start_span);
+
+    const bool is_exported = match_ident("export");
+
     auto keywords_result = parse_keyword_modifiers();
     if (!keywords_result)
         return std::unexpected(std::move(keywords_result.error()));
     auto keywords = std::move(*keywords_result);
 
     if (match_ident("fn")) {
-        return parse_fn_item(std::move(keywords), start_span);
+        return parse_fn_item(std::move(keywords), start_span, is_exported);
     }
+
+    if (is_exported)
+        return fail<cstc::ast::Item>("expected `fn` after `export`");
 
     if (match_ident("extern")) {
         if (!match_ident("fn"))
@@ -1155,8 +1180,76 @@ ParseResult<cstc::ast::Item> Parser::parse_item() {
     return fail<cstc::ast::Item>("expected item declaration");
 }
 
+ParseResult<cstc::ast::Item> Parser::parse_import_item(cstc::span::SourceSpan start_span) {
+    std::vector<cstc::ast::ImportSpecifier> specifiers;
+    if (!match(cstc::lexer::TokenKind::OpenBrace)) {
+        return fail<cstc::ast::Item>(
+            "expected `{` after `import`; side-effect-only imports are not supported");
+    }
+
+    if (check(cstc::lexer::TokenKind::CloseBrace)) {
+        return fail<cstc::ast::Item>("expected at least one import binding");
+    }
+
+    while (true) {
+        auto imported_name_result = parse_identifier("import binding");
+        if (!imported_name_result)
+            return std::unexpected(std::move(imported_name_result.error()));
+
+        auto specifier_end = imported_name_result->span;
+        std::optional<cstc::ast::Symbol> local_name;
+        if (match_ident("as")) {
+            auto local_name_result = parse_identifier("local import binding");
+            if (!local_name_result)
+                return std::unexpected(std::move(local_name_result.error()));
+
+            local_name = local_name_result->symbol;
+            specifier_end = local_name_result->span;
+        }
+
+        specifiers.push_back(cstc::ast::ImportSpecifier{
+            .span = merge_spans(imported_name_result->span, specifier_end),
+            .imported_name = imported_name_result->symbol,
+            .local_name = local_name,
+        });
+
+        if (!match(cstc::lexer::TokenKind::Comma))
+            break;
+        if (check(cstc::lexer::TokenKind::CloseBrace))
+            break;
+    }
+
+    auto close_brace_result =
+        expect(cstc::lexer::TokenKind::CloseBrace, "`}` after import specifiers");
+    if (!close_brace_result)
+        return std::unexpected(std::move(close_brace_result.error()));
+
+    if (!match_ident("from"))
+        return fail<cstc::ast::Item>("expected `from` after import specifiers");
+
+    if (!check(cstc::lexer::TokenKind::LitStr))
+        return fail<cstc::ast::Item>("expected module path string literal after `from`");
+
+    const auto source_token = advance();
+    auto semi_result = expect(cstc::lexer::TokenKind::Semi, "`;` after import declaration");
+    if (!semi_result)
+        return std::unexpected(std::move(semi_result.error()));
+
+    cstc::ast::ImportItem import_item{
+        .specifiers = std::move(specifiers),
+        .source = source_token.text,
+    };
+
+    return cstc::ast::Item{
+        .id = node_ids_.next(),
+        .span = merge_spans(start_span, semi_result->span),
+        .kind = std::move(import_item),
+    };
+}
+
 ParseResult<cstc::ast::Item> Parser::parse_fn_item(
-    std::vector<cstc::ast::KeywordModifier> keywords, cstc::span::SourceSpan start_span) {
+    std::vector<cstc::ast::KeywordModifier> keywords, cstc::span::SourceSpan start_span,
+    bool is_exported) {
     cstc::ast::Generics generics{};
     std::optional<cstc::ast::GenericParams> leading_generic_params;
     if (check(cstc::lexer::TokenKind::Lt)) {
@@ -1209,6 +1302,7 @@ ParseResult<cstc::ast::Item> Parser::parse_fn_item(
         .generics = std::move(generics),
         .sig = std::move(*sig_result),
         .body = std::move(*body_result),
+        .is_exported = is_exported,
     };
 
     return cstc::ast::Item{
@@ -1551,7 +1645,7 @@ ParseResult<cstc::ast::Item> Parser::parse_with_item(cstc::span::SourceSpan star
         if (!match_ident("fn"))
             return fail<cstc::ast::Item>("expected `fn` item in with-body");
 
-        auto method_item_result = parse_fn_item(std::move(*keywords_result), method_start);
+        auto method_item_result = parse_fn_item(std::move(*keywords_result), method_start, false);
         if (!method_item_result)
             return std::unexpected(std::move(method_item_result.error()));
 

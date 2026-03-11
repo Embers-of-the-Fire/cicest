@@ -224,6 +224,8 @@ private:
 
                 if constexpr (std::is_same_v<Item, FunctionDecl>) {
                     return item.name;
+                } else if constexpr (std::is_same_v<Item, ImportDecl>) {
+                    return "import";
                 } else if constexpr (std::is_same_v<Item, RawDecl>) {
                     return item.name;
                 }
@@ -239,7 +241,10 @@ private:
                 using Item = std::decay_t<decltype(item)>;
 
                 if constexpr (std::is_same_v<Item, FunctionDecl>) {
-                    std::string text = "fn " + item.name;
+                    std::string text;
+                    if (item.is_exported)
+                        text = "export ";
+                    text += "fn " + item.name;
 
                     if (!item.generic_params.empty()) {
                         text += "<";
@@ -255,6 +260,22 @@ private:
                     }
                     text += ") -> ";
                     text += format_type(item.return_type);
+                    return text;
+                } else if constexpr (std::is_same_v<Item, ImportDecl>) {
+                    std::string text = "import { ";
+                    for (std::size_t index = 0; index < item.specifiers.size(); ++index) {
+                        if (index != 0)
+                            text += ", ";
+
+                        text += item.specifiers[index].imported_name;
+                        if (item.specifiers[index].has_alias) {
+                            text += " as ";
+                            text += item.specifiers[index].local_name;
+                        }
+                    }
+
+                    text += " } from ";
+                    text += item.source;
                     return text;
                 } else if constexpr (std::is_same_v<Item, RawDecl>) {
                     return item.text;
@@ -296,6 +317,11 @@ private:
 
     void print_declaration(const Declaration& declaration) {
         const std::string header = format_decl_header(declaration.header);
+        if (std::holds_alternative<ImportDecl>(declaration.header)) {
+            line(header);
+            return;
+        }
+
         const std::string name = declaration_name(declaration.header);
 
         line(header);

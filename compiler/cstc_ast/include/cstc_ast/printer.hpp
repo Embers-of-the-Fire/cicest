@@ -248,8 +248,29 @@ private:
             [this](const auto& kind) {
                 using Kind = std::decay_t<decltype(kind)>;
 
-                if constexpr (std::is_same_v<Kind, FnItem>) {
-                    line("item fn " + symbol_text(kind.name));
+                if constexpr (std::is_same_v<Kind, ImportItem>) {
+                    line("item import");
+                    const IndentScope scope{*this};
+                    line("source: " + kind.source);
+                    line("specifiers");
+                    {
+                        const IndentScope spec_scope{*this};
+                        if (kind.specifiers.empty()) {
+                            line("(none)");
+                        } else {
+                            for (const auto& specifier : kind.specifiers) {
+                                std::string text = symbol_text(specifier.imported_name);
+                                if (specifier.local_name.has_value()) {
+                                    text += " as ";
+                                    text += symbol_text(*specifier.local_name);
+                                }
+                                line(text);
+                            }
+                        }
+                    }
+                } else if constexpr (std::is_same_v<Kind, FnItem>) {
+                    line(std::string{"item "} + (kind.is_exported ? "export fn " : "fn ")
+                        + symbol_text(kind.name));
                     const IndentScope scope{*this};
                     print_keyword_modifiers(kind.keywords);
                     print_generics(kind.generics);

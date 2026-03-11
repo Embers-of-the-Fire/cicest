@@ -5,9 +5,12 @@ The HIR builder lowers parsed AST into HIR declarations and expression trees.
 ## Key Lowering Rules
 
 - `FnItem` -> `FunctionDecl`
+- `ImportItem` -> `ImportDecl`
 - Struct/enum/extern declarations -> `RawDecl` (when not direct function headers)
 - Statement-level expressions lowered directly, with complex forms represented as `RawExpr` when needed
 - Contract keyword wrappers are lowered to nested `ContractBlockExpr` nodes
+
+`export fn` is preserved by marking `FunctionDecl::is_exported = true`.
 
 ## Constraint Lowering
 

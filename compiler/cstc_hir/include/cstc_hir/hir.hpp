@@ -144,6 +144,18 @@ struct FunctionDecl {
     std::vector<std::string> generic_params;
     std::vector<FnParam> params;
     Type return_type;
+    bool is_exported = false;
+};
+
+struct ImportSpecifier {
+    std::string imported_name;
+    std::string local_name;
+    bool has_alias = false;
+};
+
+struct ImportDecl {
+    std::string source;
+    std::vector<ImportSpecifier> specifiers;
 };
 
 struct RawDecl {
@@ -151,7 +163,7 @@ struct RawDecl {
     std::string text;
 };
 
-using DeclHeader = std::variant<FunctionDecl, RawDecl>;
+using DeclHeader = std::variant<FunctionDecl, ImportDecl, RawDecl>;
 
 struct Declaration {
     DeclHeader header;

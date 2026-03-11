@@ -5,6 +5,7 @@ This prototype intentionally keeps a small core language while AST/HIR evolve.
 ## Supported High-Level Features
 
 - Functions, extern functions
+- Modules (`import`, `export fn`)
 - Marker and named-field structs
 - C++-style enums with unit variants only
 - Immutable `let` bindings

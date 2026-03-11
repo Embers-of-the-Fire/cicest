@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -74,9 +75,27 @@ struct EnumVariant {
     VariantKind kind;
 };
 
+/// A named binding in an import declaration.
+/// `import { foo } from "./mod.cst"` or `import { foo as bar } ...`.
+struct ImportSpecifier {
+    cstc::span::SourceSpan span;
+    Symbol imported_name;
+    std::optional<Symbol> local_name;
+};
+
 // ---------------------------------------------------------------------------
 // Item kinds
 // ---------------------------------------------------------------------------
+
+/// A module import declaration.
+///
+/// Supported forms:
+/// - `import "./path.cst";`
+/// - `import { foo, bar as baz } from "./path.cst";`
+struct ImportItem {
+    std::vector<ImportSpecifier> specifiers;
+    std::string source;
+};
 
 /// A function item: `(keyword*) fn name<...>(...) -> Type where ... { body }`.
 struct FnItem {
@@ -85,6 +104,7 @@ struct FnItem {
     Generics generics;
     FnSig sig;
     Block body;
+    bool is_exported = false;
 };
 
 /// A concept method requirement: `(keyword*) fn name<...>(...) -> Type where ...;`.
@@ -154,7 +174,7 @@ struct WithItem {
 };
 
 /// Discriminated union of all item (declaration) forms.
-using ItemKind = std::variant<FnItem, ExternFnItem, MarkerStructItem, NamedStructItem,
+using ItemKind = std::variant<ImportItem, FnItem, ExternFnItem, MarkerStructItem, NamedStructItem,
     TupleStructItem, EnumItem, TypeAliasItem, ConceptItem, WithItem>;
 
 // ---------------------------------------------------------------------------

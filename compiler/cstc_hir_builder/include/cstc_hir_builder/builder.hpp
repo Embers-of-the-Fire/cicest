@@ -812,6 +812,8 @@ private:
 
                 if constexpr (std::is_same_v<Kind, cstc::ast::FnItem>) {
                     return symbol_text(kind.name);
+                } else if constexpr (std::is_same_v<Kind, cstc::ast::ImportItem>) {
+                    return "import<" + kind.source + ">";
                 } else if constexpr (std::is_same_v<Kind, cstc::ast::ExternFnItem>) {
                     return symbol_text(kind.name);
                 } else if constexpr (std::is_same_v<Kind, cstc::ast::MarkerStructItem>) {
@@ -969,12 +971,9 @@ private:
     }
 
     [[nodiscard]] cstc::hir::Declaration lower_fn_item(
-        std::string name,
-        const std::vector<cstc::ast::KeywordModifier>& keywords,
-        const std::vector<std::string>& generic_prefix,
-        const cstc::ast::Generics& generics,
-        const cstc::ast::FnSig& sig,
-        const cstc::ast::Block& body,
+        std::string name, bool is_exported, const std::vector<cstc::ast::KeywordModifier>& keywords,
+        const std::vector<std::string>& generic_prefix, const cstc::ast::Generics& generics,
+        const cstc::ast::FnSig& sig, const cstc::ast::Block& body,
         const std::optional<cstc::ast::WhereClause>& extra_where_clause) const {
         auto generic_params = generic_prefix;
         const auto method_generics = lower_generic_params(generics.params);
@@ -991,6 +990,7 @@ private:
                     .generic_params = std::move(generic_params),
                     .params = lower_fn_params(sig),
                     .return_type = apply_fn_keywords(lower_type(*sig.ret_ty), keywords),
+                    .is_exported = is_exported,
                 },
             .body = lower_block(body),
             .constraints = std::move(constraints),
@@ -1003,9 +1003,34 @@ private:
             [this, &declarations](const auto& kind) {
                 using Kind = std::decay_t<decltype(kind)>;
 
-                if constexpr (std::is_same_v<Kind, cstc::ast::FnItem>) {
-                    declarations.push_back(lower_fn_item(symbol_text(kind.name), kind.keywords, {},
-                        kind.generics, kind.sig, kind.body, std::nullopt));
+                if constexpr (std::is_same_v<Kind, cstc::ast::ImportItem>) {
+                    std::vector<cstc::hir::ImportSpecifier> specifiers;
+                    specifiers.reserve(kind.specifiers.size());
+
+                    for (const auto& specifier : kind.specifiers) {
+                        const auto imported_name = symbol_text(specifier.imported_name);
+                        const bool has_alias = specifier.local_name.has_value();
+
+                        specifiers.push_back(cstc::hir::ImportSpecifier{
+                            .imported_name = imported_name,
+                            .local_name = has_alias ? symbol_text(*specifier.local_name)
+                                                    : imported_name,
+                            .has_alias = has_alias,
+                        });
+                    }
+
+                    declarations.push_back(cstc::hir::Declaration{
+                        .header =
+                            cstc::hir::ImportDecl{
+                                .source = kind.source,
+                                .specifiers = std::move(specifiers),
+                            },
+                        .body = {},
+                        .constraints = {},
+                    });
+                } else if constexpr (std::is_same_v<Kind, cstc::ast::FnItem>) {
+                    declarations.push_back(lower_fn_item(symbol_text(kind.name), kind.is_exported,
+                        kind.keywords, {}, kind.generics, kind.sig, kind.body, std::nullopt));
                 } else if constexpr (std::is_same_v<Kind, cstc::ast::WithItem>) {
                     const auto with_generics = lower_generic_params(kind.generic_params);
                     const std::string target_name = format_type(*kind.target_ty);
@@ -1023,9 +1048,10 @@ private:
                         });
                     } else {
                         for (const auto& method : kind.methods) {
-                            declarations.push_back(lower_fn_item(
-                                target_name + "::" + symbol_text(method.name), method.keywords,
-                                with_generics, method.generics, method.sig, method.body,
+                            declarations.push_back(lower_fn_item(target_name + "::"
+                                        + symbol_text(method.name),
+                                false, method.keywords, with_generics, method.generics, method.sig,
+                                method.body,
                                 kind.where_clause));
                         }
                     }

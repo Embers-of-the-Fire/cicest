@@ -6,9 +6,12 @@ HIR is a semantically simplified IR produced from AST.
 
 A module contains declarations, each with:
 
-- header (`FunctionDecl` or `RawDecl`)
+- header (`FunctionDecl`, `ImportDecl`, or `RawDecl`)
 - body expressions
 - constraint expressions
+
+`FunctionDecl` may be flagged as exported (`export fn ...`), and `ImportDecl`
+represents module imports (`import ...`).
 
 ## Types
 

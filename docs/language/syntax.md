@@ -30,6 +30,22 @@ fn name<T>(arg1: Type, arg2: Type) -> Type
 extern fn puts(v: i32) -> i32;
 ```
 
+### Modules
+
+Supported import forms:
+
+```cicest
+import { foo, bar as baz } from "./math.cst";
+```
+
+Supported export form:
+
+```cicest
+export fn main() -> i32 {
+    0
+}
+```
+
 ## Type Expressions
 
 Supported special intrinsic type syntax includes function pointers:
@@ -151,4 +167,4 @@ fn use_vec<T>(value: T) -> T
 
 Reserved keywords:
 
-`let runtime const fn where extern if else match loop for struct enum type with concept return self lambda decl true false _`
+`let runtime const fn where extern if else match loop for struct enum type with concept return self lambda decl true false import from export _`
