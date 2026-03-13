@@ -13,6 +13,7 @@ Output can be written to stdout or a file.
 
 Token and parse diagnostics are span-resolved through `cstc_span::SourceMap`,
 so emitted positions can be mapped to concrete files and line/column locations.
+Token text and AST names are resolved from a shared global symbol table.
 
 ## CLI
 

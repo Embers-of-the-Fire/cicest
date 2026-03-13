@@ -1,3 +1,4 @@
+add_subdirectory(cstc_symbol)
 add_subdirectory(cstc_span)
 add_subdirectory(cstc_ast)
 add_subdirectory(cstc_lexer)

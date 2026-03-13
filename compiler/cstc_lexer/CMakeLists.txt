@@ -7,6 +7,7 @@ target_include_directories(cstc_lexer INTERFACE
 
 target_link_libraries(cstc_lexer
     INTERFACE
+        cstc_symbol
         cstc_span
         cicest_options
         cicest_warnings

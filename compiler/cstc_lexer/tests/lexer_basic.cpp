@@ -3,11 +3,13 @@
 
 #include <cstc_lexer/lexer.hpp>
 #include <cstc_lexer/token.hpp>
+#include <cstc_symbol/symbol.hpp>
 
 namespace {
 
 void test_smoke_tokens() {
-    const auto tokens = cstc::lexer::lex_source("fn main() -> Unit { let x: num = 1; }", false);
+    const auto tokens =
+        cstc::lexer::lex_source("fn main() -> Unit { let x: num = 1; }", false);
 
     assert(!tokens.empty());
     assert(tokens[0].kind == cstc::lexer::TokenKind::KwFn);
@@ -43,11 +45,13 @@ void test_base_position() {
     assert(!tokens.empty());
     assert(tokens.front().span.start == 100);
     assert(tokens.front().span.end == 103);
+    assert(tokens.front().symbol.as_str() == "let");
 }
 
 } // namespace
 
 int main() {
+    cstc::symbol::SymbolSession session;
     test_smoke_tokens();
     test_keep_trivia();
     test_base_position();

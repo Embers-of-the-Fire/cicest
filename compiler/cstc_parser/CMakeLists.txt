@@ -10,6 +10,7 @@ target_link_libraries(cstc_parser
     INTERFACE
         cstc_ast
         cstc_lexer
+        cstc_symbol
         cstc_span
         cicest_options
         cicest_warnings

@@ -3,7 +3,6 @@
 
 #include <cctype>
 #include <cstddef>
-#include <string>
 #include <string_view>
 #include <vector>
 
@@ -73,20 +72,23 @@ inline void append_token(
     if (!keep_trivia && is_trivia(kind))
         return;
 
+    const std::string_view lexeme = source.substr(local_start, local_end - local_start);
     out.push_back(Token{
         .kind = kind,
         .span = {
             .start = base_pos + local_start,
             .end = base_pos + local_end,
         },
-        .lexeme = std::string(source.substr(local_start, local_end - local_start)),
+        .symbol = cstc::symbol::Symbol::intern(lexeme),
     });
 }
 
 } // namespace detail
 
-inline std::vector<Token>
-lex_source_at(std::string_view source, cstc::span::BytePos base_pos, bool keep_trivia) {
+inline std::vector<Token> lex_source_at(
+    std::string_view source,
+    cstc::span::BytePos base_pos,
+    bool keep_trivia) {
     std::vector<Token> tokens;
     std::size_t index = 0;
 
@@ -130,7 +132,8 @@ lex_source_at(std::string_view source, cstc::span::BytePos base_pos, bool keep_t
                     tokens, TokenKind::BlockComment, base_pos, start, index, source, keep_trivia);
             } else {
                 index = source.size();
-                detail::append_token(tokens, TokenKind::Unknown, base_pos, start, index, source, true);
+                detail::append_token(
+                    tokens, TokenKind::Unknown, base_pos, start, index, source, true);
             }
             continue;
         }
@@ -161,7 +164,8 @@ lex_source_at(std::string_view source, cstc::span::BytePos base_pos, bool keep_t
                     ++index;
             }
 
-            detail::append_token(tokens, TokenKind::Number, base_pos, start, index, source, keep_trivia);
+            detail::append_token(
+                tokens, TokenKind::Number, base_pos, start, index, source, keep_trivia);
             continue;
         }
 
@@ -251,60 +255,76 @@ lex_source_at(std::string_view source, cstc::span::BytePos base_pos, bool keep_t
         ++index;
         switch (ch) {
             case '{':
-                detail::append_token(tokens, TokenKind::LBrace, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::LBrace, base_pos, start, index, source, keep_trivia);
                 break;
             case '}':
-                detail::append_token(tokens, TokenKind::RBrace, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::RBrace, base_pos, start, index, source, keep_trivia);
                 break;
             case '(':
-                detail::append_token(tokens, TokenKind::LParen, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::LParen, base_pos, start, index, source, keep_trivia);
                 break;
             case ')':
-                detail::append_token(tokens, TokenKind::RParen, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::RParen, base_pos, start, index, source, keep_trivia);
                 break;
             case ',':
-                detail::append_token(tokens, TokenKind::Comma, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Comma, base_pos, start, index, source, keep_trivia);
                 break;
             case ';':
                 detail::append_token(
                     tokens, TokenKind::Semicolon, base_pos, start, index, source, keep_trivia);
                 break;
             case ':':
-                detail::append_token(tokens, TokenKind::Colon, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Colon, base_pos, start, index, source, keep_trivia);
                 break;
             case '.':
-                detail::append_token(tokens, TokenKind::Dot, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Dot, base_pos, start, index, source, keep_trivia);
                 break;
             case '+':
-                detail::append_token(tokens, TokenKind::Plus, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Plus, base_pos, start, index, source, keep_trivia);
                 break;
             case '-':
-                detail::append_token(tokens, TokenKind::Minus, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Minus, base_pos, start, index, source, keep_trivia);
                 break;
             case '*':
-                detail::append_token(tokens, TokenKind::Star, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Star, base_pos, start, index, source, keep_trivia);
                 break;
             case '/':
-                detail::append_token(tokens, TokenKind::Slash, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Slash, base_pos, start, index, source, keep_trivia);
                 break;
             case '%':
                 detail::append_token(
                     tokens, TokenKind::Percent, base_pos, start, index, source, keep_trivia);
                 break;
             case '!':
-                detail::append_token(tokens, TokenKind::Bang, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Bang, base_pos, start, index, source, keep_trivia);
                 break;
             case '<':
-                detail::append_token(tokens, TokenKind::Lt, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Lt, base_pos, start, index, source, keep_trivia);
                 break;
             case '>':
-                detail::append_token(tokens, TokenKind::Gt, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Gt, base_pos, start, index, source, keep_trivia);
                 break;
             case '=':
-                detail::append_token(tokens, TokenKind::Assign, base_pos, start, index, source, keep_trivia);
+                detail::append_token(
+                    tokens, TokenKind::Assign, base_pos, start, index, source, keep_trivia);
                 break;
             default:
-                detail::append_token(tokens, TokenKind::Unknown, base_pos, start, index, source, true);
+                detail::append_token(
+                    tokens, TokenKind::Unknown, base_pos, start, index, source, true);
                 break;
         }
     }
@@ -315,7 +335,7 @@ lex_source_at(std::string_view source, cstc::span::BytePos base_pos, bool keep_t
             .start = base_pos + source.size(),
             .end = base_pos + source.size(),
         },
-        .lexeme = "",
+        .symbol = cstc::symbol::kInvalidSymbol,
     });
 
     return tokens;

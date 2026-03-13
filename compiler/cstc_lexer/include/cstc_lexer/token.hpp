@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 
+#include <cstc_symbol/symbol.hpp>
 #include <cstc_span/span.hpp>
 
 namespace cstc::lexer {
@@ -125,8 +126,8 @@ struct Token {
     TokenKind kind = TokenKind::Unknown;
     /// Byte span of the token in the source.
     cstc::span::SourceSpan span;
-    /// Original token text.
-    std::string lexeme;
+    /// Interned symbol for the token text.
+    cstc::symbol::Symbol symbol = cstc::symbol::kInvalidSymbol;
 };
 
 /// Returns true when a token kind is trivia.

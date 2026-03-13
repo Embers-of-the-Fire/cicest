@@ -3,6 +3,7 @@
 #include <cstc_lexer/token.hpp>
 #include <cstc_parser/parser.hpp>
 #include <cstc_span/span.hpp>
+#include <cstc_symbol/symbol.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -131,7 +132,7 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
         }
 
         if (token.kind != cstc::lexer::TokenKind::EndOfFile)
-            output << " `" << escape_lexeme(token.lexeme) << "`";
+            output << " `" << escape_lexeme(token.symbol.as_str()) << "`";
         output << '\n';
     }
     return output.str();
@@ -143,7 +144,8 @@ render_ast(const cstc::span::SourceMap& source_map, cstc::span::SourceFileId fil
     if (source_file == nullptr)
         throw std::runtime_error("invalid source file id in render_ast");
 
-    const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
+    const auto parsed =
+        cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
     if (!parsed.has_value()) {
         const cstc::parser::ParseError& error = parsed.error();
 
@@ -170,6 +172,8 @@ int main(int argc, char** argv) {
     try {
         const Options options = parse_options(argc, argv);
         const std::string source = read_source_file(options.input_path);
+
+        cstc::symbol::SymbolSession session;
         cstc::span::SourceMap source_map;
         const cstc::span::SourceFileId file_id = source_map.add_file(options.input_path, source);
 

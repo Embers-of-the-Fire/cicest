@@ -12,12 +12,15 @@ namespace cstc::lexer {
 ///
 /// Use this overload with `cstc::span::SourceMap` file ranges so produced spans
 /// can be resolved back to files via a single span lookup.
+///
+/// All token text is interned into the current session's global symbol table.
 [[nodiscard]] inline std::vector<Token>
     lex_source_at(std::string_view source, cstc::span::BytePos base_pos, bool keep_trivia = false);
 
 /// Lexes source text into a token stream and appends `EndOfFile`.
 ///
 /// When `keep_trivia` is false, whitespace and comments are omitted.
+/// All token text is interned into the current session's global symbol table.
 [[nodiscard]] inline std::vector<Token>
     lex_source(std::string_view source, bool keep_trivia = false);
 

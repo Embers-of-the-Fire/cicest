@@ -8,6 +8,7 @@
 #include <variant>
 #include <vector>
 
+#include <cstc_symbol/symbol.hpp>
 #include <cstc_span/span.hpp>
 
 namespace cstc::ast {
@@ -40,14 +41,14 @@ enum class TypeKind {
 struct TypeRef {
     /// Category of the referenced type.
     TypeKind kind = TypeKind::Unit;
-    /// Symbol text for named types.
-    std::string name;
+    /// Interned symbol for the source type token.
+    cstc::symbol::Symbol symbol = cstc::symbol::kInvalidSymbol;
 };
 
 /// Named field declaration inside a struct definition.
 struct FieldDecl {
     /// Field identifier.
-    std::string name;
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Field type.
     TypeRef type;
     /// Source location for the field declaration.
@@ -57,7 +58,7 @@ struct FieldDecl {
 /// Struct item declaration.
 struct StructDecl {
     /// Struct type name.
-    std::string name;
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Declared named fields.
     std::vector<FieldDecl> fields;
     /// True when declared as `struct Name;`.
@@ -69,9 +70,9 @@ struct StructDecl {
 /// Fieldless enum variant declaration.
 struct EnumVariant {
     /// Variant name.
-    std::string name;
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Optional numeric discriminant text.
-    std::optional<std::string> discriminant;
+    std::optional<cstc::symbol::Symbol> discriminant;
     /// Source location for the variant.
     cstc::span::SourceSpan span;
 };
@@ -79,7 +80,7 @@ struct EnumVariant {
 /// Enum item declaration.
 struct EnumDecl {
     /// Enum type name.
-    std::string name;
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Declared variant list.
     std::vector<EnumVariant> variants;
     /// Source location for the full item.
@@ -89,7 +90,7 @@ struct EnumDecl {
 /// Function parameter declaration.
 struct Param {
     /// Parameter name.
-    std::string name;
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Parameter type.
     TypeRef type;
     /// Source location for the parameter.
@@ -101,7 +102,7 @@ struct LetStmt {
     /// True when binding pattern is `_`.
     bool discard = false;
     /// Binding name for non-discard patterns.
-    std::string name;
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Optional explicit type annotation.
     std::optional<TypeRef> type_annotation;
     /// Initializer expression.
@@ -147,8 +148,8 @@ struct LiteralExpr {
 
     /// Literal category.
     Kind kind = Kind::Unit;
-    /// Original literal text.
-    std::string text;
+    /// Interned symbol for the original literal text.
+    cstc::symbol::Symbol symbol = cstc::symbol::kInvalidSymbol;
     /// Parsed boolean value for boolean literals.
     bool bool_value = false;
 };
@@ -156,15 +157,15 @@ struct LiteralExpr {
 /// Path expression (`name` or `Enum::Variant`).
 struct PathExpr {
     /// Left segment (`name` or enum name).
-    std::string head;
+    cstc::symbol::Symbol head = cstc::symbol::kInvalidSymbol;
     /// Optional right segment (`Variant`).
-    std::optional<std::string> tail;
+    std::optional<cstc::symbol::Symbol> tail;
 };
 
 /// Single field initializer inside a struct construction.
 struct StructInitField {
     /// Field name.
-    std::string name;
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Field value expression.
     ExprPtr value;
     /// Source location for the field initializer.
@@ -174,7 +175,7 @@ struct StructInitField {
 /// Struct initializer expression (`Type { ... }`).
 struct StructInitExpr {
     /// Target type name.
-    std::string type_name;
+    cstc::symbol::Symbol type_name = cstc::symbol::kInvalidSymbol;
     /// Field initializer list.
     std::vector<StructInitField> fields;
 };
@@ -240,7 +241,7 @@ struct FieldAccessExpr {
     /// Base object expression.
     ExprPtr base;
     /// Accessed field name.
-    std::string field;
+    cstc::symbol::Symbol field = cstc::symbol::kInvalidSymbol;
 };
 
 /// Function call expression.
@@ -280,7 +281,7 @@ struct ForInitLet {
     /// True when init binding is `_`.
     bool discard = false;
     /// Binding name for non-discard patterns.
-    std::string name;
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Optional type annotation.
     std::optional<TypeRef> type_annotation;
     /// Initializer expression.
@@ -337,7 +338,7 @@ struct Expr {
 /// Function item declaration.
 struct FnDecl {
     /// Function name.
-    std::string name;
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Function parameter list.
     std::vector<Param> params;
     /// Optional explicit return type.

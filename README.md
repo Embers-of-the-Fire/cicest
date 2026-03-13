@@ -14,6 +14,7 @@ See [the language documentation](docs/language/index.md) for more information.
 
 This repository now includes a minimal compiler frontend stack under `compiler/`:
 
+- `cstc_symbol`: header-only global symbol interner.
 - `cstc_ast`: header-only AST data model and formatter.
 - `cstc_lexer`: header-only source lexer and token definitions.
 - `cstc_parser`: header-only recursive-descent parser from token stream to AST.

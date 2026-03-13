@@ -6,6 +6,7 @@ Header-only lexer package for Cicest source files.
 
 Converts source text into token streams with optional trivia retention,
 including keywords, literals, punctuation, operators, and EOF sentinel.
+All token text is interned into a shared symbol table.
 
 ## Public API
 
@@ -16,8 +17,8 @@ including keywords, literals, punctuation, operators, and EOF sentinel.
   - `cstc::lexer::TokenKind`
   - `cstc::lexer::Token`
 - Helpers:
-  - `cstc::lexer::lex_source_at(...)`
-  - `cstc::lexer::lex_source(...)`
+  - `cstc::lexer::lex_source_at(..., symbols, ...)`
+  - `cstc::lexer::lex_source(..., symbols, ...)`
   - `cstc::lexer::is_trivia(...)`
   - `cstc::lexer::token_kind_name(...)`
 
@@ -25,7 +26,7 @@ including keywords, literals, punctuation, operators, and EOF sentinel.
 
 - Target: `cstc_lexer` (`INTERFACE`)
 - Alias: `cicest::compiler::lexer`
-- Depends on: `cstc_span`
+- Depends on: `cstc_symbol`, `cstc_span`
 
 ## Tests
 

@@ -21,14 +21,22 @@ struct ParseError {
 };
 
 /// Parses a token stream into an AST program.
+///
+/// Symbol text is resolved through the current session's global symbol table.
 [[nodiscard]] inline std::expected<ast::Program, ParseError>
     parse_tokens(std::span<const lexer::Token> tokens);
 
 /// Lexes then parses source text using a global absolute base position.
+///
+/// Tokens and AST textual values are interned into the current session's
+/// global symbol table.
 [[nodiscard]] inline std::expected<ast::Program, ParseError>
     parse_source_at(std::string_view source, cstc::span::BytePos base_pos);
 
 /// Lexes then parses source text into an AST program.
+///
+/// Uses base position `0` and interns textual values into the current session's
+/// global symbol table.
 [[nodiscard]] inline std::expected<ast::Program, ParseError>
     parse_source(std::string_view source);
 
