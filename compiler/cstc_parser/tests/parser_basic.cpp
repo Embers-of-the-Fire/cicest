@@ -48,10 +48,24 @@ fn bad(x: num, x: num) -> num {
     assert(parsed.error().message.find("duplicate parameter") != std::string::npos);
 }
 
+void test_parse_source_at_uses_absolute_spans() {
+    constexpr std::string_view source = R"(
+fn bad(x: num, x: num) -> num {
+    x
+}
+)";
+
+    const auto parsed = cstc::parser::parse_source_at(source, 512);
+    assert(!parsed.has_value());
+    assert(parsed.error().span.start >= 512);
+    assert(parsed.error().span.end >= 512);
+}
+
 } // namespace
 
 int main() {
     test_parse_program_smoke();
     test_duplicate_param_rejected();
+    test_parse_source_at_uses_absolute_spans();
     return 0;
 }

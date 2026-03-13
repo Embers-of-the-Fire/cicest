@@ -16,6 +16,7 @@ including keywords, literals, punctuation, operators, and EOF sentinel.
   - `cstc::lexer::TokenKind`
   - `cstc::lexer::Token`
 - Helpers:
+  - `cstc::lexer::lex_source_at(...)`
   - `cstc::lexer::lex_source(...)`
   - `cstc::lexer::is_trivia(...)`
   - `cstc::lexer::token_kind_name(...)`
@@ -30,4 +31,3 @@ including keywords, literals, punctuation, operators, and EOF sentinel.
 
 - `tests/lexer_basic.cpp`
 - Built when `CICEST_BUILD_TESTS=ON`
-

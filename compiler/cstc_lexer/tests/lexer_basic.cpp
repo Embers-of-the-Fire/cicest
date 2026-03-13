@@ -38,10 +38,18 @@ void test_keep_trivia() {
     assert(found_comment);
 }
 
+void test_base_position() {
+    const auto tokens = cstc::lexer::lex_source_at("let x = 1;", 100, false);
+    assert(!tokens.empty());
+    assert(tokens.front().span.start == 100);
+    assert(tokens.front().span.end == 103);
+}
+
 } // namespace
 
 int main() {
     test_smoke_tokens();
     test_keep_trivia();
+    test_base_position();
     return 0;
 }

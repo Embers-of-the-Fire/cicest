@@ -2,6 +2,7 @@
 #include <cstc_lexer/lexer.hpp>
 #include <cstc_lexer/token.hpp>
 #include <cstc_parser/parser.hpp>
+#include <cstc_span/span.hpp>
 
 #include <filesystem>
 #include <fstream>
@@ -108,13 +109,27 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     return escaped;
 }
 
-[[nodiscard]] std::string render_tokens(std::string_view source, bool keep_trivia) {
-    const std::vector<cstc::lexer::Token> tokens = cstc::lexer::lex_source(source, keep_trivia);
+[[nodiscard]] std::string render_tokens(
+    const cstc::span::SourceMap& source_map,
+    cstc::span::SourceFileId file_id,
+    bool keep_trivia) {
+    const cstc::span::SourceFile* source_file = source_map.file(file_id);
+    if (source_file == nullptr)
+        throw std::runtime_error("invalid source file id in render_tokens");
+
+    const std::vector<cstc::lexer::Token> tokens =
+        cstc::lexer::lex_source_at(source_file->source, source_file->start_pos, keep_trivia);
 
     std::ostringstream output;
     for (const cstc::lexer::Token& token : tokens) {
         output << cstc::lexer::token_kind_name(token.kind) << " [" << token.span.start << ", "
                << token.span.end << ")";
+
+        if (const auto resolved = source_map.resolve_span(token.span); resolved.has_value()) {
+            output << " @" << resolved->file_name << ":" << resolved->start.line << ":"
+                   << resolved->start.column;
+        }
+
         if (token.kind != cstc::lexer::TokenKind::EndOfFile)
             output << " `" << escape_lexeme(token.lexeme) << "`";
         output << '\n';
@@ -122,10 +137,25 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     return output.str();
 }
 
-[[nodiscard]] std::string render_ast(std::string_view source) {
-    const auto parsed = cstc::parser::parse_source(source);
+[[nodiscard]] std::string
+render_ast(const cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
+    const cstc::span::SourceFile* source_file = source_map.file(file_id);
+    if (source_file == nullptr)
+        throw std::runtime_error("invalid source file id in render_ast");
+
+    const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
     if (!parsed.has_value()) {
         const cstc::parser::ParseError& error = parsed.error();
+
+        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
+            throw std::runtime_error(
+                "parse error " + std::string(resolved->file_name) + ":"
+                + std::to_string(resolved->start.line) + ":"
+                + std::to_string(resolved->start.column) + " ["
+                + std::to_string(error.span.start) + ", " + std::to_string(error.span.end)
+                + "): " + error.message);
+        }
+
         throw std::runtime_error(
             "parse error [" + std::to_string(error.span.start) + ", "
             + std::to_string(error.span.end) + "): " + error.message);
@@ -140,12 +170,14 @@ int main(int argc, char** argv) {
     try {
         const Options options = parse_options(argc, argv);
         const std::string source = read_source_file(options.input_path);
+        cstc::span::SourceMap source_map;
+        const cstc::span::SourceFileId file_id = source_map.add_file(options.input_path, source);
 
         std::string output;
         if (options.out_type == "tokens")
-            output = render_tokens(source, options.keep_trivia);
+            output = render_tokens(source_map, file_id, options.keep_trivia);
         else
-            output = render_ast(source);
+            output = render_ast(source_map, file_id);
 
         write_output(output, options.output_path);
     } catch (const std::exception& error) {

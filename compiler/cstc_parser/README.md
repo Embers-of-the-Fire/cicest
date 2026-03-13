@@ -14,6 +14,7 @@ Implements the scoped Cicest grammar defined in `docs/language/syntax.md`.
   - `cstc::parser::ParseError`
 - Functions:
   - `cstc::parser::parse_tokens(...)`
+  - `cstc::parser::parse_source_at(...)`
   - `cstc::parser::parse_source(...)`
 
 ## CMake
@@ -26,4 +27,3 @@ Implements the scoped Cicest grammar defined in `docs/language/syntax.md`.
 
 - `tests/parser_basic.cpp`
 - Built when `CICEST_BUILD_TESTS=ON`
-

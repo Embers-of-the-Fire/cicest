@@ -11,6 +11,9 @@ Reads a source file and emits either:
 
 Output can be written to stdout or a file.
 
+Token and parse diagnostics are span-resolved through `cstc_span::SourceMap`,
+so emitted positions can be mapped to concrete files and line/column locations.
+
 ## CLI
 
 ```bash
@@ -29,4 +32,3 @@ Flags:
 
 - Target: `cstc_inspect` (executable)
 - Links: `cstc_ast`, `cstc_lexer`, `cstc_parser`
-

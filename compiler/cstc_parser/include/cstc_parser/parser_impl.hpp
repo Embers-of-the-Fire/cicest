@@ -1059,9 +1059,14 @@ inline std::expected<ast::Program, ParseError> parse_tokens(std::span<const lexe
     return parser.parse_program();
 }
 
-inline std::expected<ast::Program, ParseError> parse_source(std::string_view source) {
-    const std::vector<lexer::Token> tokens = lexer::lex_source(source, false);
+inline std::expected<ast::Program, ParseError>
+parse_source_at(std::string_view source, cstc::span::BytePos base_pos) {
+    const std::vector<lexer::Token> tokens = lexer::lex_source_at(source, base_pos, false);
     return parse_tokens(tokens);
+}
+
+inline std::expected<ast::Program, ParseError> parse_source(std::string_view source) {
+    return parse_source_at(source, 0);
 }
 
 } // namespace cstc::parser

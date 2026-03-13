@@ -8,6 +8,13 @@
 
 namespace cstc::lexer {
 
+/// Lexes source text at a given absolute base position and appends `EndOfFile`.
+///
+/// Use this overload with `cstc::span::SourceMap` file ranges so produced spans
+/// can be resolved back to files via a single span lookup.
+[[nodiscard]] inline std::vector<Token>
+    lex_source_at(std::string_view source, cstc::span::BytePos base_pos, bool keep_trivia = false);
+
 /// Lexes source text into a token stream and appends `EndOfFile`.
 ///
 /// When `keep_trivia` is false, whitespace and comments are omitted.
