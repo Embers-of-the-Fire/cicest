@@ -53,6 +53,20 @@
             }
           }/bin/build";
         };
+        build-tests = {
+          type = "app";
+          program = "${
+            pkgs.writeShellApplication {
+              name = "build-tests";
+              runtimeInputs = make-dependencies ++ llvm-dependencies ++ parser-dependencies;
+              text = ''
+                cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCICEST_BUILD_TESTS=ON "$@"
+                ninja -C build
+                ln -sf build/compile_commands.json compile_commands.json
+              '';
+            }
+          }/bin/build-tests";
+        };
         tests = {
           type = "app";
           program = "${
@@ -60,9 +74,10 @@
               name = "tests";
               runtimeInputs = make-dependencies ++ llvm-dependencies ++ parser-dependencies;
               text = ''
-                cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCICEST_BUILD_TESTS=ON "$@"
+                cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCICEST_BUILD_TESTS=ON
                 ninja -C build
                 ln -sf build/compile_commands.json compile_commands.json
+                ctest --test-dir build --output-on-failure
               '';
             }
           }/bin/tests";

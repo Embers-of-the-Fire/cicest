@@ -17,4 +17,8 @@ endif()
 
 option(CICEST_BUILD_TESTS "Build tests" OFF)
 
+if(CICEST_BUILD_TESTS)
+    enable_testing()
+endif()
+
 add_subdirectory(compiler)
