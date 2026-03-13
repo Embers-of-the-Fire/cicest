@@ -1,0 +1,1069 @@
+#ifndef CICEST_COMPILER_CSTC_PARSER_PARSER_IMPL_HPP
+#define CICEST_COMPILER_CSTC_PARSER_PARSER_IMPL_HPP
+
+#include <cstc_parser/parser.hpp>
+
+#include <cstddef>
+#include <expected>
+#include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <unordered_set>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <cstc_ast/ast.hpp>
+#include <cstc_lexer/lexer.hpp>
+#include <cstc_lexer/token.hpp>
+#include <cstc_span/span.hpp>
+
+namespace cstc::parser {
+
+namespace {
+
+using cstc::lexer::Token;
+using cstc::lexer::TokenKind;
+
+[[nodiscard]] cstc::span::SourceSpan merge_spans(
+    const cstc::span::SourceSpan& lhs,
+    const cstc::span::SourceSpan& rhs) {
+    return cstc::span::merge(lhs, rhs);
+}
+
+[[nodiscard]] bool is_optional_expr_terminator(TokenKind kind) {
+    return kind == TokenKind::Semicolon || kind == TokenKind::Comma || kind == TokenKind::RParen
+        || kind == TokenKind::RBrace || kind == TokenKind::EndOfFile;
+}
+
+class Parser {
+public:
+    explicit Parser(std::span<const Token> input_tokens)
+        : tokens_(input_tokens.begin(), input_tokens.end()) {
+        if (tokens_.empty() || tokens_.back().kind != TokenKind::EndOfFile) {
+            const std::size_t position = tokens_.empty() ? 0 : tokens_.back().span.end;
+            tokens_.push_back(Token{
+                .kind = TokenKind::EndOfFile,
+                .span = {.start = position, .end = position},
+                .lexeme = "",
+            });
+        }
+    }
+
+    [[nodiscard]] std::expected<ast::Program, ParseError> parse_program() {
+        ast::Program program;
+
+        while (!is_at_end()) {
+            auto item = parse_item();
+            if (!item.has_value())
+                return std::unexpected(item.error());
+            program.items.push_back(std::move(*item));
+        }
+
+        return program;
+    }
+
+private:
+    struct ParsedPattern {
+        bool discard = false;
+        std::string name;
+        cstc::span::SourceSpan span;
+    };
+
+    [[nodiscard]] const Token& peek(std::size_t offset = 0) const {
+        const std::size_t index = cursor_ + offset;
+        if (index >= tokens_.size())
+            return tokens_.back();
+        return tokens_[index];
+    }
+
+    [[nodiscard]] const Token& previous() const { return tokens_[cursor_ - 1]; }
+
+    [[nodiscard]] bool is_at_end() const { return peek().kind == TokenKind::EndOfFile; }
+
+    [[nodiscard]] bool check(TokenKind kind) const { return peek().kind == kind; }
+
+    [[nodiscard]] bool match(TokenKind kind) {
+        if (!check(kind))
+            return false;
+        static_cast<void>(advance());
+        return true;
+    }
+
+    [[nodiscard]] const Token& advance() {
+        if (!is_at_end())
+            ++cursor_;
+        return previous();
+    }
+
+    [[nodiscard]] ParseError make_error_here(std::string message) const {
+        return ParseError{
+            .span = peek().span,
+            .message = std::move(message),
+        };
+    }
+
+    [[nodiscard]] ParseError make_error_token(const Token& token, std::string message) const {
+        return ParseError{
+            .span = token.span,
+            .message = std::move(message),
+        };
+    }
+
+    [[nodiscard]] bool looks_like_struct_initializer() const {
+        if (!check(TokenKind::LBrace))
+            return false;
+
+        if (peek(1).kind == TokenKind::RBrace)
+            return true;
+
+        if (peek(1).kind != TokenKind::Identifier)
+            return false;
+
+        return peek(2).kind == TokenKind::Colon;
+    }
+
+    [[nodiscard]] bool is_postfixable(const ast::ExprPtr& expr) const {
+        return std::holds_alternative<ast::PathExpr>(expr->node)
+            || std::holds_alternative<ast::StructInitExpr>(expr->node)
+            || std::holds_alternative<ast::FieldAccessExpr>(expr->node)
+            || std::holds_alternative<ast::CallExpr>(expr->node);
+    }
+
+    [[nodiscard]] bool is_semicolon_optional_stmt_expr(const ast::ExprPtr& expr) const {
+        return std::holds_alternative<ast::BlockPtr>(expr->node)
+            || std::holds_alternative<ast::IfExpr>(expr->node)
+            || std::holds_alternative<ast::LoopExpr>(expr->node)
+            || std::holds_alternative<ast::WhileExpr>(expr->node)
+            || std::holds_alternative<ast::ForExpr>(expr->node);
+    }
+
+    [[nodiscard]] std::expected<Token, ParseError>
+    consume(TokenKind kind, std::string_view message) {
+        if (!check(kind)) {
+            return std::unexpected(
+                make_error_here(std::string(message) + ", got `" + std::string(peek().lexeme) + "`"));
+        }
+        return advance();
+    }
+
+    [[nodiscard]] std::expected<Token, ParseError> consume_identifier(std::string_view message) {
+        if (!check(TokenKind::Identifier))
+            return std::unexpected(make_error_here(std::string(message)));
+        return advance();
+    }
+
+    [[nodiscard]] std::expected<ast::Item, ParseError> parse_item() {
+        if (match(TokenKind::KwStruct)) {
+            auto decl = parse_struct_decl(previous());
+            if (!decl.has_value())
+                return std::unexpected(decl.error());
+            return ast::Item{std::move(*decl)};
+        }
+
+        if (match(TokenKind::KwEnum)) {
+            auto decl = parse_enum_decl(previous());
+            if (!decl.has_value())
+                return std::unexpected(decl.error());
+            return ast::Item{std::move(*decl)};
+        }
+
+        if (match(TokenKind::KwFn)) {
+            auto decl = parse_fn_decl(previous());
+            if (!decl.has_value())
+                return std::unexpected(decl.error());
+            return ast::Item{std::move(*decl)};
+        }
+
+        return std::unexpected(make_error_here("expected item (`struct`, `enum`, `fn`)"));
+    }
+
+    [[nodiscard]] std::expected<ast::StructDecl, ParseError>
+    parse_struct_decl(const Token& struct_keyword) {
+        auto name_token = consume_identifier("expected struct name");
+        if (!name_token.has_value())
+            return std::unexpected(name_token.error());
+
+        ast::StructDecl decl;
+        decl.name = name_token->lexeme;
+
+        if (match(TokenKind::Semicolon)) {
+            decl.is_zst = true;
+            decl.span = merge_spans(struct_keyword.span, previous().span);
+            return decl;
+        }
+
+        auto open_brace = consume(TokenKind::LBrace, "expected `{` or `;` after struct name");
+        if (!open_brace.has_value())
+            return std::unexpected(open_brace.error());
+
+        std::unordered_set<std::string> seen_fields;
+
+        if (!check(TokenKind::RBrace)) {
+            while (true) {
+                auto field_name = consume_identifier("expected field name");
+                if (!field_name.has_value())
+                    return std::unexpected(field_name.error());
+
+                if (!seen_fields.insert(field_name->lexeme).second) {
+                    return std::unexpected(
+                        make_error_token(*field_name, "duplicate struct field `" + field_name->lexeme + "`"));
+                }
+
+                auto colon = consume(TokenKind::Colon, "expected `:` after field name");
+                if (!colon.has_value())
+                    return std::unexpected(colon.error());
+
+                auto field_type = parse_type();
+                if (!field_type.has_value())
+                    return std::unexpected(field_type.error());
+
+                decl.fields.push_back(ast::FieldDecl{
+                    .name = field_name->lexeme,
+                    .type = std::move(*field_type),
+                    .span = merge_spans(field_name->span, previous().span),
+                });
+
+                if (match(TokenKind::Comma)) {
+                    if (check(TokenKind::RBrace))
+                        break;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        auto close_brace = consume(TokenKind::RBrace, "expected `}` to close struct declaration");
+        if (!close_brace.has_value())
+            return std::unexpected(close_brace.error());
+
+        decl.span = merge_spans(struct_keyword.span, close_brace->span);
+        return decl;
+    }
+
+    [[nodiscard]] std::expected<ast::EnumDecl, ParseError> parse_enum_decl(const Token& enum_keyword) {
+        auto name_token = consume_identifier("expected enum name");
+        if (!name_token.has_value())
+            return std::unexpected(name_token.error());
+
+        auto open_brace = consume(TokenKind::LBrace, "expected `{` after enum name");
+        if (!open_brace.has_value())
+            return std::unexpected(open_brace.error());
+
+        ast::EnumDecl decl;
+        decl.name = name_token->lexeme;
+
+        std::unordered_set<std::string> seen_variants;
+
+        if (!check(TokenKind::RBrace)) {
+            while (true) {
+                auto variant_name = consume_identifier("expected enum variant name");
+                if (!variant_name.has_value())
+                    return std::unexpected(variant_name.error());
+
+                if (!seen_variants.insert(variant_name->lexeme).second) {
+                    return std::unexpected(
+                        make_error_token(*variant_name, "duplicate enum variant `" + variant_name->lexeme + "`"));
+                }
+
+                ast::EnumVariant variant;
+                variant.name = variant_name->lexeme;
+                variant.span = variant_name->span;
+
+                if (match(TokenKind::Assign)) {
+                    auto number_token = consume(TokenKind::Number, "expected numeric discriminant after `=`");
+                    if (!number_token.has_value())
+                        return std::unexpected(number_token.error());
+                    variant.discriminant = number_token->lexeme;
+                    variant.span = merge_spans(variant.span, number_token->span);
+                }
+
+                decl.variants.push_back(std::move(variant));
+
+                if (match(TokenKind::Comma)) {
+                    if (check(TokenKind::RBrace))
+                        break;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        auto close_brace = consume(TokenKind::RBrace, "expected `}` to close enum declaration");
+        if (!close_brace.has_value())
+            return std::unexpected(close_brace.error());
+
+        decl.span = merge_spans(enum_keyword.span, close_brace->span);
+        return decl;
+    }
+
+    [[nodiscard]] std::expected<ast::FnDecl, ParseError> parse_fn_decl(const Token& fn_keyword) {
+        auto name_token = consume_identifier("expected function name");
+        if (!name_token.has_value())
+            return std::unexpected(name_token.error());
+
+        auto open_paren = consume(TokenKind::LParen, "expected `(` after function name");
+        if (!open_paren.has_value())
+            return std::unexpected(open_paren.error());
+
+        std::vector<ast::Param> params;
+        std::unordered_set<std::string> seen_params;
+
+        if (!check(TokenKind::RParen)) {
+            while (true) {
+                auto param_name = consume_identifier("expected parameter name");
+                if (!param_name.has_value())
+                    return std::unexpected(param_name.error());
+
+                if (!seen_params.insert(param_name->lexeme).second) {
+                    return std::unexpected(
+                        make_error_token(*param_name, "duplicate parameter `" + param_name->lexeme + "`"));
+                }
+
+                auto colon = consume(TokenKind::Colon, "expected `:` after parameter name");
+                if (!colon.has_value())
+                    return std::unexpected(colon.error());
+
+                auto param_type = parse_type();
+                if (!param_type.has_value())
+                    return std::unexpected(param_type.error());
+
+                params.push_back(ast::Param{
+                    .name = param_name->lexeme,
+                    .type = std::move(*param_type),
+                    .span = merge_spans(param_name->span, previous().span),
+                });
+
+                if (match(TokenKind::Comma)) {
+                    if (check(TokenKind::RParen))
+                        break;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        auto close_paren = consume(TokenKind::RParen, "expected `)` after function parameters");
+        if (!close_paren.has_value())
+            return std::unexpected(close_paren.error());
+
+        std::optional<ast::TypeRef> return_type;
+        if (match(TokenKind::Arrow)) {
+            auto parsed_return_type = parse_type();
+            if (!parsed_return_type.has_value())
+                return std::unexpected(parsed_return_type.error());
+            return_type = std::move(*parsed_return_type);
+        }
+
+        auto body = parse_block_expr();
+        if (!body.has_value())
+            return std::unexpected(body.error());
+
+        ast::FnDecl decl;
+        decl.name = name_token->lexeme;
+        decl.params = std::move(params);
+        decl.return_type = std::move(return_type);
+        decl.body = *body;
+        decl.span = merge_spans(fn_keyword.span, (*body)->span);
+
+        return decl;
+    }
+
+    [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() {
+        if (match(TokenKind::KwUnit))
+            return ast::TypeRef{.kind = ast::TypeKind::Unit, .name = "Unit"};
+        if (match(TokenKind::KwNum))
+            return ast::TypeRef{.kind = ast::TypeKind::Num, .name = "num"};
+        if (match(TokenKind::KwStr))
+            return ast::TypeRef{.kind = ast::TypeKind::Str, .name = "str"};
+        if (match(TokenKind::KwBool))
+            return ast::TypeRef{.kind = ast::TypeKind::Bool, .name = "bool"};
+
+        auto identifier = consume_identifier("expected type name");
+        if (!identifier.has_value())
+            return std::unexpected(identifier.error());
+
+        return ast::TypeRef{.kind = ast::TypeKind::Named, .name = identifier->lexeme};
+    }
+
+    [[nodiscard]] std::expected<ParsedPattern, ParseError> parse_let_pattern() {
+        auto identifier = consume_identifier("expected binding name or `_`");
+        if (!identifier.has_value())
+            return std::unexpected(identifier.error());
+
+        ParsedPattern pattern;
+        pattern.span = identifier->span;
+        if (identifier->lexeme == "_") {
+            pattern.discard = true;
+            return pattern;
+        }
+
+        pattern.discard = false;
+        pattern.name = identifier->lexeme;
+        return pattern;
+    }
+
+    [[nodiscard]] std::expected<ast::LetStmt, ParseError> parse_let_stmt_no_semicolon(const Token& let_kw) {
+        auto pattern = parse_let_pattern();
+        if (!pattern.has_value())
+            return std::unexpected(pattern.error());
+
+        std::optional<ast::TypeRef> type_annotation;
+        if (match(TokenKind::Colon)) {
+            auto parsed_type = parse_type();
+            if (!parsed_type.has_value())
+                return std::unexpected(parsed_type.error());
+            type_annotation = std::move(*parsed_type);
+        }
+
+        auto assign = consume(TokenKind::Assign, "expected `=` in let binding");
+        if (!assign.has_value())
+            return std::unexpected(assign.error());
+
+        auto initializer = parse_expression();
+        if (!initializer.has_value())
+            return std::unexpected(initializer.error());
+
+        return ast::LetStmt{
+            .discard = pattern->discard,
+            .name = pattern->name,
+            .type_annotation = std::move(type_annotation),
+            .initializer = *initializer,
+            .span = merge_spans(let_kw.span, (*initializer)->span),
+        };
+    }
+
+    [[nodiscard]] std::expected<ast::BlockPtr, ParseError> parse_block_expr() {
+        auto open = consume(TokenKind::LBrace, "expected `{` to start block");
+        if (!open.has_value())
+            return std::unexpected(open.error());
+
+        auto block = std::make_shared<ast::BlockExpr>();
+        block->span = open->span;
+
+        while (!check(TokenKind::RBrace) && !is_at_end()) {
+            if (match(TokenKind::KwLet)) {
+                const Token let_kw = previous();
+                auto let_stmt = parse_let_stmt_no_semicolon(let_kw);
+                if (!let_stmt.has_value())
+                    return std::unexpected(let_stmt.error());
+
+                auto semi = consume(TokenKind::Semicolon, "expected `;` after let statement");
+                if (!semi.has_value())
+                    return std::unexpected(semi.error());
+
+                let_stmt->span = merge_spans(let_stmt->span, semi->span);
+                block->statements.emplace_back(std::move(*let_stmt));
+                continue;
+            }
+
+            auto expr = parse_expression();
+            if (!expr.has_value())
+                return std::unexpected(expr.error());
+
+            if (match(TokenKind::Semicolon)) {
+                block->statements.emplace_back(ast::ExprStmt{
+                    .expr = *expr,
+                    .span = merge_spans((*expr)->span, previous().span),
+                });
+                continue;
+            }
+
+            if (is_semicolon_optional_stmt_expr(*expr) && !check(TokenKind::RBrace)) {
+                block->statements.emplace_back(ast::ExprStmt{
+                    .expr = *expr,
+                    .span = (*expr)->span,
+                });
+                continue;
+            }
+
+            if (!check(TokenKind::RBrace)) {
+                return std::unexpected(make_error_here("expected `;` or `}` after expression"));
+            }
+
+            block->tail = *expr;
+            break;
+        }
+
+        auto close = consume(TokenKind::RBrace, "expected `}` to close block");
+        if (!close.has_value())
+            return std::unexpected(close.error());
+
+        block->span = merge_spans(open->span, close->span);
+        return block;
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_expression() {
+        return parse_logical_or();
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_logical_or() {
+        auto lhs = parse_logical_and();
+        if (!lhs.has_value())
+            return std::unexpected(lhs.error());
+
+        while (match(TokenKind::OrOr)) {
+            auto rhs = parse_logical_and();
+            if (!rhs.has_value())
+                return std::unexpected(rhs.error());
+
+            *lhs = ast::make_expr(
+                merge_spans((*lhs)->span, (*rhs)->span),
+                ast::BinaryExpr{.op = ast::BinaryOp::Or, .lhs = *lhs, .rhs = *rhs});
+        }
+
+        return lhs;
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_logical_and() {
+        auto lhs = parse_equality();
+        if (!lhs.has_value())
+            return std::unexpected(lhs.error());
+
+        while (match(TokenKind::AndAnd)) {
+            auto rhs = parse_equality();
+            if (!rhs.has_value())
+                return std::unexpected(rhs.error());
+
+            *lhs = ast::make_expr(
+                merge_spans((*lhs)->span, (*rhs)->span),
+                ast::BinaryExpr{.op = ast::BinaryOp::And, .lhs = *lhs, .rhs = *rhs});
+        }
+
+        return lhs;
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_equality() {
+        auto lhs = parse_relational();
+        if (!lhs.has_value())
+            return std::unexpected(lhs.error());
+
+        while (check(TokenKind::EqEq) || check(TokenKind::NotEq)) {
+            const Token op = advance();
+            auto rhs = parse_relational();
+            if (!rhs.has_value())
+                return std::unexpected(rhs.error());
+
+            const ast::BinaryOp ast_op =
+                op.kind == TokenKind::EqEq ? ast::BinaryOp::Eq : ast::BinaryOp::Ne;
+
+            *lhs = ast::make_expr(
+                merge_spans((*lhs)->span, (*rhs)->span),
+                ast::BinaryExpr{.op = ast_op, .lhs = *lhs, .rhs = *rhs});
+        }
+
+        return lhs;
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_relational() {
+        auto lhs = parse_additive();
+        if (!lhs.has_value())
+            return std::unexpected(lhs.error());
+
+        while (
+            check(TokenKind::Lt) || check(TokenKind::LtEq) || check(TokenKind::Gt)
+            || check(TokenKind::GtEq)) {
+            const Token op = advance();
+            auto rhs = parse_additive();
+            if (!rhs.has_value())
+                return std::unexpected(rhs.error());
+
+            ast::BinaryOp ast_op = ast::BinaryOp::Lt;
+            switch (op.kind) {
+                case TokenKind::Lt:
+                    ast_op = ast::BinaryOp::Lt;
+                    break;
+                case TokenKind::LtEq:
+                    ast_op = ast::BinaryOp::Le;
+                    break;
+                case TokenKind::Gt:
+                    ast_op = ast::BinaryOp::Gt;
+                    break;
+                case TokenKind::GtEq:
+                    ast_op = ast::BinaryOp::Ge;
+                    break;
+                default:
+                    break;
+            }
+
+            *lhs = ast::make_expr(
+                merge_spans((*lhs)->span, (*rhs)->span),
+                ast::BinaryExpr{.op = ast_op, .lhs = *lhs, .rhs = *rhs});
+        }
+
+        return lhs;
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_additive() {
+        auto lhs = parse_multiplicative();
+        if (!lhs.has_value())
+            return std::unexpected(lhs.error());
+
+        while (check(TokenKind::Plus) || check(TokenKind::Minus)) {
+            const Token op = advance();
+            auto rhs = parse_multiplicative();
+            if (!rhs.has_value())
+                return std::unexpected(rhs.error());
+
+            const ast::BinaryOp ast_op =
+                op.kind == TokenKind::Plus ? ast::BinaryOp::Add : ast::BinaryOp::Sub;
+
+            *lhs = ast::make_expr(
+                merge_spans((*lhs)->span, (*rhs)->span),
+                ast::BinaryExpr{.op = ast_op, .lhs = *lhs, .rhs = *rhs});
+        }
+
+        return lhs;
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_multiplicative() {
+        auto lhs = parse_unary();
+        if (!lhs.has_value())
+            return std::unexpected(lhs.error());
+
+        while (check(TokenKind::Star) || check(TokenKind::Slash) || check(TokenKind::Percent)) {
+            const Token op = advance();
+            auto rhs = parse_unary();
+            if (!rhs.has_value())
+                return std::unexpected(rhs.error());
+
+            ast::BinaryOp ast_op = ast::BinaryOp::Mul;
+            switch (op.kind) {
+                case TokenKind::Star:
+                    ast_op = ast::BinaryOp::Mul;
+                    break;
+                case TokenKind::Slash:
+                    ast_op = ast::BinaryOp::Div;
+                    break;
+                case TokenKind::Percent:
+                    ast_op = ast::BinaryOp::Mod;
+                    break;
+                default:
+                    break;
+            }
+
+            *lhs = ast::make_expr(
+                merge_spans((*lhs)->span, (*rhs)->span),
+                ast::BinaryExpr{.op = ast_op, .lhs = *lhs, .rhs = *rhs});
+        }
+
+        return lhs;
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_unary() {
+        if (match(TokenKind::Bang)) {
+            const Token op = previous();
+            auto rhs = parse_unary();
+            if (!rhs.has_value())
+                return std::unexpected(rhs.error());
+
+            return ast::make_expr(
+                merge_spans(op.span, (*rhs)->span),
+                ast::UnaryExpr{.op = ast::UnaryOp::Not, .rhs = *rhs});
+        }
+
+        if (match(TokenKind::Minus)) {
+            const Token op = previous();
+            auto rhs = parse_unary();
+            if (!rhs.has_value())
+                return std::unexpected(rhs.error());
+
+            return ast::make_expr(
+                merge_spans(op.span, (*rhs)->span),
+                ast::UnaryExpr{.op = ast::UnaryOp::Negate, .rhs = *rhs});
+        }
+
+        return parse_postfix();
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_postfix() {
+        auto expr = parse_primary();
+        if (!expr.has_value())
+            return std::unexpected(expr.error());
+
+        while (true) {
+            if (!is_postfixable(*expr))
+                break;
+
+            if (match(TokenKind::Dot)) {
+                auto field = consume_identifier("expected field name after `.`");
+                if (!field.has_value())
+                    return std::unexpected(field.error());
+
+                *expr = ast::make_expr(
+                    merge_spans((*expr)->span, field->span),
+                    ast::FieldAccessExpr{.base = *expr, .field = field->lexeme});
+                continue;
+            }
+
+            if (match(TokenKind::LParen)) {
+                std::vector<ast::ExprPtr> args;
+
+                if (!check(TokenKind::RParen)) {
+                    while (true) {
+                        auto arg = parse_expression();
+                        if (!arg.has_value())
+                            return std::unexpected(arg.error());
+                        args.push_back(*arg);
+
+                        if (match(TokenKind::Comma)) {
+                            if (check(TokenKind::RParen))
+                                break;
+                            continue;
+                        }
+                        break;
+                    }
+                }
+
+                auto close = consume(TokenKind::RParen, "expected `)` after call arguments");
+                if (!close.has_value())
+                    return std::unexpected(close.error());
+
+                *expr = ast::make_expr(
+                    merge_spans((*expr)->span, close->span),
+                    ast::CallExpr{.callee = *expr, .args = std::move(args)});
+                continue;
+            }
+
+            break;
+        }
+
+        return expr;
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_if_expr(const Token& if_kw) {
+        auto condition = parse_expression();
+        if (!condition.has_value())
+            return std::unexpected(condition.error());
+
+        auto then_block = parse_block_expr();
+        if (!then_block.has_value())
+            return std::unexpected(then_block.error());
+
+        std::optional<ast::ExprPtr> else_branch;
+        cstc::span::SourceSpan end_span = (*then_block)->span;
+
+        if (match(TokenKind::KwElse)) {
+            if (match(TokenKind::KwIf)) {
+                auto nested_if = parse_if_expr(previous());
+                if (!nested_if.has_value())
+                    return std::unexpected(nested_if.error());
+                end_span = (*nested_if)->span;
+                else_branch = *nested_if;
+            } else {
+                auto else_block = parse_block_expr();
+                if (!else_block.has_value())
+                    return std::unexpected(else_block.error());
+                end_span = (*else_block)->span;
+                else_branch = ast::make_expr((*else_block)->span, *else_block);
+            }
+        }
+
+        return ast::make_expr(
+            merge_spans(if_kw.span, end_span),
+            ast::IfExpr{
+                .condition = *condition,
+                .then_block = *then_block,
+                .else_branch = std::move(else_branch),
+            });
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_for_expr(const Token& for_kw) {
+        auto open = consume(TokenKind::LParen, "expected `(` after `for`");
+        if (!open.has_value())
+            return std::unexpected(open.error());
+
+        ast::ForExpr for_node;
+
+        if (!check(TokenKind::Semicolon)) {
+            if (match(TokenKind::KwLet)) {
+                const Token let_kw = previous();
+                auto let_stmt = parse_let_stmt_no_semicolon(let_kw);
+                if (!let_stmt.has_value())
+                    return std::unexpected(let_stmt.error());
+
+                for_node.init = ast::ForInitLet{
+                    .discard = let_stmt->discard,
+                    .name = let_stmt->name,
+                    .type_annotation = std::move(let_stmt->type_annotation),
+                    .initializer = let_stmt->initializer,
+                    .span = let_stmt->span,
+                };
+            } else {
+                auto init_expr = parse_expression();
+                if (!init_expr.has_value())
+                    return std::unexpected(init_expr.error());
+                for_node.init = *init_expr;
+            }
+        }
+
+        auto semi_0 = consume(TokenKind::Semicolon, "expected `;` after for-loop initializer");
+        if (!semi_0.has_value())
+            return std::unexpected(semi_0.error());
+
+        if (!check(TokenKind::Semicolon)) {
+            auto condition = parse_expression();
+            if (!condition.has_value())
+                return std::unexpected(condition.error());
+            for_node.condition = *condition;
+        }
+
+        auto semi_1 = consume(TokenKind::Semicolon, "expected second `;` in for-loop header");
+        if (!semi_1.has_value())
+            return std::unexpected(semi_1.error());
+
+        if (!check(TokenKind::RParen)) {
+            auto step = parse_expression();
+            if (!step.has_value())
+                return std::unexpected(step.error());
+            for_node.step = *step;
+        }
+
+        auto close = consume(TokenKind::RParen, "expected `)` after for-loop header");
+        if (!close.has_value())
+            return std::unexpected(close.error());
+
+        auto body = parse_block_expr();
+        if (!body.has_value())
+            return std::unexpected(body.error());
+        for_node.body = *body;
+
+        return ast::make_expr(merge_spans(for_kw.span, (*body)->span), std::move(for_node));
+    }
+
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_primary() {
+        if (match(TokenKind::Number)) {
+            const Token token = previous();
+            return ast::make_expr(
+                token.span,
+                ast::LiteralExpr{
+                    .kind = ast::LiteralExpr::Kind::Num,
+                    .text = token.lexeme,
+                });
+        }
+
+        if (match(TokenKind::String)) {
+            const Token token = previous();
+            return ast::make_expr(
+                token.span,
+                ast::LiteralExpr{
+                    .kind = ast::LiteralExpr::Kind::Str,
+                    .text = token.lexeme,
+                });
+        }
+
+        if (match(TokenKind::KwTrue)) {
+            const Token token = previous();
+            return ast::make_expr(
+                token.span,
+                ast::LiteralExpr{
+                    .kind = ast::LiteralExpr::Kind::Bool,
+                    .text = token.lexeme,
+                    .bool_value = true,
+                });
+        }
+
+        if (match(TokenKind::KwFalse)) {
+            const Token token = previous();
+            return ast::make_expr(
+                token.span,
+                ast::LiteralExpr{
+                    .kind = ast::LiteralExpr::Kind::Bool,
+                    .text = token.lexeme,
+                    .bool_value = false,
+                });
+        }
+
+        if (match(TokenKind::LParen)) {
+            const Token open = previous();
+            if (match(TokenKind::RParen)) {
+                return ast::make_expr(
+                    merge_spans(open.span, previous().span),
+                    ast::LiteralExpr{
+                        .kind = ast::LiteralExpr::Kind::Unit,
+                        .text = "()",
+                    });
+            }
+
+            auto inner = parse_expression();
+            if (!inner.has_value())
+                return std::unexpected(inner.error());
+
+            auto close = consume(TokenKind::RParen, "expected `)` to close parenthesized expression");
+            if (!close.has_value())
+                return std::unexpected(close.error());
+
+            return *inner;
+        }
+
+        if (check(TokenKind::LBrace)) {
+            auto block = parse_block_expr();
+            if (!block.has_value())
+                return std::unexpected(block.error());
+            return ast::make_expr((*block)->span, *block);
+        }
+
+        if (match(TokenKind::KwIf))
+            return parse_if_expr(previous());
+
+        if (match(TokenKind::KwLoop)) {
+            const Token loop_kw = previous();
+            auto body = parse_block_expr();
+            if (!body.has_value())
+                return std::unexpected(body.error());
+            return ast::make_expr(
+                merge_spans(loop_kw.span, (*body)->span),
+                ast::LoopExpr{.body = *body});
+        }
+
+        if (match(TokenKind::KwWhile)) {
+            const Token while_kw = previous();
+            auto condition = parse_expression();
+            if (!condition.has_value())
+                return std::unexpected(condition.error());
+
+            auto body = parse_block_expr();
+            if (!body.has_value())
+                return std::unexpected(body.error());
+
+            return ast::make_expr(
+                merge_spans(while_kw.span, (*body)->span),
+                ast::WhileExpr{.condition = *condition, .body = *body});
+        }
+
+        if (match(TokenKind::KwFor))
+            return parse_for_expr(previous());
+
+        if (match(TokenKind::KwBreak)) {
+            const Token break_kw = previous();
+            std::optional<ast::ExprPtr> value;
+
+            if (!is_optional_expr_terminator(peek().kind)) {
+                auto expr = parse_expression();
+                if (!expr.has_value())
+                    return std::unexpected(expr.error());
+                value = *expr;
+            }
+
+            const cstc::span::SourceSpan span = value.has_value()
+                ? merge_spans(break_kw.span, (*value)->span)
+                : break_kw.span;
+            return ast::make_expr(span, ast::BreakExpr{.value = std::move(value)});
+        }
+
+        if (match(TokenKind::KwContinue)) {
+            const Token continue_kw = previous();
+            return ast::make_expr(continue_kw.span, ast::ContinueExpr{});
+        }
+
+        if (match(TokenKind::KwReturn)) {
+            const Token return_kw = previous();
+            std::optional<ast::ExprPtr> value;
+
+            if (!is_optional_expr_terminator(peek().kind)) {
+                auto expr = parse_expression();
+                if (!expr.has_value())
+                    return std::unexpected(expr.error());
+                value = *expr;
+            }
+
+            const cstc::span::SourceSpan span = value.has_value()
+                ? merge_spans(return_kw.span, (*value)->span)
+                : return_kw.span;
+            return ast::make_expr(span, ast::ReturnExpr{.value = std::move(value)});
+        }
+
+        if (match(TokenKind::Identifier)) {
+            const Token identifier = previous();
+
+            if (match(TokenKind::ColonColon)) {
+                auto variant = consume_identifier("expected enum variant name after `::`");
+                if (!variant.has_value())
+                    return std::unexpected(variant.error());
+
+                return ast::make_expr(
+                    merge_spans(identifier.span, variant->span),
+                    ast::PathExpr{.head = identifier.lexeme, .tail = variant->lexeme});
+            }
+
+            if (looks_like_struct_initializer()) {
+                auto open = consume(TokenKind::LBrace, "expected `{` in struct initializer");
+                if (!open.has_value())
+                    return std::unexpected(open.error());
+
+                ast::StructInitExpr init_expr;
+                init_expr.type_name = identifier.lexeme;
+
+                if (!check(TokenKind::RBrace)) {
+                    while (true) {
+                        auto field_name = consume_identifier("expected struct field name");
+                        if (!field_name.has_value())
+                            return std::unexpected(field_name.error());
+
+                        auto colon = consume(TokenKind::Colon, "expected `:` after field name");
+                        if (!colon.has_value())
+                            return std::unexpected(colon.error());
+
+                        auto field_expr = parse_expression();
+                        if (!field_expr.has_value())
+                            return std::unexpected(field_expr.error());
+
+                        init_expr.fields.push_back(ast::StructInitField{
+                            .name = field_name->lexeme,
+                            .value = *field_expr,
+                            .span = merge_spans(field_name->span, (*field_expr)->span),
+                        });
+
+                        if (match(TokenKind::Comma)) {
+                            if (check(TokenKind::RBrace))
+                                break;
+                            continue;
+                        }
+                        break;
+                    }
+                }
+
+                auto close = consume(TokenKind::RBrace, "expected `}` to close struct initializer");
+                if (!close.has_value())
+                    return std::unexpected(close.error());
+
+                return ast::make_expr(merge_spans(identifier.span, close->span), std::move(init_expr));
+            }
+
+            return ast::make_expr(
+                identifier.span,
+                ast::PathExpr{.head = identifier.lexeme, .tail = std::nullopt});
+        }
+
+        return std::unexpected(make_error_here("expected expression"));
+    }
+
+private:
+    std::vector<Token> tokens_;
+    std::size_t cursor_ = 0;
+};
+
+} // namespace
+
+inline std::expected<ast::Program, ParseError> parse_tokens(std::span<const lexer::Token> tokens) {
+    std::vector<lexer::Token> filtered;
+    filtered.reserve(tokens.size());
+
+    for (const lexer::Token& token : tokens) {
+        if (!lexer::is_trivia(token.kind))
+            filtered.push_back(token);
+    }
+
+    Parser parser(filtered);
+    return parser.parse_program();
+}
+
+inline std::expected<ast::Program, ParseError> parse_source(std::string_view source) {
+    const std::vector<lexer::Token> tokens = lexer::lex_source(source, false);
+    return parse_tokens(tokens);
+}
+
+} // namespace cstc::parser
+
+#endif // CICEST_COMPILER_CSTC_PARSER_PARSER_IMPL_HPP

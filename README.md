@@ -10,6 +10,24 @@ Cicest treats keywords — especially `const`/`runtime` contracts — as first-c
 
 See [the language documentation](docs/language/index.md) for more information.
 
+## Frontend Components
+
+This repository now includes a minimal compiler frontend stack under `compiler/`:
+
+- `cstc_ast`: header-only AST data model and formatter.
+- `cstc_lexer`: header-only source lexer and token definitions.
+- `cstc_parser`: header-only recursive-descent parser from token stream to AST.
+- `cstc_inspect`: inspector CLI to dump `tokens` or `ast`.
+
+When `-DCICEST_BUILD_TESTS=ON` is enabled, each package builds its own local `tests/*.cpp` executables.
+
+Inspector usage:
+
+```bash
+cstc_inspect <input-file> --out-type tokens
+cstc_inspect <input-file> --out-type ast -o output.txt
+```
+
 ## License
 
 This project is licensed under the [Apache-2.0](LICENSE-APACHE) license or the [MIT](LICENSE-MIT) license.

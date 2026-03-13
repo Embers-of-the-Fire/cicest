@@ -1,0 +1,16 @@
+/build
+/target
+/temp
+/tmp
+/cache
+/.cache
+
+/.copilot
+/.codex
+/.claude
+
+/.vscode
+/.idea
+
+compile_commands.json
+
