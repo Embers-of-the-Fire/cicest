@@ -105,12 +105,3 @@ cstc_tyir_builder → cstc_tyir → cstc_ast → cstc_symbol, cstc_span
                   → cstc_symbol
                   → cstc_span
 ```
-
-## Building and testing
-
-```bash
-cmake -B . -DCICEST_BUILD_TESTS=ON
-cmake --build . --target cstc_tyir_builder_lower_basic cstc_tyir_builder_lower_exprs
-./compiler/cstc_tyir_builder/cstc_tyir_builder_lower_basic
-./compiler/cstc_tyir_builder/cstc_tyir_builder_lower_exprs
-```

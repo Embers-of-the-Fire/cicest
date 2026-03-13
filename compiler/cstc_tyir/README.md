@@ -124,12 +124,3 @@ cstc_tyir → cstc_ast (for UnaryOp, BinaryOp)
           → cstc_symbol
           → cstc_span
 ```
-
-## Building
-
-```bash
-cmake -B . -DCICEST_BUILD_TESTS=ON
-cmake --build . --target cstc_tyir_tyir_basic cstc_tyir_tyir_print
-./compiler/cstc_tyir/cstc_tyir_tyir_basic
-./compiler/cstc_tyir/cstc_tyir_tyir_print
-```
