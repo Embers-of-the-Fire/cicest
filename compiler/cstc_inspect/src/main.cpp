@@ -1,6 +1,8 @@
 #include <cstc_ast/printer.hpp>
 #include <cstc_lexer/lexer.hpp>
 #include <cstc_lexer/token.hpp>
+#include <cstc_lir/printer.hpp>
+#include <cstc_lir_builder/builder.hpp>
 #include <cstc_tyir_builder/builder.hpp>
 #include <cstc_parser/parser.hpp>
 #include <cstc_span/span.hpp>
@@ -27,7 +29,7 @@ struct Options {
 };
 
 [[nodiscard]] std::string usage() {
-    return "Usage: cstc_inspect <input-file> --out-type <tokens|ast|tyir> "
+    return "Usage: cstc_inspect <input-file> --out-type <tokens|ast|tyir|lir> "
            "[-o <output-file>] [--keep-trivia]";
 }
 
@@ -66,8 +68,8 @@ struct Options {
 
     if (options.input_path.empty())
         throw std::runtime_error("missing input file path\n" + usage());
-    if (options.out_type != "tokens" && options.out_type != "ast" && options.out_type != "tyir")
-        throw std::runtime_error("--out-type must be one of: tokens, ast, tyir\n" + usage());
+    if (options.out_type != "tokens" && options.out_type != "ast" && options.out_type != "tyir" && options.out_type != "lir")
+        throw std::runtime_error("--out-type must be one of: tokens, ast, tyir, lir\n" + usage());
 
     return options;
 }
@@ -174,6 +176,42 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 }
 
 [[nodiscard]] std::string
+    render_lir(const cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
+    const cstc::span::SourceFile* source_file = source_map.file(file_id);
+    if (source_file == nullptr)
+        throw std::runtime_error("invalid source file id in render_lir");
+
+    const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
+    if (!parsed.has_value()) {
+        const cstc::parser::ParseError& error = parsed.error();
+        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
+            throw std::runtime_error(
+                "parse error " + std::string(resolved->file_name) + ":"
+                + std::to_string(resolved->start.line) + ":"
+                + std::to_string(resolved->start.column) + ": " + error.message);
+        }
+        throw std::runtime_error(
+            "parse error [" + std::to_string(error.span.start) + ", "
+            + std::to_string(error.span.end) + "): " + error.message);
+    }
+
+    const auto lowered = cstc::tyir_builder::lower_program(*parsed);
+    if (!lowered.has_value()) {
+        const cstc::tyir_builder::LowerError& error = lowered.error();
+        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
+            throw std::runtime_error(
+                "type error " + std::string(resolved->file_name) + ":"
+                + std::to_string(resolved->start.line) + ":"
+                + std::to_string(resolved->start.column) + ": " + error.message);
+        }
+        throw std::runtime_error("type error: " + error.message);
+    }
+
+    const auto lir = cstc::lir_builder::lower_program(*lowered);
+    return cstc::lir::format_program(lir);
+}
+
+[[nodiscard]] std::string
     render_ast(const cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
     const cstc::span::SourceFile* source_file = source_map.file(file_id);
     if (source_file == nullptr)
@@ -215,8 +253,10 @@ int main(int argc, char** argv) {
             output = render_tokens(source_map, file_id, options.keep_trivia);
         else if (options.out_type == "ast")
             output = render_ast(source_map, file_id);
-        else
+        else if (options.out_type == "tyir")
             output = render_tyir(source_map, file_id);
+        else
+            output = render_lir(source_map, file_id);
 
         write_output(output, options.output_path);
     } catch (const std::exception& error) {

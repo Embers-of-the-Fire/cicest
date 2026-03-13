@@ -183,7 +183,7 @@ static void test_unary_type_errors() {
 
 static void test_if_no_else() {
     // Without else: result type is Unit; if becomes the tail expression
-    const auto prog = must_lower("fn f(b: bool) { if (b) { } }");
+    const auto prog = must_lower("fn f(b: bool) { if b { } }");
     const auto& body = *first_fn(prog).body;
     assert(body.ty == ty::unit());
     // Parser emits the if as the block's tail expression
@@ -193,13 +193,13 @@ static void test_if_no_else() {
 }
 
 static void test_if_else() {
-    const auto prog = must_lower("fn f(b: bool) -> num { if (b) { 1 } else { 2 } }");
+    const auto prog = must_lower("fn f(b: bool) -> num { if b { 1 } else { 2 } }");
     const auto& tail = *(*first_fn(prog).body->tail);
     assert(tail.ty == ty::num());
     assert(std::holds_alternative<TyIf>(tail.node));
 }
 
-static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if (x) { } }"); }
+static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if x { } }"); }
 
 // ─── Control flow ─────────────────────────────────────────────────────────────
 
@@ -214,7 +214,7 @@ static void test_loop_is_unit() {
 }
 
 static void test_while() {
-    const auto prog = must_lower("fn f(b: bool) { while (b) { } }");
+    const auto prog = must_lower("fn f(b: bool) { while b { } }");
     const auto& fn_body = *first_fn(prog).body;
     assert(fn_body.tail.has_value());
     const auto& while_expr = *fn_body.tail;

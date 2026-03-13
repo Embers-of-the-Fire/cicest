@@ -511,6 +511,17 @@ private:
         return parse_logical_or();
     }
 
+    /// Parses an expression with struct-initializer syntax suppressed.
+    /// Used for control-flow conditions (`if cond { }`, `while cond { }`)
+    /// to avoid the `ident { }` ambiguity.
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_expression_no_struct() {
+        const bool prev = restrict_struct_init_;
+        restrict_struct_init_ = true;
+        auto result = parse_expression();
+        restrict_struct_init_ = prev;
+        return result;
+    }
+
     [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_logical_or() {
         auto lhs = parse_logical_and();
         if (!lhs.has_value())
@@ -746,7 +757,7 @@ private:
     }
 
     [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_if_expr(const Token& if_kw) {
-        auto condition = parse_expression();
+        auto condition = parse_expression_no_struct();
         if (!condition.has_value())
             return std::unexpected(condition.error());
 
@@ -932,7 +943,7 @@ private:
 
         if (match(TokenKind::KwWhile)) {
             const Token while_kw = previous();
-            auto condition = parse_expression();
+            auto condition = parse_expression_no_struct();
             if (!condition.has_value())
                 return std::unexpected(condition.error());
 
@@ -1000,7 +1011,7 @@ private:
                     ast::PathExpr{.head = identifier.symbol, .tail = variant->symbol});
             }
 
-            if (looks_like_struct_initializer()) {
+            if (!restrict_struct_init_ && looks_like_struct_initializer()) {
                 auto open = consume(TokenKind::LBrace, "expected `{` in struct initializer");
                 if (!open.has_value())
                     return std::unexpected(open.error());
@@ -1055,6 +1066,10 @@ private:
 private:
     std::vector<Token> tokens_;
     std::size_t cursor_ = 0;
+
+    /// When true, suppress struct-initializer parsing to resolve the
+    /// `if ident { }` ambiguity (Rust-style parenthesis-free conditions).
+    bool restrict_struct_init_ = false;
 };
 
 } // namespace
