@@ -162,7 +162,7 @@ void test_error_span_offset() {
     const auto result = cstc::parser::parse_source_at("fn f(x: num, x: num) { }", base);
     assert(!result.has_value());
     assert(result.error().span.start >= base);
-    assert(result.error().span.end   >= base);
+    assert(result.error().span.end >= base);
 }
 
 } // namespace

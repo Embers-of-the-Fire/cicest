@@ -19,25 +19,28 @@ std::vector<cstc::lexer::Token> lex(std::string_view src) {
 void test_all_keywords() {
     cstc::symbol::SymbolSession session;
 
-    const struct { const char* text; cstc::lexer::TokenKind kind; } cases[] = {
-        {"struct",   cstc::lexer::TokenKind::KwStruct},
-        {"enum",     cstc::lexer::TokenKind::KwEnum},
-        {"fn",       cstc::lexer::TokenKind::KwFn},
-        {"let",      cstc::lexer::TokenKind::KwLet},
-        {"if",       cstc::lexer::TokenKind::KwIf},
-        {"else",     cstc::lexer::TokenKind::KwElse},
-        {"for",      cstc::lexer::TokenKind::KwFor},
-        {"while",    cstc::lexer::TokenKind::KwWhile},
-        {"loop",     cstc::lexer::TokenKind::KwLoop},
-        {"break",    cstc::lexer::TokenKind::KwBreak},
+    const struct {
+        const char* text;
+        cstc::lexer::TokenKind kind;
+    } cases[] = {
+        {  "struct",   cstc::lexer::TokenKind::KwStruct},
+        {    "enum",     cstc::lexer::TokenKind::KwEnum},
+        {      "fn",       cstc::lexer::TokenKind::KwFn},
+        {     "let",      cstc::lexer::TokenKind::KwLet},
+        {      "if",       cstc::lexer::TokenKind::KwIf},
+        {    "else",     cstc::lexer::TokenKind::KwElse},
+        {     "for",      cstc::lexer::TokenKind::KwFor},
+        {   "while",    cstc::lexer::TokenKind::KwWhile},
+        {    "loop",     cstc::lexer::TokenKind::KwLoop},
+        {   "break",    cstc::lexer::TokenKind::KwBreak},
         {"continue", cstc::lexer::TokenKind::KwContinue},
-        {"return",   cstc::lexer::TokenKind::KwReturn},
-        {"true",     cstc::lexer::TokenKind::KwTrue},
-        {"false",    cstc::lexer::TokenKind::KwFalse},
-        {"Unit",     cstc::lexer::TokenKind::KwUnit},
-        {"num",      cstc::lexer::TokenKind::KwNum},
-        {"str",      cstc::lexer::TokenKind::KwStr},
-        {"bool",     cstc::lexer::TokenKind::KwBool},
+        {  "return",   cstc::lexer::TokenKind::KwReturn},
+        {    "true",     cstc::lexer::TokenKind::KwTrue},
+        {   "false",    cstc::lexer::TokenKind::KwFalse},
+        {    "Unit",     cstc::lexer::TokenKind::KwUnit},
+        {     "num",      cstc::lexer::TokenKind::KwNum},
+        {     "str",      cstc::lexer::TokenKind::KwStr},
+        {    "bool",     cstc::lexer::TokenKind::KwBool},
     };
 
     for (const auto& [text, expected_kind] : cases) {
@@ -89,24 +92,27 @@ void test_string_literal() {
 void test_all_single_char_operators() {
     cstc::symbol::SymbolSession session;
 
-    const struct { const char* text; cstc::lexer::TokenKind kind; } cases[] = {
-        {"{",  cstc::lexer::TokenKind::LBrace},
-        {"}",  cstc::lexer::TokenKind::RBrace},
-        {"(",  cstc::lexer::TokenKind::LParen},
-        {")",  cstc::lexer::TokenKind::RParen},
-        {",",  cstc::lexer::TokenKind::Comma},
-        {";",  cstc::lexer::TokenKind::Semicolon},
-        {":",  cstc::lexer::TokenKind::Colon},
-        {".",  cstc::lexer::TokenKind::Dot},
-        {"+",  cstc::lexer::TokenKind::Plus},
-        {"-",  cstc::lexer::TokenKind::Minus},
-        {"*",  cstc::lexer::TokenKind::Star},
-        {"/",  cstc::lexer::TokenKind::Slash},
-        {"%",  cstc::lexer::TokenKind::Percent},
-        {"!",  cstc::lexer::TokenKind::Bang},
-        {"<",  cstc::lexer::TokenKind::Lt},
-        {">",  cstc::lexer::TokenKind::Gt},
-        {"=",  cstc::lexer::TokenKind::Assign},
+    const struct {
+        const char* text;
+        cstc::lexer::TokenKind kind;
+    } cases[] = {
+        {"{",    cstc::lexer::TokenKind::LBrace},
+        {"}",    cstc::lexer::TokenKind::RBrace},
+        {"(",    cstc::lexer::TokenKind::LParen},
+        {")",    cstc::lexer::TokenKind::RParen},
+        {",",     cstc::lexer::TokenKind::Comma},
+        {";", cstc::lexer::TokenKind::Semicolon},
+        {":",     cstc::lexer::TokenKind::Colon},
+        {".",       cstc::lexer::TokenKind::Dot},
+        {"+",      cstc::lexer::TokenKind::Plus},
+        {"-",     cstc::lexer::TokenKind::Minus},
+        {"*",      cstc::lexer::TokenKind::Star},
+        {"/",     cstc::lexer::TokenKind::Slash},
+        {"%",   cstc::lexer::TokenKind::Percent},
+        {"!",      cstc::lexer::TokenKind::Bang},
+        {"<",        cstc::lexer::TokenKind::Lt},
+        {">",        cstc::lexer::TokenKind::Gt},
+        {"=",    cstc::lexer::TokenKind::Assign},
     };
 
     for (const auto& [text, expected_kind] : cases) {
@@ -119,15 +125,18 @@ void test_all_single_char_operators() {
 void test_all_two_char_operators() {
     cstc::symbol::SymbolSession session;
 
-    const struct { const char* text; cstc::lexer::TokenKind kind; } cases[] = {
-        {"::",  cstc::lexer::TokenKind::ColonColon},
-        {"->",  cstc::lexer::TokenKind::Arrow},
-        {"&&",  cstc::lexer::TokenKind::AndAnd},
-        {"||",  cstc::lexer::TokenKind::OrOr},
-        {"==",  cstc::lexer::TokenKind::EqEq},
-        {"!=",  cstc::lexer::TokenKind::NotEq},
-        {"<=",  cstc::lexer::TokenKind::LtEq},
-        {">=",  cstc::lexer::TokenKind::GtEq},
+    const struct {
+        const char* text;
+        cstc::lexer::TokenKind kind;
+    } cases[] = {
+        {"::", cstc::lexer::TokenKind::ColonColon},
+        {"->",      cstc::lexer::TokenKind::Arrow},
+        {"&&",     cstc::lexer::TokenKind::AndAnd},
+        {"||",       cstc::lexer::TokenKind::OrOr},
+        {"==",       cstc::lexer::TokenKind::EqEq},
+        {"!=",      cstc::lexer::TokenKind::NotEq},
+        {"<=",       cstc::lexer::TokenKind::LtEq},
+        {">=",       cstc::lexer::TokenKind::GtEq},
     };
 
     for (const auto& [text, expected_kind] : cases) {
@@ -164,9 +173,9 @@ void test_spans_are_correct() {
     const auto tokens = lex("fn foo");
     assert(tokens.size() == 2);
     assert(tokens[0].span.start == 0);
-    assert(tokens[0].span.end   == 2);
+    assert(tokens[0].span.end == 2);
     assert(tokens[1].span.start == 3);
-    assert(tokens[1].span.end   == 6);
+    assert(tokens[1].span.end == 6);
 }
 
 void test_span_base_position() {
@@ -176,9 +185,9 @@ void test_span_base_position() {
     // tokens[0] = fn at absolute [1000, 1002), tokens[1] = EOF
     assert(tokens.size() == 2);
     assert(tokens[0].span.start == 1000);
-    assert(tokens[0].span.end   == 1002);
+    assert(tokens[0].span.end == 1002);
     assert(tokens[1].span.start == 1002);
-    assert(tokens[1].span.end   == 1002);
+    assert(tokens[1].span.end == 1002);
 }
 
 void test_unknown_unterminated_string() {
@@ -218,18 +227,21 @@ void test_unknown_char() {
 void test_trivia_included_when_requested() {
     cstc::symbol::SymbolSession session;
 
-    const auto with    = cstc::lexer::lex_source("fn /* c */ foo // end\n", true);
+    const auto with = cstc::lexer::lex_source("fn /* c */ foo // end\n", true);
     const auto without = cstc::lexer::lex_source("fn /* c */ foo // end\n", false);
 
     assert(with.size() > without.size());
 
     bool has_block_comment = false;
-    bool has_line_comment  = false;
-    bool has_whitespace    = false;
+    bool has_line_comment = false;
+    bool has_whitespace = false;
     for (const auto& t : with) {
-        if (t.kind == cstc::lexer::TokenKind::BlockComment) has_block_comment = true;
-        if (t.kind == cstc::lexer::TokenKind::LineComment)  has_line_comment  = true;
-        if (t.kind == cstc::lexer::TokenKind::Whitespace)   has_whitespace    = true;
+        if (t.kind == cstc::lexer::TokenKind::BlockComment)
+            has_block_comment = true;
+        if (t.kind == cstc::lexer::TokenKind::LineComment)
+            has_line_comment = true;
+        if (t.kind == cstc::lexer::TokenKind::Whitespace)
+            has_whitespace = true;
     }
     assert(has_block_comment);
     assert(has_line_comment);
@@ -237,9 +249,9 @@ void test_trivia_included_when_requested() {
 }
 
 void test_is_trivia() {
-    assert( cstc::lexer::is_trivia(cstc::lexer::TokenKind::Whitespace));
-    assert( cstc::lexer::is_trivia(cstc::lexer::TokenKind::LineComment));
-    assert( cstc::lexer::is_trivia(cstc::lexer::TokenKind::BlockComment));
+    assert(cstc::lexer::is_trivia(cstc::lexer::TokenKind::Whitespace));
+    assert(cstc::lexer::is_trivia(cstc::lexer::TokenKind::LineComment));
+    assert(cstc::lexer::is_trivia(cstc::lexer::TokenKind::BlockComment));
     assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::Identifier));
     assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::Number));
     assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::KwFn));

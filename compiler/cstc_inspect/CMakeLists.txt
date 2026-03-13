@@ -7,6 +7,8 @@ target_link_libraries(cstc_inspect
         cstc_ast
         cstc_lexer
         cstc_parser
+        cstc_tyir
+        cstc_tyir_builder
         cicest_options
         cicest_warnings
 )

@@ -6,8 +6,8 @@ namespace {
 
 void test_lookup_file() {
     cstc::span::SourceMap map;
-    const auto foo_id = map.add_file("foo.cst", "hello");   // size 5, start=0, end=5
-    const auto bar_id = map.add_file("bar.cst", "world!");  // size 6, start=6, end=12
+    const auto foo_id = map.add_file("foo.cst", "hello");  // size 5, start=0, end=5
+    const auto bar_id = map.add_file("bar.cst", "world!"); // size 6, start=6, end=12
 
     const cstc::span::SourceFile* foo = map.file(foo_id);
     const cstc::span::SourceFile* bar = map.file(bar_id);
@@ -27,7 +27,7 @@ void test_lookup_file() {
 
 void test_file_not_found() {
     cstc::span::SourceMap map;
-    assert(map.file(0)   == nullptr);
+    assert(map.file(0) == nullptr);
     assert(map.file(999) == nullptr);
 }
 
@@ -40,7 +40,7 @@ void test_file_size_and_span() {
     assert(f->size() == 5);
     assert(f->span().length() == 5);
     assert(f->span().start == f->start_pos);
-    assert(f->span().end   == f->end_pos);
+    assert(f->span().end == f->end_pos);
     assert(f->name == "a.cst");
 }
 
@@ -57,11 +57,11 @@ void test_resolve_span_line_column() {
     assert(span_abc.has_value());
     const auto r1 = map.resolve_span(*span_abc);
     assert(r1.has_value());
-    assert(r1->file_id   == id);
+    assert(r1->file_id == id);
     assert(r1->file_name == "src.cst");
     assert(r1->local.start == 0);
-    assert(r1->local.end   == 3);
-    assert(r1->start.line   == 1);
+    assert(r1->local.end == 3);
+    assert(r1->start.line == 1);
     assert(r1->start.column == 1);
 
     // Span covering "d" — local [4, 5)
@@ -69,7 +69,7 @@ void test_resolve_span_line_column() {
     assert(span_d.has_value());
     const auto r2 = map.resolve_span(*span_d);
     assert(r2.has_value());
-    assert(r2->start.line   == 2);
+    assert(r2->start.line == 2);
     assert(r2->start.column == 1);
 
     // Span covering "ef" — local [5, 7)
@@ -77,13 +77,13 @@ void test_resolve_span_line_column() {
     assert(span_ef.has_value());
     const auto r3 = map.resolve_span(*span_ef);
     assert(r3.has_value());
-    assert(r3->start.line   == 2);
+    assert(r3->start.line == 2);
     assert(r3->start.column == 2);
 }
 
 void test_make_span_out_of_bounds() {
     cstc::span::SourceMap map;
-    const auto id = map.add_file("f.cst", "hello");  // size 5
+    const auto id = map.add_file("f.cst", "hello"); // size 5
 
     // local_end > file size -> nullopt
     assert(!map.make_span(id, 0, 100).has_value());
@@ -109,8 +109,8 @@ void test_multiple_files_ordering() {
     const cstc::span::SourceFile* fc = map.file(c);
 
     // Files are laid out in order with at least one spare byte between them.
-    assert(fa->end_pos <  fb->start_pos);
-    assert(fb->end_pos <  fc->start_pos);
+    assert(fa->end_pos < fb->start_pos);
+    assert(fb->end_pos < fc->start_pos);
     assert(fa->size() == 3);
     assert(fb->size() == 5);
     assert(fc->size() == 2);
@@ -130,23 +130,23 @@ void test_resolve_span_not_in_any_file() {
 
 void test_absolute_span_absolute_fields() {
     cstc::span::SourceMap map;
-    static_cast<void>(map.add_file("pad.cst", "PADDING"));  // size 7, occupies [0,7); next start = 8
-    const auto id = map.add_file("real.cst", "hello");  // start = 8
+    static_cast<void>(map.add_file("pad.cst", "PADDING")); // size 7, occupies [0,7); next start = 8
+    const auto id = map.add_file("real.cst", "hello");     // start = 8
 
     const cstc::span::SourceFile* f = map.file(id);
     assert(f->start_pos == 8);
 
-    const auto span = map.make_span(id, 1, 3);  // local [1,3) -> absolute [9,11)
+    const auto span = map.make_span(id, 1, 3);             // local [1,3) -> absolute [9,11)
     assert(span.has_value());
     assert(span->start == 9);
-    assert(span->end   == 11);
+    assert(span->end == 11);
 
     const auto resolved = map.resolve_span(*span);
     assert(resolved.has_value());
     assert(resolved->absolute.start == 9);
-    assert(resolved->absolute.end   == 11);
+    assert(resolved->absolute.end == 11);
     assert(resolved->local.start == 1);
-    assert(resolved->local.end   == 3);
+    assert(resolved->local.end == 3);
 }
 
 } // namespace

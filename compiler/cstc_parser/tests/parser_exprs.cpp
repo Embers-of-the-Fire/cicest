@@ -117,19 +117,22 @@ void test_binary_add() {
 
 void test_binary_all_ops() {
     cstc::symbol::SymbolSession session;
-    const struct { const char* src; cstc::ast::BinaryOp op; } cases[] = {
-        {"1 - 2",        cstc::ast::BinaryOp::Sub},
-        {"1 * 2",        cstc::ast::BinaryOp::Mul},
-        {"1 / 2",        cstc::ast::BinaryOp::Div},
-        {"1 % 2",        cstc::ast::BinaryOp::Mod},
-        {"1 == 2",       cstc::ast::BinaryOp::Eq},
-        {"1 != 2",       cstc::ast::BinaryOp::Ne},
-        {"1 < 2",        cstc::ast::BinaryOp::Lt},
-        {"1 <= 2",       cstc::ast::BinaryOp::Le},
-        {"1 > 2",        cstc::ast::BinaryOp::Gt},
-        {"1 >= 2",       cstc::ast::BinaryOp::Ge},
+    const struct {
+        const char* src;
+        cstc::ast::BinaryOp op;
+    } cases[] = {
+        {        "1 - 2", cstc::ast::BinaryOp::Sub},
+        {        "1 * 2", cstc::ast::BinaryOp::Mul},
+        {        "1 / 2", cstc::ast::BinaryOp::Div},
+        {        "1 % 2", cstc::ast::BinaryOp::Mod},
+        {       "1 == 2",  cstc::ast::BinaryOp::Eq},
+        {       "1 != 2",  cstc::ast::BinaryOp::Ne},
+        {        "1 < 2",  cstc::ast::BinaryOp::Lt},
+        {       "1 <= 2",  cstc::ast::BinaryOp::Le},
+        {        "1 > 2",  cstc::ast::BinaryOp::Gt},
+        {       "1 >= 2",  cstc::ast::BinaryOp::Ge},
         {"true && false", cstc::ast::BinaryOp::And},
-        {"true || false", cstc::ast::BinaryOp::Or},
+        {"true || false",  cstc::ast::BinaryOp::Or},
     };
     for (const auto& [src, expected_op] : cases) {
         const auto& expr = tail_of(src);

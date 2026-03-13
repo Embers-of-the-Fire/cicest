@@ -15,12 +15,13 @@ int main() {
     user.fields.push_back(
         cstc::ast::FieldDecl{
             .name = cstc::symbol::Symbol::intern("id"),
-            .type = cstc::ast::TypeRef{
-                .kind = cstc::ast::TypeKind::Num,
-                .symbol = cstc::symbol::Symbol::intern("num"),
-            },
+            .type =
+                cstc::ast::TypeRef{
+                                   .kind = cstc::ast::TypeKind::Num,
+                                   .symbol = cstc::symbol::Symbol::intern("num"),
+                                   },
             .span = {.start = 0, .end = 0},
-        });
+    });
     program.items.push_back(user);
 
     const std::string rendered = cstc::ast::format_program(program);

@@ -8,8 +8,7 @@
 namespace {
 
 void test_smoke_tokens() {
-    const auto tokens =
-        cstc::lexer::lex_source("fn main() -> Unit { let x: num = 1; }", false);
+    const auto tokens = cstc::lexer::lex_source("fn main() -> Unit { let x: num = 1; }", false);
 
     assert(!tokens.empty());
     assert(tokens[0].kind == cstc::lexer::TokenKind::KwFn);

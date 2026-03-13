@@ -121,8 +121,7 @@ fn make() -> Pair {
     assert(parsed.has_value());
 
     const auto& fn_decl = std::get<cstc::ast::FnDecl>(parsed->items[1]);
-    const auto& init =
-        std::get<cstc::ast::StructInitExpr>((*fn_decl.body->tail)->node);
+    const auto& init = std::get<cstc::ast::StructInitExpr>((*fn_decl.body->tail)->node);
     assert(init.fields.size() == 2);
 }
 
@@ -140,8 +139,7 @@ fn make() -> Outer {
     assert(parsed.has_value());
 
     const auto& fn_decl = std::get<cstc::ast::FnDecl>(parsed->items[2]);
-    const auto& outer =
-        std::get<cstc::ast::StructInitExpr>((*fn_decl.body->tail)->node);
+    const auto& outer = std::get<cstc::ast::StructInitExpr>((*fn_decl.body->tail)->node);
     assert(outer.type_name.as_str() == std::string_view{"Outer"});
     assert(outer.fields.size() == 2);
 
@@ -203,8 +201,7 @@ fn test() -> num {
     assert(parsed.has_value());
 
     const auto& fn_decl = std::get<cstc::ast::FnDecl>(parsed->items[1]);
-    const auto& let_stmt =
-        std::get<cstc::ast::LetStmt>(fn_decl.body->statements[0]);
+    const auto& let_stmt = std::get<cstc::ast::LetStmt>(fn_decl.body->statements[0]);
     assert(let_stmt.name.as_str() == std::string_view{"v"});
     assert(std::holds_alternative<cstc::ast::StructInitExpr>(let_stmt.initializer->node));
 }
