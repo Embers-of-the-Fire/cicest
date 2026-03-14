@@ -482,7 +482,8 @@ private:
                 if (node.step.has_value()) {
                     builder.set_current_block(step_id);
                     static_cast<void>(lower_expr(builder, *node.step));
-                    builder.seal_block(lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
+                    if (!builder.is_terminated())
+                        builder.seal_block(lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
                 }
 
                 builder.pop_scope(); // init scope
