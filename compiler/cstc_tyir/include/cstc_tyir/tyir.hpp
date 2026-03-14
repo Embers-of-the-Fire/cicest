@@ -22,8 +22,8 @@
 /// - Spans use global byte offsets (same convention as AST / lexer).
 /// - `UnaryOp` and `BinaryOp` are re-used from `cstc_ast` — TyIR depends on
 ///   `cstc_ast` for those shared enumerations only.
-/// - The module is header-only; `printer.hpp` / `printer_impl.hpp` provide
-///   the human-readable tree formatter.
+/// - The module is header-only; `printer.hpp` provides the human-readable tree
+///   formatter.
 
 #include <memory>
 #include <optional>

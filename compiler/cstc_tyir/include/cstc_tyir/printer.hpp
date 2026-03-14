@@ -29,6 +29,265 @@ namespace cstc::tyir {
 
 } // namespace cstc::tyir
 
-#include <cstc_tyir/printer_impl.hpp>
+#include <cstddef>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <type_traits>
+
+namespace cstc::tyir {
+
+namespace detail {
+
+inline void indent(std::ostringstream& out, std::size_t level) {
+    out << std::string(level * 2, ' ');
+}
+
+[[nodiscard]] inline std::string_view unary_name(cstc::ast::UnaryOp op) {
+    switch (op) {
+    case cstc::ast::UnaryOp::Negate: return "-";
+    case cstc::ast::UnaryOp::Not: return "!";
+    }
+    return "?";
+}
+
+[[nodiscard]] inline std::string_view binary_name(cstc::ast::BinaryOp op) {
+    switch (op) {
+    case cstc::ast::BinaryOp::Add: return "+";
+    case cstc::ast::BinaryOp::Sub: return "-";
+    case cstc::ast::BinaryOp::Mul: return "*";
+    case cstc::ast::BinaryOp::Div: return "/";
+    case cstc::ast::BinaryOp::Mod: return "%";
+    case cstc::ast::BinaryOp::Eq: return "==";
+    case cstc::ast::BinaryOp::Ne: return "!=";
+    case cstc::ast::BinaryOp::Lt: return "<";
+    case cstc::ast::BinaryOp::Le: return "<=";
+    case cstc::ast::BinaryOp::Gt: return ">";
+    case cstc::ast::BinaryOp::Ge: return ">=";
+    case cstc::ast::BinaryOp::And: return "&&";
+    case cstc::ast::BinaryOp::Or: return "||";
+    }
+    return "?";
+}
+
+// Forward declarations for mutual recursion.
+inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::size_t level);
+inline void print_ty_block(std::ostringstream& out, const TyBlockPtr& block, std::size_t level);
+
+inline void print_ty_block(std::ostringstream& out, const TyBlockPtr& block, std::size_t level) {
+    indent(out, level);
+    out << "TyBlock: " << block->ty.display() << "\n";
+
+    for (const TyStmt& stmt : block->stmts) {
+        std::visit(
+            [&](const auto& s) {
+                using S = std::decay_t<decltype(s)>;
+                if constexpr (std::is_same_v<S, TyLetStmt>) {
+                    indent(out, level + 1);
+                    if (s.discard)
+                        out << "Let _: " << s.ty.display() << " =\n";
+                    else
+                        out << "Let " << s.name.as_str() << ": " << s.ty.display() << " =\n";
+                    print_ty_expr(out, s.init, level + 2);
+                } else {
+                    indent(out, level + 1);
+                    out << "TyExprStmt\n";
+                    print_ty_expr(out, s.expr, level + 2);
+                }
+            },
+            stmt);
+    }
+
+    if (block->tail.has_value()) {
+        indent(out, level + 1);
+        out << "Tail\n";
+        print_ty_expr(out, *block->tail, level + 2);
+    }
+}
+
+inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::size_t level) {
+    std::visit(
+        [&](const auto& node) {
+            using N = std::decay_t<decltype(node)>;
+
+            if constexpr (std::is_same_v<N, TyLiteral>) {
+                indent(out, level);
+                switch (node.kind) {
+                case TyLiteral::Kind::Num:
+                    out << "TyLiteral(" << node.symbol.as_str() << "): num\n";
+                    break;
+                case TyLiteral::Kind::Str:
+                    out << "TyLiteral(\"" << node.symbol.as_str() << "\"): str\n";
+                    break;
+                case TyLiteral::Kind::Bool:
+                    out << "TyLiteral(" << (node.bool_value ? "true" : "false") << "): bool\n";
+                    break;
+                case TyLiteral::Kind::Unit: out << "TyLiteral(()): Unit\n"; break;
+                }
+            } else if constexpr (std::is_same_v<N, LocalRef>) {
+                indent(out, level);
+                out << "TyLocal(" << node.name.as_str() << "): " << expr->ty.display() << "\n";
+            } else if constexpr (std::is_same_v<N, EnumVariantRef>) {
+                indent(out, level);
+                out << "TyVariant(" << node.enum_name.as_str() << "::" << node.variant_name.as_str()
+                    << "): " << expr->ty.display() << "\n";
+            } else if constexpr (std::is_same_v<N, TyStructInit>) {
+                indent(out, level);
+                out << "TyStructInit(" << node.type_name.as_str() << "): " << expr->ty.display()
+                    << "\n";
+                for (const TyStructInitField& field : node.fields) {
+                    indent(out, level + 1);
+                    out << field.name.as_str() << ":\n";
+                    print_ty_expr(out, field.value, level + 2);
+                }
+            } else if constexpr (std::is_same_v<N, TyUnary>) {
+                indent(out, level);
+                out << "TyUnary(" << unary_name(node.op) << "): " << expr->ty.display() << "\n";
+                print_ty_expr(out, node.rhs, level + 1);
+            } else if constexpr (std::is_same_v<N, TyBinary>) {
+                indent(out, level);
+                out << "TyBinary(" << binary_name(node.op) << "): " << expr->ty.display() << "\n";
+                print_ty_expr(out, node.lhs, level + 1);
+                print_ty_expr(out, node.rhs, level + 1);
+            } else if constexpr (std::is_same_v<N, TyFieldAccess>) {
+                indent(out, level);
+                out << "TyFieldAccess(." << node.field.as_str() << "): " << expr->ty.display()
+                    << "\n";
+                print_ty_expr(out, node.base, level + 1);
+            } else if constexpr (std::is_same_v<N, TyCall>) {
+                indent(out, level);
+                out << "TyCall(" << node.fn_name.as_str() << "): " << expr->ty.display() << "\n";
+                for (const TyExprPtr& arg : node.args) {
+                    indent(out, level + 1);
+                    out << "Arg\n";
+                    print_ty_expr(out, arg, level + 2);
+                }
+            } else if constexpr (std::is_same_v<N, TyBlockPtr>) {
+                print_ty_block(out, node, level);
+            } else if constexpr (std::is_same_v<N, TyIf>) {
+                indent(out, level);
+                out << "TyIf: " << expr->ty.display() << "\n";
+                indent(out, level + 1);
+                out << "Condition\n";
+                print_ty_expr(out, node.condition, level + 2);
+                indent(out, level + 1);
+                out << "Then\n";
+                print_ty_block(out, node.then_block, level + 2);
+                if (node.else_branch.has_value()) {
+                    indent(out, level + 1);
+                    out << "Else\n";
+                    print_ty_expr(out, *node.else_branch, level + 2);
+                }
+            } else if constexpr (std::is_same_v<N, TyLoop>) {
+                indent(out, level);
+                out << "TyLoop: " << expr->ty.display() << "\n";
+                print_ty_block(out, node.body, level + 1);
+            } else if constexpr (std::is_same_v<N, TyWhile>) {
+                indent(out, level);
+                out << "TyWhile: " << expr->ty.display() << "\n";
+                indent(out, level + 1);
+                out << "Condition\n";
+                print_ty_expr(out, node.condition, level + 2);
+                indent(out, level + 1);
+                out << "Body\n";
+                print_ty_block(out, node.body, level + 2);
+            } else if constexpr (std::is_same_v<N, TyFor>) {
+                indent(out, level);
+                out << "TyFor: " << expr->ty.display() << "\n";
+                if (node.init.has_value()) {
+                    const TyForInit& init = *node.init;
+                    indent(out, level + 1);
+                    out << "Init\n";
+                    indent(out, level + 2);
+                    if (init.discard)
+                        out << "Let _: " << init.ty.display() << " =\n";
+                    else
+                        out << "Let " << init.name.as_str() << ": " << init.ty.display() << " =\n";
+                    print_ty_expr(out, init.init, level + 3);
+                }
+                if (node.condition.has_value()) {
+                    indent(out, level + 1);
+                    out << "Condition\n";
+                    print_ty_expr(out, *node.condition, level + 2);
+                }
+                if (node.step.has_value()) {
+                    indent(out, level + 1);
+                    out << "Step\n";
+                    print_ty_expr(out, *node.step, level + 2);
+                }
+                indent(out, level + 1);
+                out << "Body\n";
+                print_ty_block(out, node.body, level + 2);
+            } else if constexpr (std::is_same_v<N, TyBreak>) {
+                indent(out, level);
+                out << "TyBreak: !\n";
+                if (node.value.has_value())
+                    print_ty_expr(out, *node.value, level + 1);
+            } else if constexpr (std::is_same_v<N, TyContinue>) {
+                indent(out, level);
+                out << "TyContinue: !\n";
+            } else if constexpr (std::is_same_v<N, TyReturn>) {
+                indent(out, level);
+                out << "TyReturn: !\n";
+                if (node.value.has_value())
+                    print_ty_expr(out, *node.value, level + 1);
+            }
+        },
+        expr->node);
+}
+
+inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size_t level) {
+    std::visit(
+        [&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+
+            if constexpr (std::is_same_v<T, TyStructDecl>) {
+                indent(out, level);
+                if (node.is_zst) {
+                    out << "TyStructDecl " << node.name.as_str() << " ;\n";
+                } else {
+                    out << "TyStructDecl " << node.name.as_str() << "\n";
+                    for (const TyFieldDecl& field : node.fields) {
+                        indent(out, level + 1);
+                        out << field.name.as_str() << ": " << field.ty.display() << "\n";
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, TyEnumDecl>) {
+                indent(out, level);
+                out << "TyEnumDecl " << node.name.as_str() << "\n";
+                for (const TyEnumVariant& variant : node.variants) {
+                    indent(out, level + 1);
+                    out << variant.name.as_str();
+                    if (variant.discriminant.has_value())
+                        out << " = " << variant.discriminant->as_str();
+                    out << "\n";
+                }
+            } else {
+                // TyFnDecl
+                indent(out, level);
+                out << "TyFnDecl " << node.name.as_str() << "(";
+                for (std::size_t i = 0; i < node.params.size(); ++i) {
+                    if (i > 0)
+                        out << ", ";
+                    out << node.params[i].name.as_str() << ": " << node.params[i].ty.display();
+                }
+                out << ") -> " << node.return_ty.display() << "\n";
+                print_ty_block(out, node.body, level + 1);
+            }
+        },
+        item);
+}
+
+} // namespace detail
+
+inline std::string format_program(const TyProgram& program) {
+    std::ostringstream out;
+    out << "TyProgram\n";
+    for (const TyItem& item : program.items)
+        detail::print_ty_item(out, item, 1);
+    return out.str();
+}
+
+} // namespace cstc::tyir
 
 #endif // CICEST_COMPILER_CSTC_TYIR_PRINTER_HPP
