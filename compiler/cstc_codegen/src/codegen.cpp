@@ -345,7 +345,7 @@ private:
             // Strip surrounding quotes if present
             if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
                 text = text.substr(1, text.size() - 2);
-            return builder_.CreateGlobalStringPtr(text);
+            return builder_.CreateGlobalString(text);
         }
         case LirConst::Kind::Unit:
             // Unit is an empty struct {}

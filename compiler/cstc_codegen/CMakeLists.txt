@@ -29,7 +29,10 @@ add_library(cicest::compiler::codegen ALIAS cstc_codegen)
 target_include_directories(cstc_codegen
     PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    PRIVATE
+)
+
+target_include_directories(cstc_codegen
+    SYSTEM PRIVATE
         ${LLVM_INCLUDE_DIRS}
 )
 
