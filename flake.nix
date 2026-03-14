@@ -16,6 +16,12 @@
         llvmPackages_latest.libcxx
         llvmPackages_latest.compiler-rt
         llvmPackages_latest.libunwind
+        zlib
+        zlib.dev
+        libxml2
+        libxml2.dev
+        libffi
+        libffi.dev
       ];
       parser-dependencies = with pkgs; [
         argparse
@@ -25,6 +31,7 @@
         gnumake
         ninja
         clang
+        pkg-config
       ];
       misc-dependencies = with pkgs; [
         fish
