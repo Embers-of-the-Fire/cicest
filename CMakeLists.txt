@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.21)
-project(cicest_language_scoped LANGUAGES CXX)
+project(cicest_language_scoped LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

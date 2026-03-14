@@ -72,6 +72,12 @@ Run tests:
 nix run .#tests
 ```
 
+Run lint + format checks:
+
+```bash
+nix run .#lint
+```
+
 ### Option 2: CMake + Ninja
 
 ```bash
@@ -91,6 +97,10 @@ Notes:
 
 - The project requires C++23 (`cmake_minimum_required(VERSION 3.21)`).
 - `cstc_codegen` links against LLVM and supporting libraries (`zlib`, `libxml2`, `libffi`).
+
+## CI
+
+For CI workflow details (test matrix, lint/format checks, and local reproduction), see [CI.md](CI.md).
 
 ## Inspector CLI
 
