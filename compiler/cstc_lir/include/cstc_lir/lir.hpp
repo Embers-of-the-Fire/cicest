@@ -500,5 +500,4 @@ inline LirOperand LirOperand::from_const(LirConst constant) {
 
 } // namespace cstc::lir
 
-
 #endif // CICEST_COMPILER_CSTC_LIR_LIR_HPP

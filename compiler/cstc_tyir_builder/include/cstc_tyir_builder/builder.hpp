@@ -70,7 +70,6 @@ struct LowerError {
 
 } // namespace cstc::tyir_builder
 
-
 #include <cassert>
 #include <optional>
 #include <string>
@@ -971,6 +970,5 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
 }
 
 } // namespace cstc::tyir_builder
-
 
 #endif // CICEST_COMPILER_CSTC_TYIR_BUILDER_BUILDER_HPP

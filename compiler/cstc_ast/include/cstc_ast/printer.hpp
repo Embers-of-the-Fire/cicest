@@ -14,7 +14,6 @@ namespace cstc::ast {
 
 } // namespace cstc::ast
 
-
 #include <cstddef>
 #include <sstream>
 #include <string>
@@ -308,6 +307,5 @@ inline std::string format_program(const Program& program) {
 }
 
 } // namespace cstc::ast
-
 
 #endif // CICEST_COMPILER_CSTC_AST_PRINTER_HPP

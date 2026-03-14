@@ -657,5 +657,4 @@ inline lir::LirProgram lower_program(const tyir::TyProgram& program) {
 
 } // namespace cstc::lir_builder
 
-
 #endif // CICEST_COMPILER_CSTC_LIR_BUILDER_BUILDER_HPP

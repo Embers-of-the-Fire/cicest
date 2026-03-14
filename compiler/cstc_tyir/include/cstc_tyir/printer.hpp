@@ -29,7 +29,6 @@ namespace cstc::tyir {
 
 } // namespace cstc::tyir
 
-
 #include <cstddef>
 #include <sstream>
 #include <string>
@@ -290,6 +289,5 @@ inline std::string format_program(const TyProgram& program) {
 }
 
 } // namespace cstc::tyir
-
 
 #endif // CICEST_COMPILER_CSTC_TYIR_PRINTER_HPP

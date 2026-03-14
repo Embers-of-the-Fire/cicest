@@ -41,7 +41,6 @@ struct ParseError {
 
 } // namespace cstc::parser
 
-
 #include <cstddef>
 #include <expected>
 #include <optional>
@@ -1115,6 +1114,5 @@ inline std::expected<ast::Program, ParseError> parse_source(std::string_view sou
 }
 
 } // namespace cstc::parser
-
 
 #endif // CICEST_COMPILER_CSTC_PARSER_PARSER_HPP

@@ -26,7 +26,6 @@ namespace cstc::lexer {
 
 } // namespace cstc::lexer
 
-
 #include <cctype>
 #include <cstddef>
 #include <string_view>
@@ -364,6 +363,5 @@ inline std::vector<Token> lex_source(std::string_view source, bool keep_trivia) 
 }
 
 } // namespace cstc::lexer
-
 
 #endif // CICEST_COMPILER_CSTC_LEXER_LEXER_HPP

@@ -243,5 +243,4 @@ inline std::string format_program(const LirProgram& program) {
 
 } // namespace cstc::lir
 
-
 #endif // CICEST_COMPILER_CSTC_LIR_PRINTER_HPP
