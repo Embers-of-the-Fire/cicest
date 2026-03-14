@@ -45,6 +45,27 @@ static bool output_contains(const LirProgram& prog, const std::string& needle) {
     return format_program(prog).find(needle) != std::string::npos;
 }
 
+static LirLocalId find_local_assigned_num(const LirFnDef& fn, const char* literal_text) {
+    const Symbol literal = Symbol::intern(literal_text);
+    for (const LirBasicBlock& block : fn.blocks) {
+        for (const LirStmt& stmt : block.stmts) {
+            const auto* use = std::get_if<LirUse>(&stmt.rhs.node);
+            if (use == nullptr)
+                continue;
+            if (use->operand.kind != LirOperand::Kind::Const)
+                continue;
+            if (use->operand.constant.kind != LirConst::Kind::Num)
+                continue;
+            if (use->operand.constant.symbol != literal)
+                continue;
+            if (stmt.dest.kind != LirPlace::Kind::Local)
+                continue;
+            return stmt.dest.local_id;
+        }
+    }
+    return kInvalidLocal;
+}
+
 // ─── If (no else) ─────────────────────────────────────────────────────────────
 
 static void test_if_no_else() {
@@ -201,6 +222,55 @@ static void test_return_from_nested_block() {
     assert(output_contains(prog, "return 42"));
 }
 
+static void test_param_shadowing_in_fn_body() {
+    const LirProgram prog = must_lower("fn f(x: num) -> num { let x = 2; x }");
+    const LirFnDef& fn = first_fn(prog);
+    assert(fn.params.size() == 1);
+
+    const LirLocalId param_local = fn.params[0].local;
+    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
+    assert(ret.value.has_value());
+    assert(ret.value->kind == LirOperand::Kind::Copy);
+    assert(ret.value->place.kind == LirPlace::Kind::Local);
+    assert(ret.value->place.local_id != param_local);
+}
+
+static void test_nested_block_shadowing_prefers_inner_binding() {
+    const LirProgram prog = must_lower("fn f() -> num { let x = 1; { let x = 2; x } }");
+    const LirFnDef& fn = first_fn(prog);
+
+    const LirLocalId outer_x = find_local_assigned_num(fn, "1");
+    const LirLocalId inner_x = find_local_assigned_num(fn, "2");
+    assert(outer_x != kInvalidLocal);
+    assert(inner_x != kInvalidLocal);
+    assert(outer_x != inner_x);
+
+    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
+    assert(ret.value.has_value());
+    assert(ret.value->kind == LirOperand::Kind::Copy);
+    assert(ret.value->place.kind == LirPlace::Kind::Local);
+    assert(ret.value->place.local_id == inner_x);
+    assert(ret.value->place.local_id != outer_x);
+}
+
+static void test_terminated_block_skips_tail_expr() {
+    const LirProgram prog = must_lower(
+        "fn f() -> num {"
+        "  return 1;"
+        "  2 + 3"
+        "}");
+    const LirFnDef& fn = first_fn(prog);
+
+    assert(std::holds_alternative<LirReturn>(fn.blocks[0].terminator.node));
+    assert(fn.blocks[0].stmts.empty());
+    assert(!output_contains(prog, "BinOp(+"));
+}
+
+static void test_terminated_loop_body_skips_following_stmt() {
+    const LirProgram prog = must_lower("fn f() { loop { break; 1 + 2; } }");
+    assert(!output_contains(prog, "BinOp(+"));
+}
+
 // ─── Nested control flow ──────────────────────────────────────────────────────
 
 static void test_if_inside_while() {
@@ -275,6 +345,10 @@ int main() {
     test_early_return();
     test_return_void();
     test_return_from_nested_block();
+    test_param_shadowing_in_fn_body();
+    test_nested_block_shadowing_prefers_inner_binding();
+    test_terminated_block_skips_tail_expr();
+    test_terminated_loop_body_skips_following_stmt();
 
     test_if_inside_while();
     test_nested_if();
