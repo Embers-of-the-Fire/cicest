@@ -48,6 +48,7 @@
 #include <llvm/Target/TargetOptions.h>
 #include <llvm/TargetParser/Host.h>
 #include <llvm/TargetParser/Triple.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/Mem2Reg.h>
 
 namespace cstc::codegen {
@@ -81,7 +82,8 @@ public:
         build_module();
 
         auto target_machine = create_native_target_machine();
-        emit_file(*target_machine, assembly_output_path, llvm::CodeGenFileType::AssemblyFile);
+        emit_file(
+            *target_machine, module_, assembly_output_path, llvm::CodeGenFileType::AssemblyFile);
     }
 
     /// Executes lowering and emits a native object file (`.o`).
@@ -89,7 +91,7 @@ public:
         build_module();
 
         auto target_machine = create_native_target_machine();
-        emit_file(*target_machine, object_output_path, llvm::CodeGenFileType::ObjectFile);
+        emit_file(*target_machine, module_, object_output_path, llvm::CodeGenFileType::ObjectFile);
     }
 
     /// Executes lowering and emits native assembly and object artifacts.
@@ -99,8 +101,15 @@ public:
         build_module();
 
         auto target_machine = create_native_target_machine();
-        emit_file(*target_machine, assembly_output_path, llvm::CodeGenFileType::AssemblyFile);
-        emit_file(*target_machine, object_output_path, llvm::CodeGenFileType::ObjectFile);
+
+        auto assembly_module = llvm::CloneModule(module_);
+        emit_file(
+            *target_machine, *assembly_module, assembly_output_path,
+            llvm::CodeGenFileType::AssemblyFile);
+
+        auto object_module = llvm::CloneModule(module_);
+        emit_file(
+            *target_machine, *object_module, object_output_path, llvm::CodeGenFileType::ObjectFile);
     }
 
 private:
@@ -178,8 +187,8 @@ private:
 
     /// Emits one target file type (`AssemblyFile` / `ObjectFile`).
     void emit_file(
-        llvm::TargetMachine& target_machine, const std::filesystem::path& output_path,
-        llvm::CodeGenFileType file_type) {
+        llvm::TargetMachine& target_machine, llvm::Module& module,
+        const std::filesystem::path& output_path, llvm::CodeGenFileType file_type) {
         ensure_parent_directory(output_path);
 
         std::error_code file_error;
@@ -196,7 +205,7 @@ private:
                 + "'");
         }
 
-        pass_manager.run(module_);
+        pass_manager.run(module);
         destination.flush();
         if (destination.has_error())
             throw std::runtime_error("failed to write output file: " + output_path.string());
