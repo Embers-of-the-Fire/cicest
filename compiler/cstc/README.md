@@ -44,8 +44,13 @@ Flags:
 If `-o/--output` is not provided, `cstc` emits artifacts next to the input
 file using the input stem.
 
-Executable output requires an external linker toolchain
-(for example `c++`, `clang++`, or `gcc`).
+Executable output requires an external linker toolchain.
+
+- POSIX platforms default to `c++` (or `$CXX` when set)
+- MinGW Windows defaults to `c++`; MSVC Windows defaults to `clang++`
+  (both can be overridden with `$CXX` or `--linker`)
+- Other non-POSIX/non-Windows platforms currently support `--emit asm` and
+  `--emit obj`, but not `--emit exe`
 
 ## CMake
 

@@ -7,21 +7,29 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <optional>
-#include <spawn.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <sys/wait.h>
 #include <vector>
 
+#if defined(_WIN32)
+# include <process.h>
+#elif defined(__unix__) || defined(__APPLE__)
+# include <spawn.h>
+# include <sys/wait.h>
+#endif
+
+#if defined(__unix__) || defined(__APPLE__)
 extern char** environ;
+#endif
 
 namespace {
 
@@ -220,7 +228,15 @@ void ensure_parent_directory(const std::filesystem::path& path) {
     if (const char* cxx = std::getenv("CXX"); cxx != nullptr && cxx[0] != '\0')
         return cxx;
 
+#if defined(_WIN32)
+# if defined(__MINGW32__) || defined(__MINGW64__)
     return "c++";
+# else
+    return "clang++";
+# endif
+#else
+    return "c++";
+#endif
 }
 
 void link_object_to_executable(
@@ -235,6 +251,26 @@ void link_object_to_executable(
         "-o",
         executable_path.string(),
     };
+
+#if defined(_WIN32)
+    std::vector<const char*> argv;
+    argv.reserve(arguments.size() + 1);
+    for (const std::string& argument : arguments)
+        argv.push_back(argument.c_str());
+    argv.push_back(nullptr);
+
+    const std::intptr_t spawn_result = _spawnvp(_P_WAIT, linker_program.c_str(), argv.data());
+    if (spawn_result == -1) {
+        throw std::runtime_error(
+            "failed to start linker '" + linker_program + "': " + std::strerror(errno));
+    }
+
+    if (spawn_result != 0) {
+        throw std::runtime_error(
+            "linker '" + linker_program + "' failed with exit code "
+            + std::to_string(spawn_result));
+    }
+#elif defined(__unix__) || defined(__APPLE__)
 
     std::vector<char*> argv;
     argv.reserve(arguments.size() + 1);
@@ -264,6 +300,10 @@ void link_object_to_executable(
         throw std::runtime_error(
             "linker '" + linker_program + "' failed with exit code " + std::to_string(exit_code));
     }
+#else
+    throw std::runtime_error(
+        "executable output is not supported on this platform; use `--emit asm` or `--emit obj`");
+#endif
 }
 
 void compile_file(const Options& options) {
