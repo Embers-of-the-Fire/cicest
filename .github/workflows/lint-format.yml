@@ -16,11 +16,19 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            cmake \
+            ninja-build \
+            clang \
+            clang-format \
+            llvm-dev \
+            libxml2-dev \
+            libffi-dev \
+            zlib1g-dev
 
       - name: Lint and format check
         shell: bash
-        env:
-          NIX_CONFIG: experimental-features = nix-command flakes
-        run: nix develop --command bash .github/scripts/run-lint-format.sh
+        run: bash .github/scripts/run-lint-format.sh

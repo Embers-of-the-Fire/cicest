@@ -31,6 +31,7 @@ Behavior by platform:
     - Sets up the Visual Studio developer command environment
     - Installs LLVM (`choco install llvm`)
     - Runs `.github/scripts/run-msvc-tests.ps1`
+    - If LLVM CMake metadata is unavailable, the script skips this optional run
   - Both Windows legs are non-blocking (`continue-on-error`) so CI remains green if Windows support is temporarily unavailable
 
 ## 2) `Lint and Format` workflow
@@ -39,8 +40,8 @@ File: `.github/workflows/lint-format.yml`
 
 Runs on `ubuntu-latest` only.
 
-- Uses Nix (`cachix/install-nix-action`)
-- Executes `nix develop --command bash .github/scripts/run-lint-format.sh`
+- Installs Linux build dependencies with `apt`
+- Executes `bash .github/scripts/run-lint-format.sh`
 - The script:
   - Configures and builds with CMake + Ninja (`-Werror` enabled)
   - Runs `clang-format --dry-run --Werror` against tracked C/C++ sources
@@ -60,11 +61,10 @@ Both workflows trigger on:
 NIX_CONFIG='experimental-features = nix-command flakes' bash .github/scripts/run-tests.sh
 ```
 
-### Lint + format (Linux, Nix shell)
+### Lint + format (Linux)
 
 ```bash
-NIX_CONFIG='experimental-features = nix-command flakes' \
-  nix develop --command bash .github/scripts/run-lint-format.sh
+bash .github/scripts/run-lint-format.sh
 ```
 
 ### Platform test script (manual use)
