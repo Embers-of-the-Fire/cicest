@@ -5,6 +5,7 @@ add_executable(cstc_inspect
 target_link_libraries(cstc_inspect
     PRIVATE
         cstc_ast
+        cstc_codegen
         cstc_lexer
         cstc_lir
         cstc_lir_builder
