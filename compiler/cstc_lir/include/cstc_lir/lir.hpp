@@ -246,19 +246,14 @@ struct LirStructInit {
 
 /// Enum variant reference rvalue (`EnumName::Variant`).
 struct LirEnumVariantRef {
-    cstc::symbol::Symbol enum_name    = cstc::symbol::kInvalidSymbol;
+    cstc::symbol::Symbol enum_name = cstc::symbol::kInvalidSymbol;
     cstc::symbol::Symbol variant_name = cstc::symbol::kInvalidSymbol;
 };
 
 /// The right-hand side of an `LirAssign` statement.
 struct LirRvalue {
-    using Node = std::variant<
-        LirUse,
-        LirBinaryOp,
-        LirUnaryOp,
-        LirCall,
-        LirStructInit,
-        LirEnumVariantRef>;
+    using Node =
+        std::variant<LirUse, LirBinaryOp, LirUnaryOp, LirCall, LirStructInit, LirEnumVariantRef>;
 
     Node node;
 };
@@ -427,8 +422,8 @@ struct LirEnumDecl {
 /// Root of a fully-lowered LIR program.
 struct LirProgram {
     std::vector<LirStructDecl> structs;
-    std::vector<LirEnumDecl>   enums;
-    std::vector<LirFnDef>      fns;
+    std::vector<LirEnumDecl> enums;
+    std::vector<LirFnDef> fns;
 };
 
 } // namespace cstc::lir

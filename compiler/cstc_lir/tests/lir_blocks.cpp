@@ -16,7 +16,7 @@ using namespace cstc::tyir;
 static void test_empty_block() {
     SymbolSession session;
     LirBasicBlock block;
-    block.id         = 0;
+    block.id = 0;
     block.terminator = LirTerminator{LirReturn{std::nullopt}, {}};
     assert(block.id == 0);
     assert(block.stmts.empty());
@@ -27,17 +27,18 @@ static void test_block_with_stmts() {
     SymbolSession session;
     LirBasicBlock block;
     block.id = 1;
-    block.stmts.push_back(LirStmt{
-        LirPlace::local(0),
-        LirRvalue{LirUse{LirOperand::from_const(LirConst::num(Symbol::intern("10")))}},
-        {}});
-    block.stmts.push_back(LirStmt{
-        LirPlace::local(1),
-        LirRvalue{LirBinaryOp{
-            cstc::ast::BinaryOp::Add,
-            LirOperand::copy(LirPlace::local(0)),
-            LirOperand::from_const(LirConst::num(Symbol::intern("5")))}},
-        {}});
+    block.stmts.push_back(
+        LirStmt{
+            LirPlace::local(0),
+            LirRvalue{LirUse{LirOperand::from_const(LirConst::num(Symbol::intern("10")))}},
+            {}});
+    block.stmts.push_back(
+        LirStmt{
+            LirPlace::local(1),
+            LirRvalue{LirBinaryOp{
+                cstc::ast::BinaryOp::Add, LirOperand::copy(LirPlace::local(0)),
+                LirOperand::from_const(LirConst::num(Symbol::intern("5")))}},
+            {}});
     block.terminator = LirTerminator{LirReturn{LirOperand::copy(LirPlace::local(1))}, {}};
     assert(block.stmts.size() == 2);
     assert(std::holds_alternative<LirReturn>(block.terminator.node));
@@ -46,7 +47,7 @@ static void test_block_with_stmts() {
 static void test_block_jump_terminator() {
     SymbolSession session;
     LirBasicBlock block;
-    block.id         = 0;
+    block.id = 0;
     block.terminator = LirTerminator{LirJump{1}, {}};
     const auto& jump = std::get<LirJump>(block.terminator.node);
     assert(jump.target == 1);
@@ -56,12 +57,15 @@ static void test_block_switch_bool_terminator() {
     SymbolSession session;
     LirBasicBlock block;
     block.id = 0;
-    block.stmts.push_back(LirStmt{
-        LirPlace::local(0),
-        LirRvalue{LirUse{LirOperand::from_const(LirConst::bool_(true))}},
-        {}});
+    block.stmts.push_back(
+        LirStmt{
+            LirPlace::local(0),
+            LirRvalue{LirUse{LirOperand::from_const(LirConst::bool_(true))}},
+            {}});
     block.terminator = LirTerminator{
-        LirSwitchBool{LirOperand::copy(LirPlace::local(0)), 1, 2}, {}};
+        LirSwitchBool{LirOperand::copy(LirPlace::local(0)), 1, 2},
+        {}
+    };
     assert(std::holds_alternative<LirSwitchBool>(block.terminator.node));
 }
 
@@ -70,7 +74,7 @@ static void test_block_id_matches_position() {
     // Simulate: builder always sets block.id == position in fn.blocks
     for (LirBlockId id = 0; id < 5; ++id) {
         LirBasicBlock block;
-        block.id         = id;
+        block.id = id;
         block.terminator = LirTerminator{LirUnreachable{}, {}};
         assert(block.id == id);
     }
@@ -81,15 +85,15 @@ static void test_block_id_matches_position() {
 static void test_fn_def_empty_body() {
     SymbolSession session;
     LirFnDef fn;
-    fn.name       = Symbol::intern("noop");
-    fn.return_ty  = ty::unit();
+    fn.name = Symbol::intern("noop");
+    fn.return_ty = ty::unit();
 
     // Locals: just a return slot (convention: local 0 is the return value slot)
     fn.locals.push_back({0, ty::unit(), std::nullopt});
 
     // Entry block with a void return
     LirBasicBlock entry;
-    entry.id         = kEntryBlock;
+    entry.id = kEntryBlock;
     entry.terminator = LirTerminator{LirReturn{std::nullopt}, {}};
     fn.blocks.push_back(std::move(entry));
 
@@ -104,7 +108,7 @@ static void test_fn_def_empty_body() {
 static void test_fn_def_with_params() {
     SymbolSession session;
     LirFnDef fn;
-    fn.name      = Symbol::intern("add");
+    fn.name = Symbol::intern("add");
     fn.return_ty = ty::num();
 
     // Params: x: num (%0), y: num (%1)
@@ -119,15 +123,14 @@ static void test_fn_def_with_params() {
     // Entry block: %2 = BinOp(+, copy(%0), copy(%1)); return copy(%2)
     LirBasicBlock entry;
     entry.id = kEntryBlock;
-    entry.stmts.push_back(LirStmt{
-        LirPlace::local(2),
-        LirRvalue{LirBinaryOp{
-            cstc::ast::BinaryOp::Add,
-            LirOperand::copy(LirPlace::local(0)),
-            LirOperand::copy(LirPlace::local(1))}},
-        {}});
-    entry.terminator =
-        LirTerminator{LirReturn{LirOperand::copy(LirPlace::local(2))}, {}};
+    entry.stmts.push_back(
+        LirStmt{
+            LirPlace::local(2),
+            LirRvalue{LirBinaryOp{
+                cstc::ast::BinaryOp::Add, LirOperand::copy(LirPlace::local(0)),
+                LirOperand::copy(LirPlace::local(1))}},
+            {}});
+    entry.terminator = LirTerminator{LirReturn{LirOperand::copy(LirPlace::local(2))}, {}};
     fn.blocks.push_back(std::move(entry));
 
     assert(fn.params.size() == 2);
@@ -148,36 +151,41 @@ static void test_fn_def_two_blocks() {
     // bb3: return copy(%1)
     SymbolSession session;
     LirFnDef fn;
-    fn.name      = Symbol::intern("choose");
+    fn.name = Symbol::intern("choose");
     fn.return_ty = ty::num();
 
-    fn.locals.push_back({0, ty::bool_(), Symbol::intern("b")});  // param
-    fn.locals.push_back({1, ty::num(),  std::nullopt});           // result temp
+    fn.locals.push_back({0, ty::bool_(), Symbol::intern("b")}); // param
+    fn.locals.push_back({1, ty::num(), std::nullopt});          // result temp
 
     fn.params.push_back({0, Symbol::intern("b"), ty::bool_(), {}});
 
     LirBasicBlock bb0;
-    bb0.id         = 0;
-    bb0.terminator = LirTerminator{LirSwitchBool{LirOperand::copy(LirPlace::local(0)), 1, 2}, {}};
+    bb0.id = 0;
+    bb0.terminator = LirTerminator{
+        LirSwitchBool{LirOperand::copy(LirPlace::local(0)), 1, 2},
+        {}
+    };
 
     LirBasicBlock bb1;
     bb1.id = 1;
-    bb1.stmts.push_back(LirStmt{
-        LirPlace::local(1),
-        LirRvalue{LirUse{LirOperand::from_const(LirConst::num(Symbol::intern("1")))}},
-        {}});
+    bb1.stmts.push_back(
+        LirStmt{
+            LirPlace::local(1),
+            LirRvalue{LirUse{LirOperand::from_const(LirConst::num(Symbol::intern("1")))}},
+            {}});
     bb1.terminator = LirTerminator{LirJump{3}, {}};
 
     LirBasicBlock bb2;
     bb2.id = 2;
-    bb2.stmts.push_back(LirStmt{
-        LirPlace::local(1),
-        LirRvalue{LirUse{LirOperand::from_const(LirConst::num(Symbol::intern("0")))}},
-        {}});
+    bb2.stmts.push_back(
+        LirStmt{
+            LirPlace::local(1),
+            LirRvalue{LirUse{LirOperand::from_const(LirConst::num(Symbol::intern("0")))}},
+            {}});
     bb2.terminator = LirTerminator{LirJump{3}, {}};
 
     LirBasicBlock bb3;
-    bb3.id         = 3;
+    bb3.id = 3;
     bb3.terminator = LirTerminator{LirReturn{LirOperand::copy(LirPlace::local(1))}, {}};
 
     fn.blocks.push_back(std::move(bb0));
@@ -197,7 +205,7 @@ static void test_program_with_struct() {
     LirProgram prog;
 
     LirStructDecl s;
-    s.name   = Symbol::intern("Point");
+    s.name = Symbol::intern("Point");
     s.is_zst = false;
     s.fields.push_back({Symbol::intern("x"), ty::num(), {}});
     s.fields.push_back({Symbol::intern("y"), ty::num(), {}});
@@ -216,8 +224,8 @@ static void test_program_with_enum() {
     e.name = Symbol::intern("Dir");
     e.variants.push_back({Symbol::intern("North"), std::nullopt, {}});
     e.variants.push_back({Symbol::intern("South"), std::nullopt, {}});
-    e.variants.push_back({Symbol::intern("East"),  std::nullopt, {}});
-    e.variants.push_back({Symbol::intern("West"),  std::nullopt, {}});
+    e.variants.push_back({Symbol::intern("East"), std::nullopt, {}});
+    e.variants.push_back({Symbol::intern("West"), std::nullopt, {}});
     prog.enums.push_back(std::move(e));
 
     assert(prog.enums.size() == 1);
@@ -229,7 +237,7 @@ static void test_program_with_zst_struct() {
     LirProgram prog;
 
     LirStructDecl s;
-    s.name   = Symbol::intern("Marker");
+    s.name = Symbol::intern("Marker");
     s.is_zst = true;
     prog.structs.push_back(std::move(s));
 

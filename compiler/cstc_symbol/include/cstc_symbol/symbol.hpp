@@ -93,25 +93,25 @@ struct SymbolHash {
 /// pre-populates keywords in a deterministic order before any user text is
 /// interned, guaranteeing the indices below are stable.
 namespace kw {
-    inline constexpr Symbol Struct   {1};
-    inline constexpr Symbol Enum     {2};
-    inline constexpr Symbol Fn       {3};
-    inline constexpr Symbol Let      {4};
-    inline constexpr Symbol If       {5};
-    inline constexpr Symbol Else     {6};
-    inline constexpr Symbol For      {7};
-    inline constexpr Symbol While    {8};
-    inline constexpr Symbol Loop     {9};
-    inline constexpr Symbol Break    {10};
-    inline constexpr Symbol Continue {11};
-    inline constexpr Symbol Return_  {12};
-    inline constexpr Symbol True_    {13};
-    inline constexpr Symbol False_   {14};
-    inline constexpr Symbol Unit     {15};
-    inline constexpr Symbol Num      {16};
-    inline constexpr Symbol Str      {17};
-    inline constexpr Symbol Bool     {18};
-    inline constexpr Symbol UnitLit  {19}; // "()"
+inline constexpr Symbol Struct{1};
+inline constexpr Symbol Enum{2};
+inline constexpr Symbol Fn{3};
+inline constexpr Symbol Let{4};
+inline constexpr Symbol If{5};
+inline constexpr Symbol Else{6};
+inline constexpr Symbol For{7};
+inline constexpr Symbol While{8};
+inline constexpr Symbol Loop{9};
+inline constexpr Symbol Break{10};
+inline constexpr Symbol Continue{11};
+inline constexpr Symbol Return_{12};
+inline constexpr Symbol True_{13};
+inline constexpr Symbol False_{14};
+inline constexpr Symbol Unit{15};
+inline constexpr Symbol Num{16};
+inline constexpr Symbol Str{17};
+inline constexpr Symbol Bool{18};
+inline constexpr Symbol UnitLit{19}; // "()"
 } // namespace kw
 
 /// RAII guard that initializes a fresh global interner for the current thread.
@@ -121,7 +121,8 @@ namespace kw {
 /// All `Symbol` operations are undefined outside the lifetime of a session.
 class SymbolSession {
 public:
-    SymbolSession() : interner_(std::make_unique<detail::SymbolTable>()) {
+    SymbolSession()
+        : interner_(std::make_unique<detail::SymbolTable>()) {
         // Pre-intern keywords in a fixed order so that the kw:: constants,
         // which are plain compile-time index values, remain stable across every
         // session.  The order here MUST match the index assignments in kw::.

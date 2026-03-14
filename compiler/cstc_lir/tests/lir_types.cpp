@@ -12,10 +12,10 @@ using namespace cstc::tyir;
 
 static void test_primitive_types() {
     SymbolSession session;
-    assert((ty::unit()  == Ty{TyKind::Unit,  kInvalidSymbol}));
-    assert((ty::num()   == Ty{TyKind::Num,   kInvalidSymbol}));
-    assert((ty::str()   == Ty{TyKind::Str,   kInvalidSymbol}));
-    assert((ty::bool_() == Ty{TyKind::Bool,  kInvalidSymbol}));
+    assert((ty::unit() == Ty{TyKind::Unit, kInvalidSymbol}));
+    assert((ty::num() == Ty{TyKind::Num, kInvalidSymbol}));
+    assert((ty::str() == Ty{TyKind::Str, kInvalidSymbol}));
+    assert((ty::bool_() == Ty{TyKind::Bool, kInvalidSymbol}));
     assert((ty::never() == Ty{TyKind::Never, kInvalidSymbol}));
 }
 
@@ -50,9 +50,9 @@ static void test_type_predicates() {
 
 static void test_type_display() {
     SymbolSession session;
-    assert(ty::unit().display()  == "Unit");
-    assert(ty::num().display()   == "num");
-    assert(ty::str().display()   == "str");
+    assert(ty::unit().display() == "Unit");
+    assert(ty::num().display() == "num");
+    assert(ty::str().display() == "str");
     assert(ty::bool_().display() == "bool");
     assert(ty::never().display() == "!");
     assert(ty::named(Symbol::intern("MyType")).display() == "MyType");
@@ -60,12 +60,12 @@ static void test_type_display() {
 
 static void test_const_ty_consistency() {
     SymbolSession session;
-    const Symbol s42  = Symbol::intern("42");
+    const Symbol s42 = Symbol::intern("42");
     const Symbol shel = Symbol::intern("hello");
-    assert(LirConst::num(s42).ty()   == ty::num());
-    assert(LirConst::str(shel).ty()  == ty::str());
+    assert(LirConst::num(s42).ty() == ty::num());
+    assert(LirConst::str(shel).ty() == ty::str());
     assert(LirConst::bool_(true).ty() == ty::bool_());
-    assert(LirConst::unit().ty()     == ty::unit());
+    assert(LirConst::unit().ty() == ty::unit());
 }
 
 static void test_local_decl_various_types() {

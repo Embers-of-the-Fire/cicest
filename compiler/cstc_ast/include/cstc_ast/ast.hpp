@@ -8,8 +8,8 @@
 #include <variant>
 #include <vector>
 
-#include <cstc_symbol/symbol.hpp>
 #include <cstc_span/span.hpp>
+#include <cstc_symbol/symbol.hpp>
 
 namespace cstc::ast {
 

@@ -26,9 +26,8 @@ namespace {
 using cstc::lexer::Token;
 using cstc::lexer::TokenKind;
 
-[[nodiscard]] cstc::span::SourceSpan merge_spans(
-    const cstc::span::SourceSpan& lhs,
-    const cstc::span::SourceSpan& rhs) {
+[[nodiscard]] cstc::span::SourceSpan
+    merge_spans(const cstc::span::SourceSpan& lhs, const cstc::span::SourceSpan& rhs) {
     return cstc::span::merge(lhs, rhs);
 }
 
@@ -43,10 +42,11 @@ public:
         : tokens_(input_tokens.begin(), input_tokens.end()) {
         if (tokens_.empty() || tokens_.back().kind != TokenKind::EndOfFile) {
             const std::size_t position = tokens_.empty() ? 0 : tokens_.back().span.end;
-            tokens_.push_back(Token{
-                .kind = TokenKind::EndOfFile,
-                .span = {.start = position, .end = position},
-                .symbol = cstc::symbol::kInvalidSymbol,
+            tokens_.push_back(
+                Token{
+                    .kind = TokenKind::EndOfFile,
+                    .span = {.start = position, .end = position},
+                    .symbol = cstc::symbol::kInvalidSymbol,
             });
         }
     }
@@ -144,10 +144,10 @@ private:
     }
 
     [[nodiscard]] std::expected<Token, ParseError>
-    consume(TokenKind kind, std::string_view message) {
+        consume(TokenKind kind, std::string_view message) {
         if (!check(kind)) {
-            return std::unexpected(
-                make_error_here(std::string(message) + ", got `" + std::string(token_text(peek())) + "`"));
+            return std::unexpected(make_error_here(
+                std::string(message) + ", got `" + std::string(token_text(peek())) + "`"));
         }
         return advance();
     }
@@ -184,7 +184,7 @@ private:
     }
 
     [[nodiscard]] std::expected<ast::StructDecl, ParseError>
-    parse_struct_decl(const Token& struct_keyword) {
+        parse_struct_decl(const Token& struct_keyword) {
         auto name_token = consume_identifier("expected struct name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -212,10 +212,8 @@ private:
 
                 if (!seen_fields.insert(field_name->symbol).second) {
                     const std::string field_name_text = std::string(token_text(*field_name));
-                    return std::unexpected(
-                        make_error_token(
-                            *field_name,
-                            "duplicate struct field `" + field_name_text + "`"));
+                    return std::unexpected(make_error_token(
+                        *field_name, "duplicate struct field `" + field_name_text + "`"));
                 }
 
                 auto colon = consume(TokenKind::Colon, "expected `:` after field name");
@@ -226,11 +224,12 @@ private:
                 if (!field_type.has_value())
                     return std::unexpected(field_type.error());
 
-                decl.fields.push_back(ast::FieldDecl{
-                    .name = field_name->symbol,
-                    .type = std::move(*field_type),
-                    .span = merge_spans(field_name->span, previous().span),
-                });
+                decl.fields.push_back(
+                    ast::FieldDecl{
+                        .name = field_name->symbol,
+                        .type = std::move(*field_type),
+                        .span = merge_spans(field_name->span, previous().span),
+                    });
 
                 if (match(TokenKind::Comma)) {
                     if (check(TokenKind::RBrace))
@@ -249,7 +248,8 @@ private:
         return decl;
     }
 
-    [[nodiscard]] std::expected<ast::EnumDecl, ParseError> parse_enum_decl(const Token& enum_keyword) {
+    [[nodiscard]] std::expected<ast::EnumDecl, ParseError>
+        parse_enum_decl(const Token& enum_keyword) {
         auto name_token = consume_identifier("expected enum name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -271,10 +271,8 @@ private:
 
                 if (!seen_variants.insert(variant_name->symbol).second) {
                     const std::string variant_name_text = std::string(token_text(*variant_name));
-                    return std::unexpected(
-                        make_error_token(
-                            *variant_name,
-                            "duplicate enum variant `" + variant_name_text + "`"));
+                    return std::unexpected(make_error_token(
+                        *variant_name, "duplicate enum variant `" + variant_name_text + "`"));
                 }
 
                 ast::EnumVariant variant;
@@ -282,7 +280,8 @@ private:
                 variant.span = variant_name->span;
 
                 if (match(TokenKind::Assign)) {
-                    auto number_token = consume(TokenKind::Number, "expected numeric discriminant after `=`");
+                    auto number_token =
+                        consume(TokenKind::Number, "expected numeric discriminant after `=`");
                     if (!number_token.has_value())
                         return std::unexpected(number_token.error());
                     variant.discriminant = number_token->symbol;
@@ -328,10 +327,8 @@ private:
 
                 if (!seen_params.insert(param_name->symbol).second) {
                     const std::string param_name_text = std::string(token_text(*param_name));
-                    return std::unexpected(
-                        make_error_token(
-                            *param_name,
-                            "duplicate parameter `" + param_name_text + "`"));
+                    return std::unexpected(make_error_token(
+                        *param_name, "duplicate parameter `" + param_name_text + "`"));
                 }
 
                 auto colon = consume(TokenKind::Colon, "expected `:` after parameter name");
@@ -342,11 +339,12 @@ private:
                 if (!param_type.has_value())
                     return std::unexpected(param_type.error());
 
-                params.push_back(ast::Param{
-                    .name = param_name->symbol,
-                    .type = std::move(*param_type),
-                    .span = merge_spans(param_name->span, previous().span),
-                });
+                params.push_back(
+                    ast::Param{
+                        .name = param_name->symbol,
+                        .type = std::move(*param_type),
+                        .span = merge_spans(param_name->span, previous().span),
+                    });
 
                 if (match(TokenKind::Comma)) {
                     if (check(TokenKind::RParen))
@@ -417,7 +415,8 @@ private:
         return pattern;
     }
 
-    [[nodiscard]] std::expected<ast::LetStmt, ParseError> parse_let_stmt_no_semicolon(const Token& let_kw) {
+    [[nodiscard]] std::expected<ast::LetStmt, ParseError>
+        parse_let_stmt_no_semicolon(const Token& let_kw) {
         auto pattern = parse_let_pattern();
         if (!pattern.has_value())
             return std::unexpected(pattern.error());
@@ -476,18 +475,20 @@ private:
                 return std::unexpected(expr.error());
 
             if (match(TokenKind::Semicolon)) {
-                block->statements.emplace_back(ast::ExprStmt{
-                    .expr = *expr,
-                    .span = merge_spans((*expr)->span, previous().span),
-                });
+                block->statements.emplace_back(
+                    ast::ExprStmt{
+                        .expr = *expr,
+                        .span = merge_spans((*expr)->span, previous().span),
+                    });
                 continue;
             }
 
             if (is_semicolon_optional_stmt_expr(*expr) && !check(TokenKind::RBrace)) {
-                block->statements.emplace_back(ast::ExprStmt{
-                    .expr = *expr,
-                    .span = (*expr)->span,
-                });
+                block->statements.emplace_back(
+                    ast::ExprStmt{
+                        .expr = *expr,
+                        .span = (*expr)->span,
+                    });
                 continue;
             }
 
@@ -585,9 +586,8 @@ private:
         if (!lhs.has_value())
             return std::unexpected(lhs.error());
 
-        while (
-            check(TokenKind::Lt) || check(TokenKind::LtEq) || check(TokenKind::Gt)
-            || check(TokenKind::GtEq)) {
+        while (check(TokenKind::Lt) || check(TokenKind::LtEq) || check(TokenKind::Gt)
+               || check(TokenKind::GtEq)) {
             const Token op = advance();
             auto rhs = parse_additive();
             if (!rhs.has_value())
@@ -595,20 +595,11 @@ private:
 
             ast::BinaryOp ast_op = ast::BinaryOp::Lt;
             switch (op.kind) {
-                case TokenKind::Lt:
-                    ast_op = ast::BinaryOp::Lt;
-                    break;
-                case TokenKind::LtEq:
-                    ast_op = ast::BinaryOp::Le;
-                    break;
-                case TokenKind::Gt:
-                    ast_op = ast::BinaryOp::Gt;
-                    break;
-                case TokenKind::GtEq:
-                    ast_op = ast::BinaryOp::Ge;
-                    break;
-                default:
-                    break;
+            case TokenKind::Lt: ast_op = ast::BinaryOp::Lt; break;
+            case TokenKind::LtEq: ast_op = ast::BinaryOp::Le; break;
+            case TokenKind::Gt: ast_op = ast::BinaryOp::Gt; break;
+            case TokenKind::GtEq: ast_op = ast::BinaryOp::Ge; break;
+            default: break;
             }
 
             *lhs = ast::make_expr(
@@ -654,17 +645,10 @@ private:
 
             ast::BinaryOp ast_op = ast::BinaryOp::Mul;
             switch (op.kind) {
-                case TokenKind::Star:
-                    ast_op = ast::BinaryOp::Mul;
-                    break;
-                case TokenKind::Slash:
-                    ast_op = ast::BinaryOp::Div;
-                    break;
-                case TokenKind::Percent:
-                    ast_op = ast::BinaryOp::Mod;
-                    break;
-                default:
-                    break;
+            case TokenKind::Star: ast_op = ast::BinaryOp::Mul; break;
+            case TokenKind::Slash: ast_op = ast::BinaryOp::Div; break;
+            case TokenKind::Percent: ast_op = ast::BinaryOp::Mod; break;
+            default: break;
             }
 
             *lhs = ast::make_expr(
@@ -785,12 +769,11 @@ private:
         }
 
         return ast::make_expr(
-            merge_spans(if_kw.span, end_span),
-            ast::IfExpr{
-                .condition = *condition,
-                .then_block = *then_block,
-                .else_branch = std::move(else_branch),
-            });
+            merge_spans(if_kw.span, end_span), ast::IfExpr{
+                                                   .condition = *condition,
+                                                   .then_block = *then_block,
+                                                   .else_branch = std::move(else_branch),
+                                               });
     }
 
     [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_for_expr(const Token& for_kw) {
@@ -860,43 +843,39 @@ private:
         if (match(TokenKind::Number)) {
             const Token token = previous();
             return ast::make_expr(
-                token.span,
-                ast::LiteralExpr{
-                    .kind = ast::LiteralExpr::Kind::Num,
-                    .symbol = token.symbol,
-                });
+                token.span, ast::LiteralExpr{
+                                .kind = ast::LiteralExpr::Kind::Num,
+                                .symbol = token.symbol,
+                            });
         }
 
         if (match(TokenKind::String)) {
             const Token token = previous();
             return ast::make_expr(
-                token.span,
-                ast::LiteralExpr{
-                    .kind = ast::LiteralExpr::Kind::Str,
-                    .symbol = token.symbol,
-                });
+                token.span, ast::LiteralExpr{
+                                .kind = ast::LiteralExpr::Kind::Str,
+                                .symbol = token.symbol,
+                            });
         }
 
         if (match(TokenKind::KwTrue)) {
             const Token token = previous();
             return ast::make_expr(
-                token.span,
-                ast::LiteralExpr{
-                    .kind = ast::LiteralExpr::Kind::Bool,
-                    .symbol = token.symbol,
-                    .bool_value = true,
-                });
+                token.span, ast::LiteralExpr{
+                                .kind = ast::LiteralExpr::Kind::Bool,
+                                .symbol = token.symbol,
+                                .bool_value = true,
+                            });
         }
 
         if (match(TokenKind::KwFalse)) {
             const Token token = previous();
             return ast::make_expr(
-                token.span,
-                ast::LiteralExpr{
-                    .kind = ast::LiteralExpr::Kind::Bool,
-                    .symbol = token.symbol,
-                    .bool_value = false,
-                });
+                token.span, ast::LiteralExpr{
+                                .kind = ast::LiteralExpr::Kind::Bool,
+                                .symbol = token.symbol,
+                                .bool_value = false,
+                            });
         }
 
         if (match(TokenKind::LParen)) {
@@ -914,7 +893,8 @@ private:
             if (!inner.has_value())
                 return std::unexpected(inner.error());
 
-            auto close = consume(TokenKind::RParen, "expected `)` to close parenthesized expression");
+            auto close =
+                consume(TokenKind::RParen, "expected `)` to close parenthesized expression");
             if (!close.has_value())
                 return std::unexpected(close.error());
 
@@ -937,8 +917,7 @@ private:
             if (!body.has_value())
                 return std::unexpected(body.error());
             return ast::make_expr(
-                merge_spans(loop_kw.span, (*body)->span),
-                ast::LoopExpr{.body = *body});
+                merge_spans(loop_kw.span, (*body)->span), ast::LoopExpr{.body = *body});
         }
 
         if (match(TokenKind::KwWhile)) {
@@ -970,9 +949,8 @@ private:
                 value = *expr;
             }
 
-            const cstc::span::SourceSpan span = value.has_value()
-                ? merge_spans(break_kw.span, (*value)->span)
-                : break_kw.span;
+            const cstc::span::SourceSpan span =
+                value.has_value() ? merge_spans(break_kw.span, (*value)->span) : break_kw.span;
             return ast::make_expr(span, ast::BreakExpr{.value = std::move(value)});
         }
 
@@ -992,9 +970,8 @@ private:
                 value = *expr;
             }
 
-            const cstc::span::SourceSpan span = value.has_value()
-                ? merge_spans(return_kw.span, (*value)->span)
-                : return_kw.span;
+            const cstc::span::SourceSpan span =
+                value.has_value() ? merge_spans(return_kw.span, (*value)->span) : return_kw.span;
             return ast::make_expr(span, ast::ReturnExpr{.value = std::move(value)});
         }
 
@@ -1033,11 +1010,12 @@ private:
                         if (!field_expr.has_value())
                             return std::unexpected(field_expr.error());
 
-                        init_expr.fields.push_back(ast::StructInitField{
-                            .name = field_name->symbol,
-                            .value = *field_expr,
-                            .span = merge_spans(field_name->span, (*field_expr)->span),
-                        });
+                        init_expr.fields.push_back(
+                            ast::StructInitField{
+                                .name = field_name->symbol,
+                                .value = *field_expr,
+                                .span = merge_spans(field_name->span, (*field_expr)->span),
+                            });
 
                         if (match(TokenKind::Comma)) {
                             if (check(TokenKind::RBrace))
@@ -1052,12 +1030,12 @@ private:
                 if (!close.has_value())
                     return std::unexpected(close.error());
 
-                return ast::make_expr(merge_spans(identifier.span, close->span), std::move(init_expr));
+                return ast::make_expr(
+                    merge_spans(identifier.span, close->span), std::move(init_expr));
             }
 
             return ast::make_expr(
-                identifier.span,
-                ast::PathExpr{.head = identifier.symbol, .tail = std::nullopt});
+                identifier.span, ast::PathExpr{.head = identifier.symbol, .tail = std::nullopt});
         }
 
         return std::unexpected(make_error_here("expected expression"));
@@ -1074,8 +1052,7 @@ private:
 
 } // namespace
 
-inline std::expected<ast::Program, ParseError>
-parse_tokens(std::span<const lexer::Token> tokens) {
+inline std::expected<ast::Program, ParseError> parse_tokens(std::span<const lexer::Token> tokens) {
     std::vector<lexer::Token> filtered;
     filtered.reserve(tokens.size());
 
@@ -1089,13 +1066,12 @@ parse_tokens(std::span<const lexer::Token> tokens) {
 }
 
 inline std::expected<ast::Program, ParseError>
-parse_source_at(std::string_view source, cstc::span::BytePos base_pos) {
+    parse_source_at(std::string_view source, cstc::span::BytePos base_pos) {
     const std::vector<lexer::Token> tokens = lexer::lex_source_at(source, base_pos, false);
     return parse_tokens(tokens);
 }
 
-inline std::expected<ast::Program, ParseError>
-parse_source(std::string_view source) {
+inline std::expected<ast::Program, ParseError> parse_source(std::string_view source) {
     return parse_source_at(source, 0);
 }
 

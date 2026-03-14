@@ -42,8 +42,8 @@ static void test_num_literal_return() {
     // A function returning a literal constant should have a `return 42`
     // terminator (constant embedded in the return operand).
     const LirProgram prog = must_lower("fn f() -> num { 42 }");
-    const LirFnDef& fn    = first_fn(prog);
-    const auto& ret       = std::get<LirReturn>(fn.blocks[0].terminator.node);
+    const LirFnDef& fn = first_fn(prog);
+    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
     assert(ret.value.has_value());
     const LirOperand& op = *ret.value;
     assert(op.kind == LirOperand::Kind::Const);
@@ -55,8 +55,8 @@ static void test_num_literal_return() {
 
 static void test_str_literal_return() {
     const LirProgram prog = must_lower("fn f() -> str { \"hello\" }");
-    const LirFnDef& fn    = first_fn(prog);
-    const auto& ret       = std::get<LirReturn>(fn.blocks[0].terminator.node);
+    const LirFnDef& fn = first_fn(prog);
+    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
     assert(ret.value.has_value());
     assert(ret.value->kind == LirOperand::Kind::Const);
     assert(ret.value->constant.kind == LirConst::Kind::Str);
@@ -68,8 +68,8 @@ static void test_str_literal_return() {
 
 static void test_bool_literal_true() {
     const LirProgram prog = must_lower("fn f() -> bool { true }");
-    const LirFnDef& fn    = first_fn(prog);
-    const auto& ret       = std::get<LirReturn>(fn.blocks[0].terminator.node);
+    const LirFnDef& fn = first_fn(prog);
+    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
     assert(ret.value.has_value());
     assert(ret.value->constant.kind == LirConst::Kind::Bool);
     assert(ret.value->constant.bool_value == true);
@@ -77,8 +77,8 @@ static void test_bool_literal_true() {
 
 static void test_bool_literal_false() {
     const LirProgram prog = must_lower("fn f() -> bool { false }");
-    const LirFnDef& fn    = first_fn(prog);
-    const auto& ret       = std::get<LirReturn>(fn.blocks[0].terminator.node);
+    const LirFnDef& fn = first_fn(prog);
+    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
     assert(ret.value.has_value());
     assert(ret.value->constant.bool_value == false);
 }
@@ -89,10 +89,10 @@ static void test_local_ref_param() {
     // fn id(x: num) -> num { x }
     // The return value should be copy(_%0) where %0 is the param.
     const LirProgram prog = must_lower("fn id(x: num) -> num { x }");
-    const LirFnDef& fn    = first_fn(prog);
+    const LirFnDef& fn = first_fn(prog);
     assert(fn.params.size() == 1);
     const LirLocalId param_id = fn.params[0].local;
-    const auto& ret           = std::get<LirReturn>(fn.blocks[0].terminator.node);
+    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
     assert(ret.value.has_value());
     assert(ret.value->kind == LirOperand::Kind::Copy);
     assert(ret.value->place == LirPlace::local(param_id));
@@ -182,7 +182,7 @@ static void test_unary_not() {
 static void test_let_stmt() {
     // After lowering, x is allocated a local; the tail returns it.
     const LirProgram prog = must_lower("fn f() -> num { let x = 10; x }");
-    const LirFnDef& fn    = first_fn(prog);
+    const LirFnDef& fn = first_fn(prog);
     // There must be at least one assignment statement in the entry block.
     assert(!fn.blocks[0].stmts.empty());
     assert(output_contains(prog, "10"));
@@ -240,11 +240,10 @@ static void test_enum_variant_ref() {
 
 static void test_nested_binary() {
     // (a + b) * (a - b)  — needs two temporaries
-    const LirProgram prog = must_lower(
-        "fn f(a: num, b: num) -> num { (a + b) * (a - b) }");
+    const LirProgram prog = must_lower("fn f(a: num, b: num) -> num { (a + b) * (a - b) }");
     const LirFnDef& fn = first_fn(prog);
     // Should have at least 2 temporaries (for the two sub-expressions).
-    assert(fn.locals.size() >= 4);  // 2 params + at least 2 temps
+    assert(fn.locals.size() >= 4); // 2 params + at least 2 temps
 }
 
 int main() {

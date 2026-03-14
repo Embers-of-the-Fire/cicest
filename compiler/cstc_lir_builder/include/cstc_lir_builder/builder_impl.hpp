@@ -33,8 +33,8 @@ public:
     // ─── Locals ──────────────────────────────────────────────────────────────
 
     /// Allocates a new local slot of the given type.
-    lir::LirLocalId alloc_local(cstc::tyir::Ty ty,
-                                 std::optional<cstc::symbol::Symbol> debug_name = std::nullopt) {
+    lir::LirLocalId alloc_local(
+        cstc::tyir::Ty ty, std::optional<cstc::symbol::Symbol> debug_name = std::nullopt) {
         const lir::LirLocalId id = static_cast<lir::LirLocalId>(locals_.size());
         locals_.push_back({id, ty, debug_name});
         return id;
@@ -57,7 +57,7 @@ public:
     /// will append to it).
     void set_current_block(lir::LirBlockId id) {
         assert(id < blocks_.size());
-        current_block_    = id;
+        current_block_ = id;
         block_terminated_ = false;
     }
 
@@ -116,8 +116,8 @@ public:
         lir::LirLocalId break_value_local;
     };
 
-    void push_loop(lir::LirBlockId cont, lir::LirBlockId brk,
-                   lir::LirLocalId val_local = lir::kInvalidLocal) {
+    void push_loop(
+        lir::LirBlockId cont, lir::LirBlockId brk, lir::LirLocalId val_local = lir::kInvalidLocal) {
         loop_stack_.push_back({cont, brk, val_local});
     }
     void pop_loop() {
@@ -138,10 +138,10 @@ public:
     }
 
 private:
-    std::vector<lir::LirLocalDecl>  locals_;
+    std::vector<lir::LirLocalDecl> locals_;
     std::vector<lir::LirBasicBlock> blocks_;
-    lir::LirBlockId                 current_block_    = lir::kInvalidBlock;
-    bool                            block_terminated_ = false;
+    lir::LirBlockId current_block_ = lir::kInvalidBlock;
+    bool block_terminated_ = false;
 
     using ScopeFrame =
         std::unordered_map<cstc::symbol::Symbol, lir::LirLocalId, cstc::symbol::SymbolHash>;
@@ -151,10 +151,8 @@ private:
 
 // ─── Forward declarations ─────────────────────────────────────────────────────
 
-[[nodiscard]] lir::LirOperand lower_expr(FnBuilder& builder,
-                                          const tyir::TyExprPtr& expr);
-[[nodiscard]] lir::LirOperand lower_block(FnBuilder& builder,
-                                           const tyir::TyBlockPtr& block);
+[[nodiscard]] lir::LirOperand lower_expr(FnBuilder& builder, const tyir::TyExprPtr& expr);
+[[nodiscard]] lir::LirOperand lower_block(FnBuilder& builder, const tyir::TyBlockPtr& block);
 
 // ─── Expression lowering ──────────────────────────────────────────────────────
 
@@ -163,8 +161,7 @@ private:
 ///
 /// For constants and local references this is free (no instruction emitted).
 /// For compound expressions a fresh local is allocated to hold the result.
-[[nodiscard]] lir::LirOperand lower_expr(FnBuilder& builder,
-                                          const tyir::TyExprPtr& expr) {
+[[nodiscard]] lir::LirOperand lower_expr(FnBuilder& builder, const tyir::TyExprPtr& expr) {
     return std::visit(
         [&](const auto& node) -> lir::LirOperand {
             using N = std::decay_t<decltype(node)>;
@@ -173,18 +170,10 @@ private:
             if constexpr (std::is_same_v<N, tyir::TyLiteral>) {
                 lir::LirConst c{};
                 switch (node.kind) {
-                    case tyir::TyLiteral::Kind::Num:
-                        c = lir::LirConst::num(node.symbol);
-                        break;
-                    case tyir::TyLiteral::Kind::Str:
-                        c = lir::LirConst::str(node.symbol);
-                        break;
-                    case tyir::TyLiteral::Kind::Bool:
-                        c = lir::LirConst::bool_(node.bool_value);
-                        break;
-                    case tyir::TyLiteral::Kind::Unit:
-                        c = lir::LirConst::unit();
-                        break;
+                case tyir::TyLiteral::Kind::Num: c = lir::LirConst::num(node.symbol); break;
+                case tyir::TyLiteral::Kind::Str: c = lir::LirConst::str(node.symbol); break;
+                case tyir::TyLiteral::Kind::Bool: c = lir::LirConst::bool_(node.bool_value); break;
+                case tyir::TyLiteral::Kind::Unit: c = lir::LirConst::unit(); break;
                 }
                 return lir::LirOperand::from_const(c);
             }
@@ -198,7 +187,9 @@ private:
             // ── Enum variant reference ────────────────────────────────────────
             else if constexpr (std::is_same_v<N, tyir::EnumVariantRef>) {
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
-                const lir::LirRvalue rhs{lir::LirEnumVariantRef{node.enum_name, node.variant_name}};
+                const lir::LirRvalue rhs{
+                    lir::LirEnumVariantRef{node.enum_name, node.variant_name}
+                };
                 builder.emit_stmt(lir::LirStmt{lir::LirPlace::local(tmp), rhs, expr->span});
                 return lir::LirOperand::copy(lir::LirPlace::local(tmp));
             }
@@ -213,19 +204,19 @@ private:
                 }
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
                 builder.emit_stmt(
-                    lir::LirStmt{lir::LirPlace::local(tmp), lir::LirRvalue{std::move(si)},
-                                 expr->span});
+                    lir::LirStmt{
+                        lir::LirPlace::local(tmp), lir::LirRvalue{std::move(si)}, expr->span});
                 return lir::LirOperand::copy(lir::LirPlace::local(tmp));
             }
 
             // ── Unary operation ───────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, tyir::TyUnary>) {
                 const lir::LirOperand operand = lower_expr(builder, node.rhs);
-                const lir::LirLocalId tmp     = builder.alloc_local(expr->ty);
-                builder.emit_stmt(lir::LirStmt{
-                    lir::LirPlace::local(tmp),
-                    lir::LirRvalue{lir::LirUnaryOp{node.op, operand}},
-                    expr->span});
+                const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
+                builder.emit_stmt(
+                    lir::LirStmt{
+                        lir::LirPlace::local(tmp),
+                        lir::LirRvalue{lir::LirUnaryOp{node.op, operand}}, expr->span});
                 return lir::LirOperand::copy(lir::LirPlace::local(tmp));
             }
 
@@ -234,10 +225,10 @@ private:
                 const lir::LirOperand lhs = lower_expr(builder, node.lhs);
                 const lir::LirOperand rhs = lower_expr(builder, node.rhs);
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
-                builder.emit_stmt(lir::LirStmt{
-                    lir::LirPlace::local(tmp),
-                    lir::LirRvalue{lir::LirBinaryOp{node.op, lhs, rhs}},
-                    expr->span});
+                builder.emit_stmt(
+                    lir::LirStmt{
+                        lir::LirPlace::local(tmp),
+                        lir::LirRvalue{lir::LirBinaryOp{node.op, lhs, rhs}}, expr->span});
                 return lir::LirOperand::copy(lir::LirPlace::local(tmp));
             }
 
@@ -248,23 +239,24 @@ private:
                 // If the base is already a Copy(local), project directly.
                 // Otherwise materialize it first.
                 lir::LirLocalId base_local = lir::kInvalidLocal;
-                if (base_op.kind == lir::LirOperand::Kind::Copy &&
-                    base_op.place.kind == lir::LirPlace::Kind::Local) {
+                if (base_op.kind == lir::LirOperand::Kind::Copy
+                    && base_op.place.kind == lir::LirPlace::Kind::Local) {
                     base_local = base_op.place.local_id;
                 } else {
                     base_local = builder.alloc_local(node.base->ty);
-                    builder.emit_stmt(lir::LirStmt{
-                        lir::LirPlace::local(base_local),
-                        lir::LirRvalue{lir::LirUse{base_op}},
-                        expr->span});
+                    builder.emit_stmt(
+                        lir::LirStmt{
+                            lir::LirPlace::local(base_local), lir::LirRvalue{lir::LirUse{base_op}},
+                            expr->span});
                 }
                 // Read the field into a fresh temporary.
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
-                builder.emit_stmt(lir::LirStmt{
-                    lir::LirPlace::local(tmp),
-                    lir::LirRvalue{lir::LirUse{
-                        lir::LirOperand::copy(lir::LirPlace::field(base_local, node.field))}},
-                    expr->span});
+                builder.emit_stmt(
+                    lir::LirStmt{
+                        lir::LirPlace::local(tmp),
+                        lir::LirRvalue{lir::LirUse{
+                            lir::LirOperand::copy(lir::LirPlace::field(base_local, node.field))}},
+                        expr->span});
                 return lir::LirOperand::copy(lir::LirPlace::local(tmp));
             }
 
@@ -275,10 +267,11 @@ private:
                 for (const tyir::TyExprPtr& arg : node.args)
                     arg_ops.push_back(lower_expr(builder, arg));
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
-                builder.emit_stmt(lir::LirStmt{
-                    lir::LirPlace::local(tmp),
-                    lir::LirRvalue{lir::LirCall{node.fn_name, std::move(arg_ops)}},
-                    expr->span});
+                builder.emit_stmt(
+                    lir::LirStmt{
+                        lir::LirPlace::local(tmp),
+                        lir::LirRvalue{lir::LirCall{node.fn_name, std::move(arg_ops)}},
+                        expr->span});
                 return lir::LirOperand::copy(lir::LirPlace::local(tmp));
             }
 
@@ -294,17 +287,19 @@ private:
                 // Allocate result local (Unit if never / no else, else the actual type).
                 const lir::LirLocalId result_local = builder.alloc_local(expr->ty);
 
-                const lir::LirBlockId then_id  = builder.alloc_block();
-                const lir::LirBlockId else_id  = node.else_branch.has_value()
-                                                      ? builder.alloc_block()
-                                                      : lir::kInvalidBlock;
+                const lir::LirBlockId then_id = builder.alloc_block();
+                const lir::LirBlockId else_id =
+                    node.else_branch.has_value() ? builder.alloc_block() : lir::kInvalidBlock;
                 const lir::LirBlockId merge_id = builder.alloc_block();
 
                 // Seal current block with SwitchBool.
                 const lir::LirBlockId actual_else =
                     else_id != lir::kInvalidBlock ? else_id : merge_id;
-                builder.seal_block(lir::LirTerminator{
-                    lir::LirSwitchBool{cond_op, then_id, actual_else}, expr->span});
+                builder.seal_block(
+                    lir::LirTerminator{
+                        lir::LirSwitchBool{cond_op, then_id, actual_else},
+                        expr->span
+                });
 
                 // Lower then-block.
                 builder.set_current_block(then_id);
@@ -313,25 +308,23 @@ private:
                 builder.pop_scope();
                 // Store then-value into result_local and jump to merge (if not diverged).
                 if (!builder.is_terminated()) {
-                    builder.emit_stmt(lir::LirStmt{
-                        lir::LirPlace::local(result_local),
-                        lir::LirRvalue{lir::LirUse{then_val}},
-                        expr->span});
+                    builder.emit_stmt(
+                        lir::LirStmt{
+                            lir::LirPlace::local(result_local),
+                            lir::LirRvalue{lir::LirUse{then_val}}, expr->span});
                     builder.seal_block(lir::LirTerminator{lir::LirJump{merge_id}, expr->span});
                 }
 
                 // Lower else-block (if any).
                 if (node.else_branch.has_value()) {
                     builder.set_current_block(else_id);
-                    const lir::LirOperand else_val =
-                        lower_expr(builder, *node.else_branch);
+                    const lir::LirOperand else_val = lower_expr(builder, *node.else_branch);
                     if (!builder.is_terminated()) {
-                        builder.emit_stmt(lir::LirStmt{
-                            lir::LirPlace::local(result_local),
-                            lir::LirRvalue{lir::LirUse{else_val}},
-                            expr->span});
-                        builder.seal_block(
-                            lir::LirTerminator{lir::LirJump{merge_id}, expr->span});
+                        builder.emit_stmt(
+                            lir::LirStmt{
+                                lir::LirPlace::local(result_local),
+                                lir::LirRvalue{lir::LirUse{else_val}}, expr->span});
+                        builder.seal_block(lir::LirTerminator{lir::LirJump{merge_id}, expr->span});
                     }
                 }
 
@@ -342,12 +335,11 @@ private:
             // ── Loop expression ───────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, tyir::TyLoop>) {
                 const lir::LirLocalId result_local = builder.alloc_local(expr->ty);
-                const lir::LirBlockId header_id    = builder.alloc_block();
-                const lir::LirBlockId after_id     = builder.alloc_block();
+                const lir::LirBlockId header_id = builder.alloc_block();
+                const lir::LirBlockId after_id = builder.alloc_block();
 
                 // Jump from current block into the loop header.
-                builder.seal_block(
-                    lir::LirTerminator{lir::LirJump{header_id}, expr->span});
+                builder.seal_block(lir::LirTerminator{lir::LirJump{header_id}, expr->span});
 
                 builder.set_current_block(header_id);
                 builder.push_loop(header_id, after_id, result_local);
@@ -358,8 +350,7 @@ private:
 
                 // If the body doesn't diverge, jump back to header.
                 if (!builder.is_terminated())
-                    builder.seal_block(
-                        lir::LirTerminator{lir::LirJump{header_id}, expr->span});
+                    builder.seal_block(lir::LirTerminator{lir::LirJump{header_id}, expr->span});
 
                 builder.set_current_block(after_id);
                 return lir::LirOperand::copy(lir::LirPlace::local(result_local));
@@ -367,18 +358,20 @@ private:
 
             // ── While expression ──────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, tyir::TyWhile>) {
-                const lir::LirBlockId cond_id   = builder.alloc_block();
-                const lir::LirBlockId body_id   = builder.alloc_block();
-                const lir::LirBlockId after_id  = builder.alloc_block();
+                const lir::LirBlockId cond_id = builder.alloc_block();
+                const lir::LirBlockId body_id = builder.alloc_block();
+                const lir::LirBlockId after_id = builder.alloc_block();
 
-                builder.seal_block(
-                    lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
+                builder.seal_block(lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
 
                 // Condition block.
                 builder.set_current_block(cond_id);
                 const lir::LirOperand cond_op = lower_expr(builder, node.condition);
-                builder.seal_block(lir::LirTerminator{
-                    lir::LirSwitchBool{cond_op, body_id, after_id}, expr->span});
+                builder.seal_block(
+                    lir::LirTerminator{
+                        lir::LirSwitchBool{cond_op, body_id, after_id},
+                        expr->span
+                });
 
                 // Body block.
                 builder.set_current_block(body_id);
@@ -388,8 +381,7 @@ private:
                 builder.pop_scope();
                 builder.pop_loop();
                 if (!builder.is_terminated())
-                    builder.seal_block(
-                        lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
+                    builder.seal_block(lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
 
                 builder.set_current_block(after_id);
                 // `while` always yields `()`.
@@ -404,41 +396,38 @@ private:
                     const tyir::TyForInit& init = *node.init;
                     const lir::LirOperand init_val = lower_expr(builder, init.init);
                     if (!init.discard) {
-                        const lir::LirLocalId loc =
-                            builder.alloc_local(init.ty, init.name);
-                        builder.emit_stmt(lir::LirStmt{
-                            lir::LirPlace::local(loc),
-                            lir::LirRvalue{lir::LirUse{init_val}},
-                            init.span});
+                        const lir::LirLocalId loc = builder.alloc_local(init.ty, init.name);
+                        builder.emit_stmt(
+                            lir::LirStmt{
+                                lir::LirPlace::local(loc), lir::LirRvalue{lir::LirUse{init_val}},
+                                init.span});
                         builder.bind(init.name, loc);
                     }
                 }
 
-                const lir::LirBlockId cond_id  = builder.alloc_block();
-                const lir::LirBlockId body_id  = builder.alloc_block();
-                const lir::LirBlockId step_id  = node.step.has_value()
-                                                      ? builder.alloc_block()
-                                                      : cond_id;
+                const lir::LirBlockId cond_id = builder.alloc_block();
+                const lir::LirBlockId body_id = builder.alloc_block();
+                const lir::LirBlockId step_id =
+                    node.step.has_value() ? builder.alloc_block() : cond_id;
                 const lir::LirBlockId after_id = builder.alloc_block();
 
-                builder.seal_block(
-                    lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
+                builder.seal_block(lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
 
                 // Condition block.
                 builder.set_current_block(cond_id);
                 if (node.condition.has_value()) {
-                    const lir::LirOperand cond_op =
-                        lower_expr(builder, *node.condition);
-                    builder.seal_block(lir::LirTerminator{
-                        lir::LirSwitchBool{cond_op, body_id, after_id}, expr->span});
+                    const lir::LirOperand cond_op = lower_expr(builder, *node.condition);
+                    builder.seal_block(
+                        lir::LirTerminator{
+                            lir::LirSwitchBool{cond_op, body_id, after_id},
+                            expr->span
+                    });
                 } else {
                     // No condition → always enter the body.
-                    builder.seal_block(
-                        lir::LirTerminator{lir::LirJump{body_id}, expr->span});
+                    builder.seal_block(lir::LirTerminator{lir::LirJump{body_id}, expr->span});
                 }
 
-                const lir::LirBlockId continue_target =
-                    node.step.has_value() ? step_id : cond_id;
+                const lir::LirBlockId continue_target = node.step.has_value() ? step_id : cond_id;
 
                 // Body block.
                 builder.set_current_block(body_id);
@@ -455,8 +444,7 @@ private:
                 if (node.step.has_value()) {
                     builder.set_current_block(step_id);
                     static_cast<void>(lower_expr(builder, *node.step));
-                    builder.seal_block(
-                        lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
+                    builder.seal_block(lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
                 }
 
                 builder.pop_scope(); // init scope
@@ -469,10 +457,10 @@ private:
                 const auto& loop_ctx = builder.current_loop();
                 if (node.value.has_value() && loop_ctx.break_value_local != lir::kInvalidLocal) {
                     const lir::LirOperand val = lower_expr(builder, *node.value);
-                    builder.emit_stmt(lir::LirStmt{
-                        lir::LirPlace::local(loop_ctx.break_value_local),
-                        lir::LirRvalue{lir::LirUse{val}},
-                        expr->span});
+                    builder.emit_stmt(
+                        lir::LirStmt{
+                            lir::LirPlace::local(loop_ctx.break_value_local),
+                            lir::LirRvalue{lir::LirUse{val}}, expr->span});
                 }
                 builder.seal_block(
                     lir::LirTerminator{lir::LirJump{loop_ctx.break_target}, expr->span});
@@ -481,8 +469,9 @@ private:
 
             // ── Continue ──────────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, tyir::TyContinue>) {
-                builder.seal_block(lir::LirTerminator{
-                    lir::LirJump{builder.current_loop().continue_target}, expr->span});
+                builder.seal_block(
+                    lir::LirTerminator{
+                        lir::LirJump{builder.current_loop().continue_target}, expr->span});
                 return lir::LirOperand::from_const(lir::LirConst::unit());
             }
 
@@ -491,8 +480,7 @@ private:
                 std::optional<lir::LirOperand> ret_val;
                 if (node.value.has_value())
                     ret_val = lower_expr(builder, *node.value);
-                builder.seal_block(
-                    lir::LirTerminator{lir::LirReturn{ret_val}, expr->span});
+                builder.seal_block(lir::LirTerminator{lir::LirReturn{ret_val}, expr->span});
                 return lir::LirOperand::from_const(lir::LirConst::unit());
             }
 
@@ -506,8 +494,7 @@ private:
 /// Lowers a `TyBlock` into the current basic block, emitting one or more
 /// blocks as needed.  Returns an operand for the block's value (its tail
 /// expression, or `()` if there is none).
-[[nodiscard]] lir::LirOperand lower_block(FnBuilder& builder,
-                                           const tyir::TyBlockPtr& block) {
+[[nodiscard]] lir::LirOperand lower_block(FnBuilder& builder, const tyir::TyBlockPtr& block) {
     for (const tyir::TyStmt& stmt : block->stmts) {
         std::visit(
             [&](const auto& s) {
@@ -515,12 +502,11 @@ private:
                 if constexpr (std::is_same_v<S, tyir::TyLetStmt>) {
                     const lir::LirOperand val = lower_expr(builder, s.init);
                     if (!s.discard) {
-                        const lir::LirLocalId loc =
-                            builder.alloc_local(s.ty, s.name);
-                        builder.emit_stmt(lir::LirStmt{
-                            lir::LirPlace::local(loc),
-                            lir::LirRvalue{lir::LirUse{val}},
-                            s.span});
+                        const lir::LirLocalId loc = builder.alloc_local(s.ty, s.name);
+                        builder.emit_stmt(
+                            lir::LirStmt{
+                                lir::LirPlace::local(loc), lir::LirRvalue{lir::LirUse{val}},
+                                s.span});
                         builder.bind(s.name, loc);
                     }
                 } else {
@@ -541,9 +527,9 @@ private:
 
 [[nodiscard]] lir::LirFnDef lower_fn(const tyir::TyFnDecl& ty_fn) {
     lir::LirFnDef fn;
-    fn.name       = ty_fn.name;
-    fn.return_ty  = ty_fn.return_ty;
-    fn.span       = ty_fn.span;
+    fn.name = ty_fn.name;
+    fn.return_ty = ty_fn.return_ty;
+    fn.span = ty_fn.span;
 
     FnBuilder builder;
 
@@ -567,11 +553,9 @@ private:
     // Skip if the body already ended with a diverging terminator.
     if (!builder.is_terminated()) {
         const std::optional<lir::LirOperand> ret_val =
-            ty_fn.return_ty.is_unit()
-                ? std::optional<lir::LirOperand>{std::nullopt}
-                : std::optional<lir::LirOperand>{body_val};
-        builder.seal_block(
-            lir::LirTerminator{lir::LirReturn{ret_val}, ty_fn.span});
+            ty_fn.return_ty.is_unit() ? std::optional<lir::LirOperand>{std::nullopt}
+                                      : std::optional<lir::LirOperand>{body_val};
+        builder.seal_block(lir::LirTerminator{lir::LirReturn{ret_val}, ty_fn.span});
     }
 
     builder.pop_scope();
@@ -583,9 +567,9 @@ private:
 
 [[nodiscard]] lir::LirStructDecl forward_struct(const tyir::TyStructDecl& s) {
     lir::LirStructDecl out;
-    out.name   = s.name;
+    out.name = s.name;
     out.is_zst = s.is_zst;
-    out.span   = s.span;
+    out.span = s.span;
     for (const tyir::TyFieldDecl& f : s.fields)
         out.fields.push_back({f.name, f.ty, f.span});
     return out;

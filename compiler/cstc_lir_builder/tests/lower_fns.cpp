@@ -80,9 +80,8 @@ static void test_let_binding_in_locals() {
     // Should contain a local named "answer".
     bool found = false;
     for (const LirLocalDecl& loc : fn.locals) {
-        if (loc.debug_name.has_value() &&
-            loc.debug_name->is_valid() &&
-            loc.debug_name->as_str() == "answer") {
+        if (loc.debug_name.has_value() && loc.debug_name->is_valid()
+            && loc.debug_name->as_str() == "answer") {
             found = true;
             break;
         }

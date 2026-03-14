@@ -4,8 +4,8 @@
 #include <string>
 #include <string_view>
 
-#include <cstc_symbol/symbol.hpp>
 #include <cstc_span/span.hpp>
+#include <cstc_symbol/symbol.hpp>
 
 namespace cstc::lexer {
 
@@ -139,108 +139,57 @@ struct Token {
 /// Returns a stable debug name for a token kind.
 [[nodiscard]] constexpr std::string_view token_kind_name(TokenKind kind) {
     switch (kind) {
-        case TokenKind::EndOfFile:
-            return "EndOfFile";
-        case TokenKind::Unknown:
-            return "Unknown";
-        case TokenKind::Whitespace:
-            return "Whitespace";
-        case TokenKind::LineComment:
-            return "LineComment";
-        case TokenKind::BlockComment:
-            return "BlockComment";
-        case TokenKind::Identifier:
-            return "Identifier";
-        case TokenKind::Number:
-            return "Number";
-        case TokenKind::String:
-            return "String";
-        case TokenKind::KwStruct:
-            return "KwStruct";
-        case TokenKind::KwEnum:
-            return "KwEnum";
-        case TokenKind::KwFn:
-            return "KwFn";
-        case TokenKind::KwLet:
-            return "KwLet";
-        case TokenKind::KwIf:
-            return "KwIf";
-        case TokenKind::KwElse:
-            return "KwElse";
-        case TokenKind::KwFor:
-            return "KwFor";
-        case TokenKind::KwWhile:
-            return "KwWhile";
-        case TokenKind::KwLoop:
-            return "KwLoop";
-        case TokenKind::KwBreak:
-            return "KwBreak";
-        case TokenKind::KwContinue:
-            return "KwContinue";
-        case TokenKind::KwReturn:
-            return "KwReturn";
-        case TokenKind::KwTrue:
-            return "KwTrue";
-        case TokenKind::KwFalse:
-            return "KwFalse";
-        case TokenKind::KwUnit:
-            return "KwUnit";
-        case TokenKind::KwNum:
-            return "KwNum";
-        case TokenKind::KwStr:
-            return "KwStr";
-        case TokenKind::KwBool:
-            return "KwBool";
-        case TokenKind::LBrace:
-            return "LBrace";
-        case TokenKind::RBrace:
-            return "RBrace";
-        case TokenKind::LParen:
-            return "LParen";
-        case TokenKind::RParen:
-            return "RParen";
-        case TokenKind::Comma:
-            return "Comma";
-        case TokenKind::Semicolon:
-            return "Semicolon";
-        case TokenKind::Colon:
-            return "Colon";
-        case TokenKind::ColonColon:
-            return "ColonColon";
-        case TokenKind::Dot:
-            return "Dot";
-        case TokenKind::Arrow:
-            return "Arrow";
-        case TokenKind::Plus:
-            return "Plus";
-        case TokenKind::Minus:
-            return "Minus";
-        case TokenKind::Star:
-            return "Star";
-        case TokenKind::Slash:
-            return "Slash";
-        case TokenKind::Percent:
-            return "Percent";
-        case TokenKind::Bang:
-            return "Bang";
-        case TokenKind::AndAnd:
-            return "AndAnd";
-        case TokenKind::OrOr:
-            return "OrOr";
-        case TokenKind::EqEq:
-            return "EqEq";
-        case TokenKind::NotEq:
-            return "NotEq";
-        case TokenKind::Lt:
-            return "Lt";
-        case TokenKind::LtEq:
-            return "LtEq";
-        case TokenKind::Gt:
-            return "Gt";
-        case TokenKind::GtEq:
-            return "GtEq";
-        case TokenKind::Assign:
-            return "Assign";
+    case TokenKind::EndOfFile: return "EndOfFile";
+    case TokenKind::Unknown: return "Unknown";
+    case TokenKind::Whitespace: return "Whitespace";
+    case TokenKind::LineComment: return "LineComment";
+    case TokenKind::BlockComment: return "BlockComment";
+    case TokenKind::Identifier: return "Identifier";
+    case TokenKind::Number: return "Number";
+    case TokenKind::String: return "String";
+    case TokenKind::KwStruct: return "KwStruct";
+    case TokenKind::KwEnum: return "KwEnum";
+    case TokenKind::KwFn: return "KwFn";
+    case TokenKind::KwLet: return "KwLet";
+    case TokenKind::KwIf: return "KwIf";
+    case TokenKind::KwElse: return "KwElse";
+    case TokenKind::KwFor: return "KwFor";
+    case TokenKind::KwWhile: return "KwWhile";
+    case TokenKind::KwLoop: return "KwLoop";
+    case TokenKind::KwBreak: return "KwBreak";
+    case TokenKind::KwContinue: return "KwContinue";
+    case TokenKind::KwReturn: return "KwReturn";
+    case TokenKind::KwTrue: return "KwTrue";
+    case TokenKind::KwFalse: return "KwFalse";
+    case TokenKind::KwUnit: return "KwUnit";
+    case TokenKind::KwNum: return "KwNum";
+    case TokenKind::KwStr: return "KwStr";
+    case TokenKind::KwBool: return "KwBool";
+    case TokenKind::LBrace: return "LBrace";
+    case TokenKind::RBrace: return "RBrace";
+    case TokenKind::LParen: return "LParen";
+    case TokenKind::RParen: return "RParen";
+    case TokenKind::Comma: return "Comma";
+    case TokenKind::Semicolon: return "Semicolon";
+    case TokenKind::Colon: return "Colon";
+    case TokenKind::ColonColon: return "ColonColon";
+    case TokenKind::Dot: return "Dot";
+    case TokenKind::Arrow: return "Arrow";
+    case TokenKind::Plus: return "Plus";
+    case TokenKind::Minus: return "Minus";
+    case TokenKind::Star: return "Star";
+    case TokenKind::Slash: return "Slash";
+    case TokenKind::Percent: return "Percent";
+    case TokenKind::Bang: return "Bang";
+    case TokenKind::AndAnd: return "AndAnd";
+    case TokenKind::OrOr: return "OrOr";
+    case TokenKind::EqEq: return "EqEq";
+    case TokenKind::NotEq: return "NotEq";
+    case TokenKind::Lt: return "Lt";
+    case TokenKind::LtEq: return "LtEq";
+    case TokenKind::Gt: return "Gt";
+    case TokenKind::GtEq: return "GtEq";
+    case TokenKind::Assign: return "Assign";
     }
     return "<invalid-token-kind>";
 }

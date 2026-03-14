@@ -86,13 +86,12 @@ struct Ty {
     /// Requires an active `SymbolSession` for `Named` types.
     [[nodiscard]] std::string display() const {
         switch (kind) {
-            case TyKind::Unit:  return "Unit";
-            case TyKind::Num:   return "num";
-            case TyKind::Str:   return "str";
-            case TyKind::Bool:  return "bool";
-            case TyKind::Never: return "!";
-            case TyKind::Named:
-                return name.is_valid() ? std::string(name.as_str()) : "<named>";
+        case TyKind::Unit: return "Unit";
+        case TyKind::Num: return "num";
+        case TyKind::Str: return "str";
+        case TyKind::Bool: return "bool";
+        case TyKind::Never: return "!";
+        case TyKind::Named: return name.is_valid() ? std::string(name.as_str()) : "<named>";
         }
         return "<unknown-type>";
     }
@@ -100,18 +99,18 @@ struct Ty {
 
 /// Factory helpers for the well-known primitive types.
 namespace ty {
-    /// Unit type `()`.
-    inline constexpr Ty unit()  { return {TyKind::Unit,  cstc::symbol::kInvalidSymbol}; }
-    /// Numeric type `num`.
-    inline constexpr Ty num()   { return {TyKind::Num,   cstc::symbol::kInvalidSymbol}; }
-    /// String type `str`.
-    inline constexpr Ty str()   { return {TyKind::Str,   cstc::symbol::kInvalidSymbol}; }
-    /// Boolean type `bool`.
-    inline constexpr Ty bool_() { return {TyKind::Bool,  cstc::symbol::kInvalidSymbol}; }
-    /// Never / bottom type (diverging expression).
-    inline constexpr Ty never() { return {TyKind::Never, cstc::symbol::kInvalidSymbol}; }
-    /// User-defined named type (struct or enum).
-    inline Ty named(cstc::symbol::Symbol sym) { return {TyKind::Named, sym}; }
+/// Unit type `()`.
+inline constexpr Ty unit() { return {TyKind::Unit, cstc::symbol::kInvalidSymbol}; }
+/// Numeric type `num`.
+inline constexpr Ty num() { return {TyKind::Num, cstc::symbol::kInvalidSymbol}; }
+/// String type `str`.
+inline constexpr Ty str() { return {TyKind::Str, cstc::symbol::kInvalidSymbol}; }
+/// Boolean type `bool`.
+inline constexpr Ty bool_() { return {TyKind::Bool, cstc::symbol::kInvalidSymbol}; }
+/// Never / bottom type (diverging expression).
+inline constexpr Ty never() { return {TyKind::Never, cstc::symbol::kInvalidSymbol}; }
+/// User-defined named type (struct or enum).
+inline Ty named(cstc::symbol::Symbol sym) { return {TyKind::Named, sym}; }
 } // namespace ty
 
 // ─── Expression sub-nodes ────────────────────────────────────────────────────
@@ -286,22 +285,8 @@ struct TyReturn {
 struct TyExpr {
     /// Variant payload for all typed expression forms.
     using Node = std::variant<
-        TyLiteral,
-        LocalRef,
-        EnumVariantRef,
-        TyStructInit,
-        TyUnary,
-        TyBinary,
-        TyFieldAccess,
-        TyCall,
-        TyBlockPtr,
-        TyIf,
-        TyLoop,
-        TyWhile,
-        TyFor,
-        TyBreak,
-        TyContinue,
-        TyReturn>;
+        TyLiteral, LocalRef, EnumVariantRef, TyStructInit, TyUnary, TyBinary, TyFieldAccess, TyCall,
+        TyBlockPtr, TyIf, TyLoop, TyWhile, TyFor, TyBreak, TyContinue, TyReturn>;
 
     /// Concrete expression node payload.
     Node node;
@@ -312,8 +297,7 @@ struct TyExpr {
 };
 
 /// Constructs a heap-allocated typed expression.
-[[nodiscard]] inline TyExprPtr
-make_ty_expr(cstc::span::SourceSpan span, TyExpr::Node node, Ty ty) {
+[[nodiscard]] inline TyExprPtr make_ty_expr(cstc::span::SourceSpan span, TyExpr::Node node, Ty ty) {
     return std::make_shared<TyExpr>(TyExpr{std::move(node), std::move(ty), span});
 }
 

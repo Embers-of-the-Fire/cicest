@@ -139,7 +139,9 @@ static void test_rvalue_binary_op() {
     SymbolSession session;
     const LirOperand lhs = LirOperand::from_const(LirConst::num(Symbol::intern("1")));
     const LirOperand rhs = LirOperand::from_const(LirConst::num(Symbol::intern("2")));
-    const LirRvalue rv{LirBinaryOp{cstc::ast::BinaryOp::Add, lhs, rhs}};
+    const LirRvalue rv{
+        LirBinaryOp{cstc::ast::BinaryOp::Add, lhs, rhs}
+    };
     assert(std::holds_alternative<LirBinaryOp>(rv.node));
     const auto& binop = std::get<LirBinaryOp>(rv.node);
     assert(binop.op == cstc::ast::BinaryOp::Add);
@@ -148,7 +150,9 @@ static void test_rvalue_binary_op() {
 static void test_rvalue_unary_op() {
     SymbolSession session;
     const LirOperand operand = LirOperand::from_const(LirConst::bool_(true));
-    const LirRvalue rv{LirUnaryOp{cstc::ast::UnaryOp::Not, operand}};
+    const LirRvalue rv{
+        LirUnaryOp{cstc::ast::UnaryOp::Not, operand}
+    };
     assert(std::holds_alternative<LirUnaryOp>(rv.node));
     const auto& unop = std::get<LirUnaryOp>(rv.node);
     assert(unop.op == cstc::ast::UnaryOp::Not);
@@ -157,7 +161,9 @@ static void test_rvalue_unary_op() {
 static void test_rvalue_call() {
     SymbolSession session;
     const Symbol fn = Symbol::intern("add");
-    const LirRvalue rv{LirCall{fn, {}}};
+    const LirRvalue rv{
+        LirCall{fn, {}}
+    };
     assert(std::holds_alternative<LirCall>(rv.node));
     assert(std::get<LirCall>(rv.node).fn_name == fn);
 }
@@ -165,7 +171,7 @@ static void test_rvalue_call() {
 static void test_rvalue_struct_init() {
     SymbolSession session;
     const Symbol type_name = Symbol::intern("Point");
-    const Symbol field_x   = Symbol::intern("x");
+    const Symbol field_x = Symbol::intern("x");
     LirStructInit si;
     si.type_name = type_name;
     si.fields.push_back({field_x, LirOperand::from_const(LirConst::num(Symbol::intern("1")))});
@@ -175,9 +181,11 @@ static void test_rvalue_struct_init() {
 
 static void test_rvalue_enum_variant() {
     SymbolSession session;
-    const Symbol en  = Symbol::intern("Dir");
+    const Symbol en = Symbol::intern("Dir");
     const Symbol var = Symbol::intern("North");
-    const LirRvalue rv{LirEnumVariantRef{en, var}};
+    const LirRvalue rv{
+        LirEnumVariantRef{en, var}
+    };
     assert(std::holds_alternative<LirEnumVariantRef>(rv.node));
     const auto& evr = std::get<LirEnumVariantRef>(rv.node);
     assert(evr.enum_name == en);
@@ -190,8 +198,8 @@ static void test_local_decl() {
     SymbolSession session;
     const Symbol name = Symbol::intern("x");
     LirLocalDecl loc;
-    loc.id         = 0;
-    loc.ty         = ty::num();
+    loc.id = 0;
+    loc.ty = ty::num();
     loc.debug_name = name;
     assert(loc.id == 0);
     assert(loc.ty == ty::num());

@@ -37,8 +37,7 @@ struct ParseError {
 ///
 /// Uses base position `0` and interns textual values into the current session's
 /// global symbol table.
-[[nodiscard]] inline std::expected<ast::Program, ParseError>
-    parse_source(std::string_view source);
+[[nodiscard]] inline std::expected<ast::Program, ParseError> parse_source(std::string_view source);
 
 } // namespace cstc::parser
 

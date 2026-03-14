@@ -138,7 +138,7 @@ public:
 
     /// Creates an absolute span from file-local byte offsets.
     [[nodiscard]] std::optional<SourceSpan>
-    make_span(SourceFileId id, BytePos local_start, BytePos local_end) const {
+        make_span(SourceFileId id, BytePos local_start, BytePos local_end) const {
         const SourceFile* source_file = file(id);
         if (source_file == nullptr || local_end < local_start || local_end > source_file->size())
             return std::nullopt;
@@ -184,19 +184,22 @@ private:
     }
 
     [[nodiscard]] static SourceLocation
-    resolve_location(const SourceFile& source_file, BytePos absolute_pos) {
+        resolve_location(const SourceFile& source_file, BytePos absolute_pos) {
         if (absolute_pos < source_file.start_pos)
             return SourceLocation{.line = 1, .column = 1};
 
-        const BytePos clamped = absolute_pos > source_file.end_pos ? source_file.end_pos : absolute_pos;
+        const BytePos clamped =
+            absolute_pos > source_file.end_pos ? source_file.end_pos : absolute_pos;
         const BytePos local = clamped - source_file.start_pos;
 
-        const auto upper = std::upper_bound(
-            source_file.line_starts.begin(), source_file.line_starts.end(), local);
-        const BytePos line_index = upper == source_file.line_starts.begin()
-            ? 0
-            : static_cast<BytePos>((upper - source_file.line_starts.begin()) - 1);
-        const BytePos line_start = source_file.line_starts.empty() ? 0 : source_file.line_starts[line_index];
+        const auto upper =
+            std::upper_bound(source_file.line_starts.begin(), source_file.line_starts.end(), local);
+        const BytePos line_index =
+            upper == source_file.line_starts.begin()
+                ? 0
+                : static_cast<BytePos>((upper - source_file.line_starts.begin()) - 1);
+        const BytePos line_start =
+            source_file.line_starts.empty() ? 0 : source_file.line_starts[line_index];
 
         return SourceLocation{
             .line = line_index + 1,

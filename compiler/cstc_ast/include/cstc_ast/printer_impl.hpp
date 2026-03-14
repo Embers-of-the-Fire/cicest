@@ -20,68 +20,45 @@ inline void indent(std::ostringstream& output, std::size_t level) {
         return type.symbol.as_str();
 
     switch (type.kind) {
-        case TypeKind::Unit:
-            return "Unit";
-        case TypeKind::Num:
-            return "num";
-        case TypeKind::Str:
-            return "str";
-        case TypeKind::Bool:
-            return "bool";
-        case TypeKind::Named:
-            return "<named>";
+    case TypeKind::Unit: return "Unit";
+    case TypeKind::Num: return "num";
+    case TypeKind::Str: return "str";
+    case TypeKind::Bool: return "bool";
+    case TypeKind::Named: return "<named>";
     }
     return "<unknown-type>";
 }
 
 [[nodiscard]] inline std::string_view unary_name(UnaryOp op) {
     switch (op) {
-        case UnaryOp::Negate:
-            return "-";
-        case UnaryOp::Not:
-            return "!";
+    case UnaryOp::Negate: return "-";
+    case UnaryOp::Not: return "!";
     }
     return "?";
 }
 
 [[nodiscard]] inline std::string_view binary_name(BinaryOp op) {
     switch (op) {
-        case BinaryOp::Add:
-            return "+";
-        case BinaryOp::Sub:
-            return "-";
-        case BinaryOp::Mul:
-            return "*";
-        case BinaryOp::Div:
-            return "/";
-        case BinaryOp::Mod:
-            return "%";
-        case BinaryOp::Eq:
-            return "==";
-        case BinaryOp::Ne:
-            return "!=";
-        case BinaryOp::Lt:
-            return "<";
-        case BinaryOp::Le:
-            return "<=";
-        case BinaryOp::Gt:
-            return ">";
-        case BinaryOp::Ge:
-            return ">=";
-        case BinaryOp::And:
-            return "&&";
-        case BinaryOp::Or:
-            return "||";
+    case BinaryOp::Add: return "+";
+    case BinaryOp::Sub: return "-";
+    case BinaryOp::Mul: return "*";
+    case BinaryOp::Div: return "/";
+    case BinaryOp::Mod: return "%";
+    case BinaryOp::Eq: return "==";
+    case BinaryOp::Ne: return "!=";
+    case BinaryOp::Lt: return "<";
+    case BinaryOp::Le: return "<=";
+    case BinaryOp::Gt: return ">";
+    case BinaryOp::Ge: return ">=";
+    case BinaryOp::And: return "&&";
+    case BinaryOp::Or: return "||";
     }
     return "?";
 }
 
 inline void print_expr(std::ostringstream& output, const ExprPtr& expr, std::size_t level);
 
-inline void print_block(
-    std::ostringstream& output,
-    const BlockPtr& block,
-    std::size_t level) {
+inline void print_block(std::ostringstream& output, const BlockPtr& block, std::size_t level) {
     indent(output, level);
     output << "Block" << "\n";
 
@@ -122,24 +99,21 @@ inline void print_expr(std::ostringstream& output, const ExprPtr& expr, std::siz
             if constexpr (std::is_same_v<ExprType, LiteralExpr>) {
                 indent(output, level);
                 switch (node.kind) {
-                    case LiteralExpr::Kind::Num:
-                        output << "NumLit(" << node.symbol.as_str() << ")\n";
-                        break;
-                    case LiteralExpr::Kind::Str:
-                        output << "StrLit(" << node.symbol.as_str() << ")\n";
-                        break;
-                    case LiteralExpr::Kind::Bool:
-                        output << "BoolLit(" << (node.bool_value ? "true" : "false") << ")\n";
-                        break;
-                    case LiteralExpr::Kind::Unit:
-                        output << "UnitLit\n";
-                        break;
+                case LiteralExpr::Kind::Num:
+                    output << "NumLit(" << node.symbol.as_str() << ")\n";
+                    break;
+                case LiteralExpr::Kind::Str:
+                    output << "StrLit(" << node.symbol.as_str() << ")\n";
+                    break;
+                case LiteralExpr::Kind::Bool:
+                    output << "BoolLit(" << (node.bool_value ? "true" : "false") << ")\n";
+                    break;
+                case LiteralExpr::Kind::Unit: output << "UnitLit\n"; break;
                 }
             } else if constexpr (std::is_same_v<ExprType, PathExpr>) {
                 indent(output, level);
                 if (node.tail.has_value()) {
-                    output << "Path(" << node.head.as_str() << "::"
-                           << node.tail->as_str() << ")\n";
+                    output << "Path(" << node.head.as_str() << "::" << node.tail->as_str() << ")\n";
                 } else {
                     output << "Path(" << node.head.as_str() << ")\n";
                 }

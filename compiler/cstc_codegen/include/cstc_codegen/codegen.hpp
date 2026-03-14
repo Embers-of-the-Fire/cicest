@@ -41,8 +41,8 @@ namespace cstc::codegen {
 /// @param program Fully lowered, type-correct LIR program.
 /// @param module_name Name assigned to the emitted LLVM module.
 /// @return LLVM IR module text.
-[[nodiscard]] std::string emit_llvm_ir(const lir::LirProgram& program,
-                                       std::string_view module_name);
+[[nodiscard]] std::string
+    emit_llvm_ir(const lir::LirProgram& program, std::string_view module_name);
 
 } // namespace cstc::codegen
 

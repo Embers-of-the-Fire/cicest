@@ -62,33 +62,28 @@ namespace detail {
 }
 
 inline void append_token(
-    std::vector<Token>& out,
-    TokenKind kind,
-    cstc::span::BytePos base_pos,
-    std::size_t local_start,
-    std::size_t local_end,
-    std::string_view source,
-    bool keep_trivia) {
+    std::vector<Token>& out, TokenKind kind, cstc::span::BytePos base_pos, std::size_t local_start,
+    std::size_t local_end, std::string_view source, bool keep_trivia) {
     if (!keep_trivia && is_trivia(kind))
         return;
 
     const std::string_view lexeme = source.substr(local_start, local_end - local_start);
-    out.push_back(Token{
-        .kind = kind,
-        .span = {
-            .start = base_pos + local_start,
-            .end = base_pos + local_end,
-        },
-        .symbol = cstc::symbol::Symbol::intern(lexeme),
+    out.push_back(
+        Token{
+            .kind = kind,
+            .span =
+                {
+                       .start = base_pos + local_start,
+                       .end = base_pos + local_end,
+                       },
+            .symbol = cstc::symbol::Symbol::intern(lexeme),
     });
 }
 
 } // namespace detail
 
-inline std::vector<Token> lex_source_at(
-    std::string_view source,
-    cstc::span::BytePos base_pos,
-    bool keep_trivia) {
+inline std::vector<Token>
+    lex_source_at(std::string_view source, cstc::span::BytePos base_pos, bool keep_trivia) {
     std::vector<Token> tokens;
     std::size_t index = 0;
 
@@ -97,7 +92,8 @@ inline std::vector<Token> lex_source_at(
 
         if (std::isspace(static_cast<unsigned char>(ch)) != 0) {
             const std::size_t start = index;
-            while (index < source.size() && std::isspace(static_cast<unsigned char>(source[index])) != 0)
+            while (index < source.size()
+                   && std::isspace(static_cast<unsigned char>(source[index])) != 0)
                 ++index;
             detail::append_token(
                 tokens, TokenKind::Whitespace, base_pos, start, index, source, keep_trivia);
@@ -152,15 +148,15 @@ inline std::vector<Token> lex_source_at(
 
         if (std::isdigit(static_cast<unsigned char>(ch)) != 0) {
             const std::size_t start = index;
-            while (index < source.size() && std::isdigit(static_cast<unsigned char>(source[index])) != 0)
+            while (index < source.size()
+                   && std::isdigit(static_cast<unsigned char>(source[index])) != 0)
                 ++index;
 
             if (index + 1 < source.size() && source[index] == '.'
                 && std::isdigit(static_cast<unsigned char>(source[index + 1])) != 0) {
                 ++index;
-                while (
-                    index < source.size()
-                    && std::isdigit(static_cast<unsigned char>(source[index])) != 0)
+                while (index < source.size()
+                       && std::isdigit(static_cast<unsigned char>(source[index])) != 0)
                     ++index;
             }
 
@@ -188,13 +184,8 @@ inline std::vector<Token> lex_source_at(
             }
 
             detail::append_token(
-                tokens,
-                terminated ? TokenKind::String : TokenKind::Unknown,
-                base_pos,
-                start,
-                terminated ? index : source.size(),
-                source,
-                keep_trivia || !terminated);
+                tokens, terminated ? TokenKind::String : TokenKind::Unknown, base_pos, start,
+                terminated ? index : source.size(), source, keep_trivia || !terminated);
             continue;
         }
 
@@ -254,88 +245,89 @@ inline std::vector<Token> lex_source_at(
 
         ++index;
         switch (ch) {
-            case '{':
-                detail::append_token(
-                    tokens, TokenKind::LBrace, base_pos, start, index, source, keep_trivia);
-                break;
-            case '}':
-                detail::append_token(
-                    tokens, TokenKind::RBrace, base_pos, start, index, source, keep_trivia);
-                break;
-            case '(':
-                detail::append_token(
-                    tokens, TokenKind::LParen, base_pos, start, index, source, keep_trivia);
-                break;
-            case ')':
-                detail::append_token(
-                    tokens, TokenKind::RParen, base_pos, start, index, source, keep_trivia);
-                break;
-            case ',':
-                detail::append_token(
-                    tokens, TokenKind::Comma, base_pos, start, index, source, keep_trivia);
-                break;
-            case ';':
-                detail::append_token(
-                    tokens, TokenKind::Semicolon, base_pos, start, index, source, keep_trivia);
-                break;
-            case ':':
-                detail::append_token(
-                    tokens, TokenKind::Colon, base_pos, start, index, source, keep_trivia);
-                break;
-            case '.':
-                detail::append_token(
-                    tokens, TokenKind::Dot, base_pos, start, index, source, keep_trivia);
-                break;
-            case '+':
-                detail::append_token(
-                    tokens, TokenKind::Plus, base_pos, start, index, source, keep_trivia);
-                break;
-            case '-':
-                detail::append_token(
-                    tokens, TokenKind::Minus, base_pos, start, index, source, keep_trivia);
-                break;
-            case '*':
-                detail::append_token(
-                    tokens, TokenKind::Star, base_pos, start, index, source, keep_trivia);
-                break;
-            case '/':
-                detail::append_token(
-                    tokens, TokenKind::Slash, base_pos, start, index, source, keep_trivia);
-                break;
-            case '%':
-                detail::append_token(
-                    tokens, TokenKind::Percent, base_pos, start, index, source, keep_trivia);
-                break;
-            case '!':
-                detail::append_token(
-                    tokens, TokenKind::Bang, base_pos, start, index, source, keep_trivia);
-                break;
-            case '<':
-                detail::append_token(
-                    tokens, TokenKind::Lt, base_pos, start, index, source, keep_trivia);
-                break;
-            case '>':
-                detail::append_token(
-                    tokens, TokenKind::Gt, base_pos, start, index, source, keep_trivia);
-                break;
-            case '=':
-                detail::append_token(
-                    tokens, TokenKind::Assign, base_pos, start, index, source, keep_trivia);
-                break;
-            default:
-                detail::append_token(
-                    tokens, TokenKind::Unknown, base_pos, start, index, source, true);
-                break;
+        case '{':
+            detail::append_token(
+                tokens, TokenKind::LBrace, base_pos, start, index, source, keep_trivia);
+            break;
+        case '}':
+            detail::append_token(
+                tokens, TokenKind::RBrace, base_pos, start, index, source, keep_trivia);
+            break;
+        case '(':
+            detail::append_token(
+                tokens, TokenKind::LParen, base_pos, start, index, source, keep_trivia);
+            break;
+        case ')':
+            detail::append_token(
+                tokens, TokenKind::RParen, base_pos, start, index, source, keep_trivia);
+            break;
+        case ',':
+            detail::append_token(
+                tokens, TokenKind::Comma, base_pos, start, index, source, keep_trivia);
+            break;
+        case ';':
+            detail::append_token(
+                tokens, TokenKind::Semicolon, base_pos, start, index, source, keep_trivia);
+            break;
+        case ':':
+            detail::append_token(
+                tokens, TokenKind::Colon, base_pos, start, index, source, keep_trivia);
+            break;
+        case '.':
+            detail::append_token(
+                tokens, TokenKind::Dot, base_pos, start, index, source, keep_trivia);
+            break;
+        case '+':
+            detail::append_token(
+                tokens, TokenKind::Plus, base_pos, start, index, source, keep_trivia);
+            break;
+        case '-':
+            detail::append_token(
+                tokens, TokenKind::Minus, base_pos, start, index, source, keep_trivia);
+            break;
+        case '*':
+            detail::append_token(
+                tokens, TokenKind::Star, base_pos, start, index, source, keep_trivia);
+            break;
+        case '/':
+            detail::append_token(
+                tokens, TokenKind::Slash, base_pos, start, index, source, keep_trivia);
+            break;
+        case '%':
+            detail::append_token(
+                tokens, TokenKind::Percent, base_pos, start, index, source, keep_trivia);
+            break;
+        case '!':
+            detail::append_token(
+                tokens, TokenKind::Bang, base_pos, start, index, source, keep_trivia);
+            break;
+        case '<':
+            detail::append_token(
+                tokens, TokenKind::Lt, base_pos, start, index, source, keep_trivia);
+            break;
+        case '>':
+            detail::append_token(
+                tokens, TokenKind::Gt, base_pos, start, index, source, keep_trivia);
+            break;
+        case '=':
+            detail::append_token(
+                tokens, TokenKind::Assign, base_pos, start, index, source, keep_trivia);
+            break;
+        default:
+            detail::append_token(tokens, TokenKind::Unknown, base_pos, start, index, source, true);
+            break;
         }
     }
 
-    tokens.push_back(Token{
-        .kind = TokenKind::EndOfFile,
-        .span = {
-            .start = base_pos + source.size(),
-            .end = base_pos + source.size(),
-        },
-        .symbol = cstc::symbol::kInvalidSymbol,
+    tokens.push_back(
+        Token{
+            .kind = TokenKind::EndOfFile,
+            .span =
+                {
+                       .start = base_pos + source.size(),
+                       .end = base_pos + source.size(),
+                       },
+            .symbol = cstc::symbol::kInvalidSymbol,
     });
 
     return tokens;

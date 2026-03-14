@@ -17,27 +17,27 @@ inline void indent(std::ostringstream& out, std::size_t level) {
 
 [[nodiscard]] inline std::string_view unary_name(cstc::ast::UnaryOp op) {
     switch (op) {
-        case cstc::ast::UnaryOp::Negate: return "-";
-        case cstc::ast::UnaryOp::Not:    return "!";
+    case cstc::ast::UnaryOp::Negate: return "-";
+    case cstc::ast::UnaryOp::Not: return "!";
     }
     return "?";
 }
 
 [[nodiscard]] inline std::string_view binary_name(cstc::ast::BinaryOp op) {
     switch (op) {
-        case cstc::ast::BinaryOp::Add: return "+";
-        case cstc::ast::BinaryOp::Sub: return "-";
-        case cstc::ast::BinaryOp::Mul: return "*";
-        case cstc::ast::BinaryOp::Div: return "/";
-        case cstc::ast::BinaryOp::Mod: return "%";
-        case cstc::ast::BinaryOp::Eq:  return "==";
-        case cstc::ast::BinaryOp::Ne:  return "!=";
-        case cstc::ast::BinaryOp::Lt:  return "<";
-        case cstc::ast::BinaryOp::Le:  return "<=";
-        case cstc::ast::BinaryOp::Gt:  return ">";
-        case cstc::ast::BinaryOp::Ge:  return ">=";
-        case cstc::ast::BinaryOp::And: return "&&";
-        case cstc::ast::BinaryOp::Or:  return "||";
+    case cstc::ast::BinaryOp::Add: return "+";
+    case cstc::ast::BinaryOp::Sub: return "-";
+    case cstc::ast::BinaryOp::Mul: return "*";
+    case cstc::ast::BinaryOp::Div: return "/";
+    case cstc::ast::BinaryOp::Mod: return "%";
+    case cstc::ast::BinaryOp::Eq: return "==";
+    case cstc::ast::BinaryOp::Ne: return "!=";
+    case cstc::ast::BinaryOp::Lt: return "<";
+    case cstc::ast::BinaryOp::Le: return "<=";
+    case cstc::ast::BinaryOp::Gt: return ">";
+    case cstc::ast::BinaryOp::Ge: return ">=";
+    case cstc::ast::BinaryOp::And: return "&&";
+    case cstc::ast::BinaryOp::Or: return "||";
     }
     return "?";
 }
@@ -85,31 +85,28 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
             if constexpr (std::is_same_v<N, TyLiteral>) {
                 indent(out, level);
                 switch (node.kind) {
-                    case TyLiteral::Kind::Num:
-                        out << "TyLiteral(" << node.symbol.as_str() << "): num\n";
-                        break;
-                    case TyLiteral::Kind::Str:
-                        out << "TyLiteral(\"" << node.symbol.as_str() << "\"): str\n";
-                        break;
-                    case TyLiteral::Kind::Bool:
-                        out << "TyLiteral(" << (node.bool_value ? "true" : "false")
-                            << "): bool\n";
-                        break;
-                    case TyLiteral::Kind::Unit:
-                        out << "TyLiteral(()): Unit\n";
-                        break;
+                case TyLiteral::Kind::Num:
+                    out << "TyLiteral(" << node.symbol.as_str() << "): num\n";
+                    break;
+                case TyLiteral::Kind::Str:
+                    out << "TyLiteral(\"" << node.symbol.as_str() << "\"): str\n";
+                    break;
+                case TyLiteral::Kind::Bool:
+                    out << "TyLiteral(" << (node.bool_value ? "true" : "false") << "): bool\n";
+                    break;
+                case TyLiteral::Kind::Unit: out << "TyLiteral(()): Unit\n"; break;
                 }
             } else if constexpr (std::is_same_v<N, LocalRef>) {
                 indent(out, level);
                 out << "TyLocal(" << node.name.as_str() << "): " << expr->ty.display() << "\n";
             } else if constexpr (std::is_same_v<N, EnumVariantRef>) {
                 indent(out, level);
-                out << "TyVariant(" << node.enum_name.as_str() << "::"
-                    << node.variant_name.as_str() << "): " << expr->ty.display() << "\n";
+                out << "TyVariant(" << node.enum_name.as_str() << "::" << node.variant_name.as_str()
+                    << "): " << expr->ty.display() << "\n";
             } else if constexpr (std::is_same_v<N, TyStructInit>) {
                 indent(out, level);
-                out << "TyStructInit(" << node.type_name.as_str()
-                    << "): " << expr->ty.display() << "\n";
+                out << "TyStructInit(" << node.type_name.as_str() << "): " << expr->ty.display()
+                    << "\n";
                 for (const TyStructInitField& field : node.fields) {
                     indent(out, level + 1);
                     out << field.name.as_str() << ":\n";
@@ -121,14 +118,13 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 print_ty_expr(out, node.rhs, level + 1);
             } else if constexpr (std::is_same_v<N, TyBinary>) {
                 indent(out, level);
-                out << "TyBinary(" << binary_name(node.op) << "): " << expr->ty.display()
-                    << "\n";
+                out << "TyBinary(" << binary_name(node.op) << "): " << expr->ty.display() << "\n";
                 print_ty_expr(out, node.lhs, level + 1);
                 print_ty_expr(out, node.rhs, level + 1);
             } else if constexpr (std::is_same_v<N, TyFieldAccess>) {
                 indent(out, level);
-                out << "TyFieldAccess(." << node.field.as_str()
-                    << "): " << expr->ty.display() << "\n";
+                out << "TyFieldAccess(." << node.field.as_str() << "): " << expr->ty.display()
+                    << "\n";
                 print_ty_expr(out, node.base, level + 1);
             } else if constexpr (std::is_same_v<N, TyCall>) {
                 indent(out, level);
@@ -178,8 +174,7 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                     if (init.discard)
                         out << "Let _: " << init.ty.display() << " =\n";
                     else
-                        out << "Let " << init.name.as_str() << ": " << init.ty.display()
-                            << " =\n";
+                        out << "Let " << init.name.as_str() << ": " << init.ty.display() << " =\n";
                     print_ty_expr(out, init.init, level + 3);
                 }
                 if (node.condition.has_value()) {
@@ -246,8 +241,7 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 for (std::size_t i = 0; i < node.params.size(); ++i) {
                     if (i > 0)
                         out << ", ";
-                    out << node.params[i].name.as_str() << ": "
-                        << node.params[i].ty.display();
+                    out << node.params[i].name.as_str() << ": " << node.params[i].ty.display();
                 }
                 out << ") -> " << node.return_ty.display() << "\n";
                 print_ty_block(out, node.body, level + 1);

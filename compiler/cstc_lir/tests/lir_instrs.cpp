@@ -27,7 +27,9 @@ static void test_assign_binary() {
     const LirPlace dest = LirPlace::local(2);
     const LirOperand lhs = LirOperand::copy(LirPlace::local(0));
     const LirOperand rhs_op = LirOperand::copy(LirPlace::local(1));
-    const LirRvalue rhs{LirBinaryOp{cstc::ast::BinaryOp::Mul, lhs, rhs_op}};
+    const LirRvalue rhs{
+        LirBinaryOp{cstc::ast::BinaryOp::Mul, lhs, rhs_op}
+    };
     const LirStmt stmt{dest, rhs, {}};
     assert(stmt.dest == LirPlace::local(2));
     const auto& bin = std::get<LirBinaryOp>(stmt.rhs.node);
@@ -38,7 +40,9 @@ static void test_assign_call_no_args() {
     SymbolSession session;
     const Symbol fn = Symbol::intern("noop");
     const LirPlace dest = LirPlace::local(0);
-    const LirRvalue rhs{LirCall{fn, {}}};
+    const LirRvalue rhs{
+        LirCall{fn, {}}
+    };
     const LirStmt stmt{dest, rhs, {}};
     const auto& call = std::get<LirCall>(stmt.rhs.node);
     assert(call.fn_name == fn);
@@ -50,7 +54,9 @@ static void test_assign_call_with_args() {
     const Symbol fn = Symbol::intern("add");
     const LirOperand a0 = LirOperand::copy(LirPlace::local(0));
     const LirOperand a1 = LirOperand::copy(LirPlace::local(1));
-    const LirRvalue rhs{LirCall{fn, {a0, a1}}};
+    const LirRvalue rhs{
+        LirCall{fn, {a0, a1}}
+    };
     const LirStmt stmt{LirPlace::local(2), rhs, {}};
     const auto& call = std::get<LirCall>(stmt.rhs.node);
     assert(call.args.size() == 2);
@@ -59,7 +65,9 @@ static void test_assign_call_with_args() {
 static void test_assign_unary_negate() {
     SymbolSession session;
     const LirOperand operand = LirOperand::copy(LirPlace::local(0));
-    const LirRvalue rhs{LirUnaryOp{cstc::ast::UnaryOp::Negate, operand}};
+    const LirRvalue rhs{
+        LirUnaryOp{cstc::ast::UnaryOp::Negate, operand}
+    };
     const LirStmt stmt{LirPlace::local(1), rhs, {}};
     const auto& unop = std::get<LirUnaryOp>(stmt.rhs.node);
     assert(unop.op == cstc::ast::UnaryOp::Negate);
@@ -130,7 +138,10 @@ static void test_terminator_jump() {
 static void test_terminator_switch_bool() {
     SymbolSession session;
     const LirOperand cond = LirOperand::copy(LirPlace::local(0));
-    const LirTerminator term{LirSwitchBool{cond, 1, 2}, {}};
+    const LirTerminator term{
+        LirSwitchBool{cond, 1, 2},
+        {}
+    };
     const auto& sw = std::get<LirSwitchBool>(term.node);
     assert(sw.true_target == 1);
     assert(sw.false_target == 2);
@@ -151,11 +162,12 @@ static void test_all_binary_ops() {
     const LirOperand rhs = LirOperand::from_const(LirConst::num(Symbol::intern("2")));
 
     using Op = cstc::ast::BinaryOp;
-    const Op ops[] = {Op::Add, Op::Sub, Op::Mul, Op::Div, Op::Mod,
-                      Op::Eq,  Op::Ne,  Op::Lt,  Op::Le,  Op::Gt,
-                      Op::Ge,  Op::And, Op::Or};
+    const Op ops[] = {Op::Add, Op::Sub, Op::Mul, Op::Div, Op::Mod, Op::Eq, Op::Ne,
+                      Op::Lt,  Op::Le,  Op::Gt,  Op::Ge,  Op::And, Op::Or};
     for (const Op op : ops) {
-        const LirRvalue rv{LirBinaryOp{op, lhs, rhs}};
+        const LirRvalue rv{
+            LirBinaryOp{op, lhs, rhs}
+        };
         assert(std::get<LirBinaryOp>(rv.node).op == op);
     }
 }

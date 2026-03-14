@@ -1,10 +1,10 @@
 #include <cassert>
 #include <string>
 
-#include <cstc_tyir_builder/builder.hpp>
 #include <cstc_parser/parser.hpp>
 #include <cstc_symbol/symbol.hpp>
 #include <cstc_tyir/tyir.hpp>
+#include <cstc_tyir_builder/builder.hpp>
 
 using namespace cstc::tyir_builder;
 using namespace cstc::tyir;
