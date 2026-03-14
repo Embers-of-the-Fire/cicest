@@ -72,6 +72,12 @@ Run tests:
 nix run .#tests
 ```
 
+Run lint + format checks:
+
+```bash
+nix run .#lint
+```
+
 ### Option 2: CMake + Ninja
 
 ```bash

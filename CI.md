@@ -40,9 +40,11 @@ File: `.github/workflows/lint-format.yml`
 
 Runs on `ubuntu-latest` only.
 
-- Installs Linux build dependencies with `apt`
-- Executes `bash .github/scripts/run-lint-format.sh`
+- Installs Nix (`cachix/install-nix-action`)
+- Executes `nix run .#lint --print-build-logs`
 - The script:
+  - Requires `clangd >= 19`
+  - Prefers `clang++` and validates C++23 `std::expected` support
   - Configures and builds with CMake + Ninja (`-Werror` enabled)
   - Runs `clang-format --dry-run --Werror` against tracked C/C++ sources
 
@@ -61,10 +63,10 @@ Both workflows trigger on:
 NIX_CONFIG='experimental-features = nix-command flakes' bash .github/scripts/run-tests.sh
 ```
 
-### Lint + format (Linux)
+### Lint + format (Linux, Nix app)
 
 ```bash
-bash .github/scripts/run-lint-format.sh
+nix run .#lint
 ```
 
 ### Platform test script (manual use)

@@ -30,7 +30,8 @@
         cmake
         gnumake
         ninja
-        clang
+        llvmPackages_latest.clang
+        llvmPackages_latest.clang-tools
         pkg-config
       ];
       misc-dependencies = with pkgs; [
@@ -88,6 +89,20 @@
               '';
             }
           }/bin/tests";
+        };
+        lint = {
+          type = "app";
+          program = "${
+            pkgs.writeShellApplication {
+              name = "lint";
+              runtimeInputs = make-dependencies ++ llvm-dependencies ++ parser-dependencies ++ misc-dependencies;
+              text = ''
+                export CC=''${CC:-clang}
+                export CXX=''${CXX:-clang++}
+                bash .github/scripts/run-lint-format.sh "$@"
+              '';
+            }
+          }/bin/lint";
         };
       };
 
