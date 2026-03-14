@@ -1,18 +1,21 @@
-# cstc_codegen — LIR to LLVM IR Lowering
+# cstc_codegen — LIR to LLVM + Native Emission
 
-`cstc_codegen` converts `cstc::lir::LirProgram` into textual LLVM IR.
+`cstc_codegen` lowers `cstc::lir::LirProgram` to LLVM and can emit:
+
+- textual LLVM IR
+- native assembly (`.s`)
+- native object files (`.o`)
 
 ## Role in the pipeline
 
 ```
-Source → Lexer → Parser → AST → TyIR → LIR → [cstc_codegen] → LLVM IR text
+Source → Lexer → Parser → AST → TyIR → LIR → [cstc_codegen] → LLVM IR / native artifacts
 ```
 
 The module is intentionally the first backend-facing stage:
 
 - Input is already type-checked (`TyIR`) and control-flow lowered (`LIR`).
-- Output is a printable LLVM module string suitable for inspection, tests,
-  and future machine-code pipelines.
+- Output can be either printable LLVM IR or host-native compile artifacts.
 
 ## Public API
 
@@ -22,14 +25,31 @@ Header: `include/cstc_codegen/codegen.hpp`
 std::string cstc::codegen::emit_llvm_ir(const lir::LirProgram& program);
 std::string cstc::codegen::emit_llvm_ir(const lir::LirProgram& program,
                                         std::string_view module_name);
+void cstc::codegen::emit_native_assembly(const lir::LirProgram& program,
+                                         const std::filesystem::path& assembly_path);
+void cstc::codegen::emit_native_assembly(const lir::LirProgram& program,
+                                         const std::filesystem::path& assembly_path,
+                                         std::string_view module_name);
+void cstc::codegen::emit_native_object(const lir::LirProgram& program,
+                                       const std::filesystem::path& object_path);
+void cstc::codegen::emit_native_object(const lir::LirProgram& program,
+                                       const std::filesystem::path& object_path,
+                                       std::string_view module_name);
+void cstc::codegen::emit_native_artifacts(const lir::LirProgram& program,
+                                          const std::filesystem::path& assembly_path,
+                                          const std::filesystem::path& object_path);
+void cstc::codegen::emit_native_artifacts(const lir::LirProgram& program,
+                                          const std::filesystem::path& assembly_path,
+                                          const std::filesystem::path& object_path,
+                                          std::string_view module_name);
 ```
 
 API properties:
 
 - LLVM types stay hidden from public headers.
 - Requires a live `cstc::symbol::SymbolSession` on the caller thread.
-- Produces textual IR for diagnostics/tests/tooling.
-- Runs a mem2reg-style promotion pass before printing.
+- Shares one lowering pipeline for both IR text and native emission.
+- Runs a mem2reg-style promotion pass before printing/emitting.
 
 ## Lowering model
 
@@ -71,6 +91,7 @@ The implementation performs these phases:
 - This stage assumes LIR is valid and type-correct.
 - Enums currently use discriminant-only layout (`{ i32 }`).
 - String constants are emitted as LLVM global string constants.
+- Native artifacts are emitted for the host default LLVM target triple.
 - Tests assert semantic patterns in emitted IR, not exact formatting.
 
 ## Quick usage
@@ -88,4 +109,3 @@ const auto lir = cstc::lir_builder::lower_program(*tyir);
 
 std::string llvm_ir = cstc::codegen::emit_llvm_ir(lir, "demo_module");
 ```
-

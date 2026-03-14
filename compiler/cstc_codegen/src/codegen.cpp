@@ -8,7 +8,7 @@
 /// 2. Declare function signatures.
 /// 3. Lower function bodies block-by-block.
 /// 4. Run local promotion passes.
-/// 5. Print the final module.
+/// 5. Print the final module or emit native artifacts.
 ///
 /// This file is intentionally implementation-only. Callers interact through
 /// `emit_llvm_ir` in `codegen.hpp`.
@@ -17,7 +17,12 @@
 
 #include <cassert>
 #include <cstdlib>
+#include <filesystem>
+#include <memory>
+#include <optional>
+#include <stdexcept>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <vector>
 
@@ -27,12 +32,23 @@
 #include <llvm/IR/Function.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
+#include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Type.h>
 #include <llvm/IR/Value.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CodeGen.h>
+#include <llvm/Support/FileSystem.h>
+#include <llvm/Support/TargetSelect.h>
+#include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/Target/TargetOptions.h>
+#include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/Triple.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/Mem2Reg.h>
 
 namespace cstc::codegen {
@@ -44,8 +60,8 @@ using cstc::symbol::Symbol;
 
 /// Owns all transient LLVM objects required while lowering one `LirProgram`.
 ///
-/// The context is single-use: construct, call `emit()`, discard. This keeps
-/// ownership and temporary lowering state local to a single API invocation.
+/// The context is single-use: construct, emit one output form, discard.
+/// This keeps ownership and temporary lowering state local to one API call.
 
 class CodegenContext {
 public:
@@ -55,17 +71,146 @@ public:
         , module_(std::string(module_name), context_)
         , builder_(context_) {}
 
-    /// Executes the full lowering pipeline and returns textual LLVM IR.
-    std::string emit() {
+    /// Executes lowering and serializes textual LLVM IR.
+    std::string emit_llvm_ir_text() {
+        build_module();
+        return print_module();
+    }
+
+    /// Executes lowering and emits native assembly (`.s`).
+    void emit_native_assembly(const std::filesystem::path& assembly_output_path) {
+        build_module();
+
+        auto target_machine = create_native_target_machine();
+        emit_file(
+            *target_machine, module_, assembly_output_path, llvm::CodeGenFileType::AssemblyFile);
+    }
+
+    /// Executes lowering and emits a native object file (`.o`).
+    void emit_native_object(const std::filesystem::path& object_output_path) {
+        build_module();
+
+        auto target_machine = create_native_target_machine();
+        emit_file(*target_machine, module_, object_output_path, llvm::CodeGenFileType::ObjectFile);
+    }
+
+    /// Executes lowering and emits native assembly and object artifacts.
+    void emit_native_artifacts(
+        const std::filesystem::path& assembly_output_path,
+        const std::filesystem::path& object_output_path) {
+        build_module();
+
+        auto target_machine = create_native_target_machine();
+
+        auto assembly_module = llvm::CloneModule(module_);
+        emit_file(
+            *target_machine, *assembly_module, assembly_output_path,
+            llvm::CodeGenFileType::AssemblyFile);
+
+        auto object_module = llvm::CloneModule(module_);
+        emit_file(
+            *target_machine, *object_module, object_output_path, llvm::CodeGenFileType::ObjectFile);
+    }
+
+private:
+    /// Runs lowering + cleanup passes once per context.
+    void build_module() {
+        if (is_built_)
+            return;
+
         declare_structs();
         declare_enums();
         declare_functions();
         define_functions();
         run_passes();
-        return print_module();
+        verify_module();
+        is_built_ = true;
     }
 
-private:
+    /// Ensures the lowered module is valid LLVM IR.
+    void verify_module() {
+        std::string verify_error;
+        llvm::raw_string_ostream verify_stream(verify_error);
+        if (llvm::verifyModule(module_, &verify_stream)) {
+            throw std::runtime_error("invalid LLVM module: " + verify_stream.str());
+        }
+    }
+
+    /// Initializes host-target support the first time native emission runs.
+    static void initialize_native_target_once() {
+        static const bool initialized = [] {
+            if (llvm::InitializeNativeTarget())
+                throw std::runtime_error("failed to initialize native LLVM target");
+            if (llvm::InitializeNativeTargetAsmPrinter())
+                throw std::runtime_error("failed to initialize LLVM ASM printer");
+            return true;
+        }();
+
+        (void)initialized;
+    }
+
+    /// Creates a target machine for the current host triple.
+    [[nodiscard]] std::unique_ptr<llvm::TargetMachine> create_native_target_machine() {
+        initialize_native_target_once();
+
+        const llvm::Triple target_triple(llvm::sys::getDefaultTargetTriple());
+        std::string target_error;
+        const llvm::Target* target =
+            llvm::TargetRegistry::lookupTarget(target_triple, target_error);
+        if (target == nullptr)
+            throw std::runtime_error("failed to resolve LLVM target: " + target_error);
+
+        llvm::TargetOptions target_options;
+        auto target_machine = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
+            target_triple, "generic", "", target_options, std::nullopt));
+        if (target_machine == nullptr)
+            throw std::runtime_error(
+                "failed to create LLVM target machine for: " + target_triple.str());
+
+        module_.setTargetTriple(target_triple);
+        module_.setDataLayout(target_machine->createDataLayout());
+        return target_machine;
+    }
+
+    /// Creates parent directories for an output file path.
+    static void ensure_parent_directory(const std::filesystem::path& file_path) {
+        const std::filesystem::path parent = file_path.parent_path();
+        if (parent.empty())
+            return;
+
+        std::error_code error;
+        std::filesystem::create_directories(parent, error);
+        if (error)
+            throw std::runtime_error(
+                "failed to create output directory '" + parent.string() + "': " + error.message());
+    }
+
+    /// Emits one target file type (`AssemblyFile` / `ObjectFile`).
+    void emit_file(
+        llvm::TargetMachine& target_machine, llvm::Module& module,
+        const std::filesystem::path& output_path, llvm::CodeGenFileType file_type) {
+        ensure_parent_directory(output_path);
+
+        std::error_code file_error;
+        llvm::raw_fd_ostream destination(output_path.string(), file_error, llvm::sys::fs::OF_None);
+        if (file_error)
+            throw std::runtime_error(
+                "failed to open output file '" + output_path.string()
+                + "': " + file_error.message());
+
+        llvm::legacy::PassManager pass_manager;
+        if (target_machine.addPassesToEmitFile(pass_manager, destination, nullptr, file_type)) {
+            throw std::runtime_error(
+                "target machine cannot emit requested file type for '" + output_path.string()
+                + "'");
+        }
+
+        pass_manager.run(module);
+        destination.flush();
+        if (destination.has_error())
+            throw std::runtime_error("failed to write output file: " + output_path.string());
+    }
+
     // ─── Type mapping ───────────────────────────────────────────────────────
 
     /// Converts a TyIR type into its LLVM IR representation.
@@ -564,6 +709,7 @@ private:
     llvm::Function* current_fn_ = nullptr;
     std::vector<llvm::AllocaInst*> local_allocas_;
     std::vector<llvm::BasicBlock*> basic_blocks_;
+    bool is_built_ = false;
 };
 
 // ─── Public API ─────────────────────────────────────────────────────────────
@@ -576,7 +722,50 @@ std::string emit_llvm_ir(const lir::LirProgram& program) {
 /// Emits LLVM IR using a caller-provided module name.
 std::string emit_llvm_ir(const lir::LirProgram& program, std::string_view module_name) {
     CodegenContext ctx(program, module_name);
-    return ctx.emit();
+    return ctx.emit_llvm_ir_text();
+}
+
+/// Emits native assembly using the default module name.
+void emit_native_assembly(
+    const lir::LirProgram& program, const std::filesystem::path& assembly_output_path) {
+    emit_native_assembly(program, assembly_output_path, "cicest_module");
+}
+
+/// Emits native assembly using a caller-provided module name.
+void emit_native_assembly(
+    const lir::LirProgram& program, const std::filesystem::path& assembly_output_path,
+    std::string_view module_name) {
+    CodegenContext ctx(program, module_name);
+    ctx.emit_native_assembly(assembly_output_path);
+}
+
+/// Emits a native object file using the default module name.
+void emit_native_object(
+    const lir::LirProgram& program, const std::filesystem::path& object_output_path) {
+    emit_native_object(program, object_output_path, "cicest_module");
+}
+
+/// Emits a native object file using a caller-provided module name.
+void emit_native_object(
+    const lir::LirProgram& program, const std::filesystem::path& object_output_path,
+    std::string_view module_name) {
+    CodegenContext ctx(program, module_name);
+    ctx.emit_native_object(object_output_path);
+}
+
+/// Emits native assembly/object artifacts using the default module name.
+void emit_native_artifacts(
+    const lir::LirProgram& program, const std::filesystem::path& assembly_output_path,
+    const std::filesystem::path& object_output_path) {
+    emit_native_artifacts(program, assembly_output_path, object_output_path, "cicest_module");
+}
+
+/// Emits native assembly/object artifacts using a caller-provided module name.
+void emit_native_artifacts(
+    const lir::LirProgram& program, const std::filesystem::path& assembly_output_path,
+    const std::filesystem::path& object_output_path, std::string_view module_name) {
+    CodegenContext ctx(program, module_name);
+    ctx.emit_native_artifacts(assembly_output_path, object_output_path);
 }
 
 } // namespace cstc::codegen

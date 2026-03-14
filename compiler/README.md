@@ -7,6 +7,7 @@ This directory contains the scoped Cicest frontend packages:
 - `cstc_ast`: AST model + formatter
 - `cstc_lexer`: source tokenizer
 - `cstc_parser`: token/source parser to AST
+- `cstc`: compiler CLI that emits `.s` / `.o` artifacts
 - `cstc_inspect`: inspection CLI
 
 Each package has its own `README.md` with API and test details.

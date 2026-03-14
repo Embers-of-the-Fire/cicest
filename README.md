@@ -1,7 +1,7 @@
 # The Cicest Programming Language
 
 Cicest is a small expression-oriented language and compiler prototype implemented in modern C++.
-The current repository contains a working multi-stage compiler pipeline from source text to LLVM IR text.
+The current repository contains a working multi-stage compiler pipeline from source text to LLVM IR and native compile artifacts.
 
 ## Current Implementation Scope
 
@@ -32,6 +32,7 @@ Current semantic/lowering stages include:
 - type checking and typed IR lowering
 - lowering to control-flow based LIR
 - LLVM IR emission
+- native assembly/object artifact emission
 
 For full syntax and grammar notes, see [docs/language/index.md](docs/language/index.md).
 
@@ -48,13 +49,14 @@ The implementation under `compiler/` currently includes:
 - `cstc_tyir_builder`: AST → TyIR lowering + type checking
 - `cstc_lir`: low-level IR model + formatter
 - `cstc_lir_builder`: TyIR → LIR lowering
-- `cstc_codegen`: LIR → LLVM IR text emitter
+- `cstc_codegen`: LIR → LLVM IR/native artifact backend
+- `cstc`: compiler CLI that emits `.s` and `.o`
 - `cstc_inspect`: CLI inspector for each stage
 
 Pipeline overview:
 
 ```text
-Source -> Lexer -> Parser -> AST -> TyIR -> LIR -> LLVM IR
+Source -> Lexer -> Parser -> AST -> TyIR -> LIR -> LLVM IR -> native .s/.o
 ```
 
 ## Build
@@ -101,6 +103,36 @@ Notes:
 ## CI
 
 For CI workflow details (test matrix, lint/format checks, and local reproduction), see [CI.md](CI.md).
+
+## Compiler CLI
+
+The compiler executable is built at `build/compiler/cstc/cstc`.
+
+Usage:
+
+```bash
+./build/compiler/cstc/cstc <input-file> [-o <output-stem>] [--module-name <module>] [--emit <asm|obj|exe|all>] [--linker <linker>]
+```
+
+Examples:
+
+```bash
+./build/compiler/cstc/cstc path/to/file.cst
+./build/compiler/cstc/cstc path/to/file.cst -o build/out/program
+./build/compiler/cstc/cstc path/to/file.cst -o build/out/program --emit asm
+./build/compiler/cstc/cstc path/to/file.cst -o build/out/program --emit obj
+./build/compiler/cstc/cstc path/to/file.cst -o build/out/program --emit all
+```
+
+`cstc` supports these artifacts:
+
+- `<stem>.s`
+- `<stem>.o`
+- `<stem>`
+
+Default output is `<stem>` (linked executable).
+Use `--emit` to request specific outputs (`asm`, `obj`, `exe`, or `all`; can be repeated).
+Executable output uses an external linker/driver (`$CXX` by default, overridable via `--linker`).
 
 ## Inspector CLI
 
