@@ -349,9 +349,7 @@ private:
 
                 // Lower then-block.
                 builder.set_current_block(then_id);
-                builder.push_scope();
                 const lir::LirOperand then_val = lower_block(builder, node.then_block);
-                builder.pop_scope();
                 // Store then-value into result_local and jump to merge (if not diverged).
                 if (!builder.is_terminated()) {
                     builder.emit_stmt(
@@ -389,9 +387,7 @@ private:
 
                 builder.set_current_block(header_id);
                 builder.push_loop(header_id, after_id, result_local);
-                builder.push_scope();
                 static_cast<void>(lower_block(builder, node.body));
-                builder.pop_scope();
                 builder.pop_loop();
 
                 // If the body doesn't diverge, jump back to header.
@@ -422,9 +418,7 @@ private:
                 // Body block.
                 builder.set_current_block(body_id);
                 builder.push_loop(cond_id, after_id);
-                builder.push_scope();
                 static_cast<void>(lower_block(builder, node.body));
-                builder.pop_scope();
                 builder.pop_loop();
                 if (!builder.is_terminated())
                     builder.seal_block(lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
@@ -478,9 +472,7 @@ private:
                 // Body block.
                 builder.set_current_block(body_id);
                 builder.push_loop(continue_target, after_id);
-                builder.push_scope();
                 static_cast<void>(lower_block(builder, node.body));
-                builder.pop_scope();
                 builder.pop_loop();
                 if (!builder.is_terminated())
                     builder.seal_block(
@@ -541,6 +533,8 @@ private:
 /// blocks as needed.  Returns an operand for the block's value (its tail
 /// expression, or `()` if there is none).
 [[nodiscard]] lir::LirOperand lower_block(FnBuilder& builder, const tyir::TyBlockPtr& block) {
+    builder.push_scope();
+
     for (const tyir::TyStmt& stmt : block->stmts) {
         std::visit(
             [&](const auto& s) {
@@ -561,12 +555,19 @@ private:
                 }
             },
             stmt);
+
+        if (builder.is_terminated()) {
+            builder.pop_scope();
+            return lir::LirOperand::from_const(lir::LirConst::unit());
+        }
     }
 
-    if (block->tail.has_value())
-        return lower_expr(builder, *block->tail);
+    lir::LirOperand result = lir::LirOperand::from_const(lir::LirConst::unit());
+    if (!builder.is_terminated() && block->tail.has_value())
+        result = lower_expr(builder, *block->tail);
 
-    return lir::LirOperand::from_const(lir::LirConst::unit());
+    builder.pop_scope();
+    return result;
 }
 
 // ─── Function lowering ────────────────────────────────────────────────────────
