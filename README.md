@@ -92,6 +92,10 @@ Notes:
 - The project requires C++23 (`cmake_minimum_required(VERSION 3.21)`).
 - `cstc_codegen` links against LLVM and supporting libraries (`zlib`, `libxml2`, `libffi`).
 
+## CI
+
+For CI workflow details (test matrix, lint/format checks, and local reproduction), see [CI.md](CI.md).
+
 ## Inspector CLI
 
 The inspector executable is built at `build/compiler/cstc_inspect/cstc_inspect`.

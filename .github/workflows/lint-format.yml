@@ -1,0 +1,26 @@
+name: Lint and Format
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+
+jobs:
+  lint-format:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Lint and format check
+        shell: bash
+        env:
+          NIX_CONFIG: experimental-features = nix-command flakes
+        run: nix develop --command bash .github/scripts/run-lint-format.sh

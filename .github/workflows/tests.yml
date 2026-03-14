@@ -8,19 +8,86 @@ on:
   pull_request:
 
 jobs:
-  nix-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  platform-tests:
+    name: Tests (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    continue-on-error: ${{ matrix.allow_failure }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-latest
+            platform: linux
+            allow_failure: false
+          - name: macos
+            os: macos-latest
+            platform: macos
+            allow_failure: false
+          - name: windows-mingw
+            os: windows-latest
+            platform: windows
+            allow_failure: true
+          - name: windows-msvc
+            os: windows-latest
+            platform: windows-msvc
+            allow_failure: true
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Nix
+      - name: Install Nix (Linux)
+        if: matrix.platform == 'linux'
         uses: cachix/install-nix-action@v31
 
-      - name: Run test suite
+      - name: Install macOS dependencies
+        if: matrix.platform == 'macos'
+        run: |
+          brew install cmake ninja llvm libxml2 libffi
+
+      - name: Setup MSYS2 (Windows)
+        if: matrix.platform == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-clang
+            mingw-w64-x86_64-llvm
+            mingw-w64-x86_64-libxml2
+            mingw-w64-x86_64-libffi
+            mingw-w64-x86_64-zlib
+
+      - name: Setup MSVC environment (Windows)
+        if: matrix.platform == 'windows-msvc'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install LLVM (Windows, MSVC)
+        if: matrix.platform == 'windows-msvc'
+        shell: pwsh
+        run: choco install llvm --yes --no-progress
+
+      - name: Run test suite (Linux)
+        if: matrix.platform == 'linux'
         env:
           NIX_CONFIG: experimental-features = nix-command flakes
         run: bash .github/scripts/run-tests.sh
 
+      - name: Run test suite (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: bash .github/scripts/run-platform-tests.sh "${{ matrix.platform }}"
+
+      - name: Run test suite (Windows)
+        if: matrix.platform == 'windows'
+        shell: msys2 {0}
+        run: bash .github/scripts/run-platform-tests.sh "${{ matrix.platform }}"
+
+      - name: Run test suite (Windows, MSVC)
+        if: matrix.platform == 'windows-msvc'
+        shell: pwsh
+        run: .github/scripts/run-msvc-tests.ps1
