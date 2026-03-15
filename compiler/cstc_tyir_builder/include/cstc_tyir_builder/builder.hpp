@@ -900,11 +900,16 @@ struct LowerCtx {
                 if (!ctx.in_loop())
                     return make_error(expr->span, "'break' outside of a loop");
 
-                auto& loop_ctx = ctx.current_loop();
+                // Capture the loop kind by value before any recursive
+                // lowering.  lower_expr() may push new entries onto
+                // ctx.loop_stack (e.g. `break (loop { break 1; })`),
+                // which can reallocate the vector and invalidate any
+                // reference obtained from current_loop().
+                const LoopKind break_loop_kind = ctx.current_loop().kind;
 
                 if (node.value.has_value()) {
                     // break-with-value is only allowed inside `loop`
-                    if (loop_ctx.kind != LoopKind::Loop)
+                    if (break_loop_kind != LoopKind::Loop)
                         return make_error(
                             expr->span, "'break' with a value is only allowed inside 'loop'");
 
@@ -912,6 +917,8 @@ struct LowerCtx {
                     if (!val)
                         return std::unexpected(std::move(val.error()));
 
+                    // Re-acquire the reference after recursion.
+                    auto& loop_ctx = ctx.current_loop();
                     const tyir::Ty& val_ty = (*val)->ty;
                     if (!loop_ctx.break_ty.has_value()) {
                         loop_ctx.break_ty = val_ty;
@@ -932,7 +939,8 @@ struct LowerCtx {
                         expr->span, tyir::TyBreak{std::move(*val)}, tyir::ty::never());
                 }
 
-                // Bare break
+                // Bare break — no recursive call, so a fresh reference is safe.
+                auto& loop_ctx = ctx.current_loop();
                 if (loop_ctx.kind == LoopKind::Loop) {
                     // Bare break in `loop` contributes Unit
                     if (!loop_ctx.break_ty.has_value()) {
