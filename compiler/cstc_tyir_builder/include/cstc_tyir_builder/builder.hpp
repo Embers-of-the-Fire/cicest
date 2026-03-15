@@ -342,16 +342,80 @@ struct LowerCtx {
         stmt);
 }
 
+[[nodiscard]] inline bool expr_can_fallthrough(const tyir::TyExpr& expr);
+
 [[nodiscard]] inline bool stmt_can_fallthrough(const tyir::TyStmt& stmt) {
     return std::visit(
         [](const auto& s) {
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, tyir::TyLetStmt>)
-                return !s.init->ty.is_never();
+                return expr_can_fallthrough(*s.init);
             else
-                return !s.expr->ty.is_never();
+                return expr_can_fallthrough(*s.expr);
         },
         stmt);
+}
+
+[[nodiscard]] inline bool block_can_fallthrough(const tyir::TyBlock& block);
+
+[[nodiscard]] inline bool expr_can_fallthrough(const tyir::TyExpr& expr) {
+    if (expr.ty.is_never())
+        return false;
+
+    return std::visit(
+        [](const auto& node) {
+            using N = std::decay_t<decltype(node)>;
+
+            if constexpr (
+                std::is_same_v<N, tyir::TyLiteral> || std::is_same_v<N, tyir::LocalRef>
+                || std::is_same_v<N, tyir::EnumVariantRef>) {
+                return true;
+            } else if constexpr (std::is_same_v<N, tyir::TyStructInit>) {
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    if (!expr_can_fallthrough(*field.value))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<N, tyir::TyUnary>) {
+                return expr_can_fallthrough(*node.rhs);
+            } else if constexpr (std::is_same_v<N, tyir::TyBinary>) {
+                return expr_can_fallthrough(*node.lhs) && expr_can_fallthrough(*node.rhs);
+            } else if constexpr (std::is_same_v<N, tyir::TyFieldAccess>) {
+                return expr_can_fallthrough(*node.base);
+            } else if constexpr (std::is_same_v<N, tyir::TyCall>) {
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (!expr_can_fallthrough(*arg))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<N, tyir::TyBlockPtr>) {
+                return block_can_fallthrough(*node);
+            } else if constexpr (std::is_same_v<N, tyir::TyIf>) {
+                if (!expr_can_fallthrough(*node.condition))
+                    return false;
+                if (!node.else_branch.has_value())
+                    return true;
+                return block_can_fallthrough(*node.then_block)
+                    || expr_can_fallthrough(**node.else_branch);
+            } else if constexpr (std::is_same_v<N, tyir::TyLoop>) {
+                return true;
+            } else if constexpr (std::is_same_v<N, tyir::TyWhile>) {
+                return expr_can_fallthrough(*node.condition);
+            } else if constexpr (std::is_same_v<N, tyir::TyFor>) {
+                if (node.init.has_value() && !expr_can_fallthrough(*node.init->init))
+                    return false;
+                if (node.condition.has_value() && !expr_can_fallthrough(**node.condition))
+                    return false;
+                return true;
+            } else if constexpr (
+                std::is_same_v<N, tyir::TyBreak> || std::is_same_v<N, tyir::TyContinue>
+                || std::is_same_v<N, tyir::TyReturn>) {
+                return false;
+            } else {
+                return true;
+            }
+        },
+        expr.node);
 }
 
 [[nodiscard]] inline bool block_can_fallthrough(const tyir::TyBlock& block) {
@@ -361,7 +425,7 @@ struct LowerCtx {
     }
     if (!block.tail.has_value())
         return true;
-    return !(*block.tail)->ty.is_never();
+    return expr_can_fallthrough(**block.tail);
 }
 
 // ─── Block lowering ──────────────────────────────────────────────────────────
@@ -382,16 +446,18 @@ struct LowerCtx {
         result.stmts.push_back(std::move(*lowered));
     }
 
+    const bool reaches_tail = block_can_fallthrough(result);
+
     if (block.tail.has_value()) {
         auto tail = lower_expr(*block.tail, ctx);
         if (!tail) {
             ctx.scope.pop();
             return std::unexpected(std::move(tail.error()));
         }
-        result.ty = (*tail)->ty;
         result.tail = std::move(*tail);
+        result.ty = reaches_tail ? (*result.tail)->ty : tyir::ty::never();
     } else {
-        result.ty = block_can_fallthrough(result) ? tyir::ty::unit() : tyir::ty::never();
+        result.ty = reaches_tail ? tyir::ty::unit() : tyir::ty::never();
     }
 
     ctx.scope.pop();

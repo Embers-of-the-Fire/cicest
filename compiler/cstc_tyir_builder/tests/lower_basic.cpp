@@ -198,6 +198,20 @@ static void test_non_unit_fn_if_else_returns_as_stmt() {
     assert(!fn.body->tail.has_value());
 }
 
+static void test_non_unit_fn_if_condition_return_no_fallthrough() {
+    const auto prog = must_lower("fn f() -> num { if (return 1) { }; }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::num());
+    assert(!fn.body->tail.has_value());
+}
+
+static void test_non_unit_fn_while_condition_return_no_fallthrough() {
+    const auto prog = must_lower("fn f() -> num { while (return 1) { }; }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::num());
+    assert(!fn.body->tail.has_value());
+}
+
 static void test_let_type_mismatch() { must_fail("fn f() { let x: bool = 42; }"); }
 
 int main() {
@@ -223,6 +237,8 @@ int main() {
     test_non_unit_fn_fallthrough_error();
     test_non_unit_fn_explicit_return_stmt();
     test_non_unit_fn_if_else_returns_as_stmt();
+    test_non_unit_fn_if_condition_return_no_fallthrough();
+    test_non_unit_fn_while_condition_return_no_fallthrough();
     test_let_type_mismatch();
 
     return 0;
