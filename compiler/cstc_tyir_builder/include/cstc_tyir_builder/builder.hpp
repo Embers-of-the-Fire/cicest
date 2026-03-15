@@ -264,7 +264,8 @@ struct LowerCtx {
             return make_error(span, "undefined type '" + std::string(ref.symbol.as_str()) + "'");
         return tyir::ty::named(ref.symbol);
     }
-    return tyir::ty::unit();
+    assert(false && "unhandled ast::TypeKind in lower_type");
+    __builtin_unreachable();
 }
 
 // ─── Forward declarations ────────────────────────────────────────────────────
