@@ -247,10 +247,39 @@ Mandatory constraints for frontend validation:
 - No duplicate variant names inside one enum.
 - No duplicate parameter names within one function signature.
 - Condition expressions in `if`/`while`/`for` must type-check as `bool`.
-- `break`/`continue` allowed only inside loop forms.
+- `break`/`continue` allowed only inside loop forms (`loop`, `while`, `for`).
+- `break` with a value (`break expr`) is allowed only inside `loop`, not inside `while` or `for`.
 - `return` allowed only inside function bodies.
 - Enum variant usage must be fully scoped (`E::V`), not bare `V`.
 - Only named struct declarations are permitted; unnamed structs are invalid.
+
+### 5.1 Loop and Break Typing Rules
+
+#### `loop` expression typing
+
+The type of a `loop` expression is inferred from its `break` values:
+
+- If the loop contains no `break` statements (e.g., it diverges via `return`), the loop has type `Never` (bottom type, `!`).
+- If the loop contains only bare `break;` (no value), the loop has type `Unit`.
+- If the loop contains `break expr;`, the loop has the type of `expr`.
+- All `break` values within a single `loop` must have the same type. Conflicting break types produce a type error.
+
+#### `while` and `for` expression typing
+
+`while` and `for` expressions always have type `Unit`, regardless of their body.
+`break` with a value is rejected inside `while` and `for`; only bare `break;` is permitted.
+
+#### Break type unification
+
+When multiple `break` statements exist in the same `loop`:
+
+- The first `break` establishes the expected break type.
+- Subsequent `break` values must be compatible with the established type.
+- `Never`-typed values (e.g., from nested `return`) are compatible with any type.
+
+#### Nested loops
+
+Each loop form maintains its own break-type context. A `break` targets the innermost enclosing loop. Inner and outer loops may have different break types independently.
 
 ## 7. Valid Syntax Examples
 

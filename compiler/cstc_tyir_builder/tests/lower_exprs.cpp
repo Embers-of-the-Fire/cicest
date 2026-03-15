@@ -265,6 +265,142 @@ static void test_return_is_never() {
     assert(std::holds_alternative<TyReturn>(stmt.expr->node));
 }
 
+// ─── Loop/break type inference ────────────────────────────────────────────────
+
+static void test_loop_break_num_type() {
+    // break 42 → loop type is num
+    const auto prog = must_lower("fn f() -> num { loop { break 42; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+    assert(std::holds_alternative<TyLoop>(tail->node));
+}
+
+static void test_loop_break_str_type() {
+    const auto prog = must_lower("fn f() -> str { loop { break \"hi\"; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::str());
+}
+
+static void test_loop_break_bool_type() {
+    const auto prog = must_lower("fn f() -> bool { loop { break true; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::bool_());
+}
+
+static void test_loop_bare_break_is_unit() {
+    const auto prog = must_lower("fn f() { loop { break; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::unit());
+    assert(std::holds_alternative<TyLoop>(tail->node));
+}
+
+static void test_loop_no_break_is_never() {
+    // loop with no break diverges → type is Never
+    const auto prog = must_lower("fn f() -> num { loop { return 1; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::never());
+}
+
+static void test_loop_multiple_breaks_same_type() {
+    const auto prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  loop {"
+        "    if b { break 1; } else { break 2; }"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_loop_break_type_mismatch_error() {
+    must_fail_with_message(
+        "fn f(b: bool) { loop { if b { break 1; } else { break true; } } }",
+        "'break' value type mismatch");
+}
+
+static void test_loop_break_bare_vs_value_mismatch_error() {
+    must_fail_with_message(
+        "fn f(b: bool) { loop { if b { break 42; } else { break; } } }",
+        "'break' value type mismatch");
+}
+
+// ─── Break/continue outside loop ─────────────────────────────────────────────
+
+static void test_break_outside_loop_error() {
+    must_fail_with_message("fn f() { break; }", "'break' outside of a loop");
+}
+
+static void test_continue_outside_loop_error() {
+    must_fail_with_message("fn f() { continue; }", "'continue' outside of a loop");
+}
+
+static void test_break_outside_loop_with_value_error() {
+    must_fail_with_message("fn f() { break 42; }", "'break' outside of a loop");
+}
+
+// ─── Break-with-value in while/for ───────────────────────────────────────────
+
+static void test_break_value_in_while_error() {
+    must_fail_with_message(
+        "fn f(b: bool) { while b { break 42; } }",
+        "'break' with a value is only allowed inside 'loop'");
+}
+
+static void test_break_value_in_for_error() {
+    must_fail_with_message(
+        "fn f() { for (;;) { break 42; } }", "'break' with a value is only allowed inside 'loop'");
+}
+
+static void test_bare_break_in_while_ok() {
+    const auto prog = must_lower("fn f(b: bool) { while b { break; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::unit());
+}
+
+static void test_bare_break_in_for_ok() {
+    const auto prog = must_lower("fn f() { for (;;) { break; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::unit());
+}
+
+// ─── Nested loops ────────────────────────────────────────────────────────────
+
+static void test_nested_loop_different_break_types() {
+    // Outer loop breaks with num, inner loop breaks with bool — should be fine
+    const auto prog = must_lower(
+        "fn f() -> num {"
+        "  loop {"
+        "    loop { break true; };"
+        "    break 42;"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_break_value_in_loop_nested_inside_while() {
+    // `loop` nested inside `while` — break-with-value should target the `loop`
+    const auto prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  loop {"
+        "    while b { break; }"
+        "    break 42;"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_continue_in_while_ok() {
+    const auto prog = must_lower("fn f(b: bool) { while b { continue; } }");
+    (void)prog;
+}
+
+static void test_continue_in_for_ok() {
+    const auto prog = must_lower("fn f() { for (;;) { continue; break; } }");
+    (void)prog;
+}
+
 // ─── Function calls ───────────────────────────────────────────────────────────
 
 static void test_fn_call() {
@@ -392,6 +528,34 @@ int main() {
     test_for_loop();
     test_break_and_continue_are_never();
     test_return_is_never();
+
+    // Loop/break type inference
+    test_loop_break_num_type();
+    test_loop_break_str_type();
+    test_loop_break_bool_type();
+    test_loop_bare_break_is_unit();
+    test_loop_no_break_is_never();
+    test_loop_multiple_breaks_same_type();
+    test_loop_break_type_mismatch_error();
+    test_loop_break_bare_vs_value_mismatch_error();
+
+    // Break/continue outside loop
+    test_break_outside_loop_error();
+    test_continue_outside_loop_error();
+    test_break_outside_loop_with_value_error();
+
+    // Break-with-value in while/for
+    test_break_value_in_while_error();
+    test_break_value_in_for_error();
+    test_bare_break_in_while_ok();
+    test_bare_break_in_for_ok();
+
+    // Nested loops
+    test_nested_loop_different_break_types();
+    test_break_value_in_loop_nested_inside_while();
+    test_continue_in_while_ok();
+    test_continue_in_for_ok();
+
     test_fn_call();
     test_call_undefined_fn_error();
     test_call_arg_count_error();

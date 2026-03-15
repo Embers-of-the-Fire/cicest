@@ -181,6 +181,20 @@ private:
         frames_;
 };
 
+// ─── Loop context ───────────────────────────────────────────────────────────
+
+/// Discriminates the three loop forms for break-value validation.
+enum class LoopKind { Loop, While, For };
+
+/// Per-loop context pushed onto the loop stack on entry to any loop form.
+struct LoopCtx {
+    LoopKind kind;
+    /// Accumulated break type.  `std::nullopt` means no `break` has been seen
+    /// yet; once a `break` is encountered the type is set (bare `break` → Unit,
+    /// `break expr` → expr type).  Subsequent breaks must unify.
+    std::optional<tyir::Ty> break_ty;
+};
+
 // ─── Lowering context ────────────────────────────────────────────────────────
 
 /// Per-function lowering state threaded through all expression / statement
@@ -190,6 +204,27 @@ struct LowerCtx {
     Scope scope;
     /// Return type of the function currently being lowered.
     tyir::Ty current_return_ty;
+
+    /// Stack of enclosing loops (innermost at back).
+    std::vector<LoopCtx> loop_stack;
+
+    /// Returns true when we are inside at least one loop form.
+    [[nodiscard]] bool in_loop() const { return !loop_stack.empty(); }
+
+    /// Returns the innermost loop context.  UB if `!in_loop()`.
+    [[nodiscard]] LoopCtx& current_loop() {
+        assert(!loop_stack.empty());
+        return loop_stack.back();
+    }
+
+    /// Push a new loop context for the given loop kind.
+    void push_loop(LoopKind kind) { loop_stack.push_back(LoopCtx{kind, std::nullopt}); }
+
+    /// Pop the innermost loop context.
+    void pop_loop() {
+        assert(!loop_stack.empty());
+        loop_stack.pop_back();
+    }
 };
 
 // ─── Type compatibility ──────────────────────────────────────────────────────
@@ -697,12 +732,20 @@ struct LowerCtx {
 
             // ── Loop ──────────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::LoopExpr>) {
+                ctx.push_loop(LoopKind::Loop);
                 auto body = lower_block(*node.body, ctx);
-                if (!body)
+                if (!body) {
+                    ctx.pop_loop();
                     return std::unexpected(std::move(body.error()));
+                }
+                // Infer loop type from accumulated break types:
+                //   - no break seen  → Never (loop diverges)
+                //   - bare break     → Unit
+                //   - break expr     → expr type
+                const tyir::Ty loop_ty = ctx.current_loop().break_ty.value_or(tyir::ty::never());
+                ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
-                return tyir::make_ty_expr(
-                    expr->span, tyir::TyLoop{std::move(body_ptr)}, tyir::ty::unit());
+                return tyir::make_ty_expr(expr->span, tyir::TyLoop{std::move(body_ptr)}, loop_ty);
             }
 
             // ── While ─────────────────────────────────────────────────────
@@ -715,9 +758,13 @@ struct LowerCtx {
                         node.condition->span, "'while' condition must have type 'bool', found '"
                                                   + (*cond)->ty.display() + "'");
 
+                ctx.push_loop(LoopKind::While);
                 auto body = lower_block(*node.body, ctx);
-                if (!body)
+                if (!body) {
+                    ctx.pop_loop();
                     return std::unexpected(std::move(body.error()));
+                }
+                ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
 
                 return tyir::make_ty_expr(
@@ -806,11 +853,14 @@ struct LowerCtx {
                     lowered_step = std::move(*step);
                 }
 
+                ctx.push_loop(LoopKind::For);
                 auto body = lower_block(*node.body, ctx);
                 if (!body) {
+                    ctx.pop_loop();
                     ctx.scope.pop();
                     return std::unexpected(std::move(body.error()));
                 }
+                ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
 
                 ctx.scope.pop();
@@ -825,19 +875,67 @@ struct LowerCtx {
 
             // ── Break ─────────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::BreakExpr>) {
-                std::optional<tyir::TyExprPtr> lowered_val;
+                if (!ctx.in_loop())
+                    return make_error(expr->span, "'break' outside of a loop");
+
+                auto& loop_ctx = ctx.current_loop();
+
                 if (node.value.has_value()) {
+                    // break-with-value is only allowed inside `loop`
+                    if (loop_ctx.kind != LoopKind::Loop)
+                        return make_error(
+                            expr->span, "'break' with a value is only allowed inside 'loop'");
+
                     auto val = lower_expr(*node.value, ctx);
                     if (!val)
                         return std::unexpected(std::move(val.error()));
-                    lowered_val = std::move(*val);
+
+                    const tyir::Ty& val_ty = (*val)->ty;
+                    if (!loop_ctx.break_ty.has_value()) {
+                        loop_ctx.break_ty = val_ty;
+                    } else {
+                        // Unify: Never is compatible with anything
+                        const tyir::Ty& prev = *loop_ctx.break_ty;
+                        if (prev.is_never()) {
+                            loop_ctx.break_ty = val_ty;
+                        } else if (!compatible(val_ty, prev)) {
+                            return make_error(
+                                expr->span, "'break' value type mismatch: expected '"
+                                                + prev.display() + "', found '" + val_ty.display()
+                                                + "'");
+                        }
+                    }
+
+                    return tyir::make_ty_expr(
+                        expr->span, tyir::TyBreak{std::move(*val)}, tyir::ty::never());
                 }
+
+                // Bare break
+                if (loop_ctx.kind == LoopKind::Loop) {
+                    // Bare break in `loop` contributes Unit
+                    if (!loop_ctx.break_ty.has_value()) {
+                        loop_ctx.break_ty = tyir::ty::unit();
+                    } else {
+                        const tyir::Ty& prev = *loop_ctx.break_ty;
+                        if (prev.is_never()) {
+                            loop_ctx.break_ty = tyir::ty::unit();
+                        } else if (!compatible(tyir::ty::unit(), prev)) {
+                            return make_error(
+                                expr->span, "'break' value type mismatch: expected '"
+                                                + prev.display() + "', found 'Unit'");
+                        }
+                    }
+                }
+                // Bare break in while/for: no type tracking needed
+
                 return tyir::make_ty_expr(
-                    expr->span, tyir::TyBreak{std::move(lowered_val)}, tyir::ty::never());
+                    expr->span, tyir::TyBreak{std::nullopt}, tyir::ty::never());
             }
 
             // ── Continue ──────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::ContinueExpr>) {
+                if (!ctx.in_loop())
+                    return make_error(expr->span, "'continue' outside of a loop");
                 return tyir::make_ty_expr(expr->span, tyir::TyContinue{}, tyir::ty::never());
             }
 
@@ -886,7 +984,7 @@ struct LowerCtx {
             tyir::TyParam{fn.params[i].name, sig.param_types[i], fn.params[i].span});
 
     // Set up lowering context with params in scope
-    LowerCtx ctx{env, {}, sig.return_ty};
+    LowerCtx ctx{env, {}, sig.return_ty, {}};
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params)
         ctx.scope.insert(p.name, p.ty);
