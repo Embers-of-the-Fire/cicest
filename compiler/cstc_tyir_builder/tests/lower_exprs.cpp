@@ -363,6 +363,40 @@ static void test_bare_break_in_for_ok() {
     assert(tail->ty == ty::unit());
 }
 
+// ─── Break/continue in loop headers ─────────────────────────────────────────
+
+static void test_break_in_while_condition_accepted() {
+    // `break` in the while condition is inside the loop context.
+    // Its type is Never (bottom), which is compatible with bool,
+    // so this is accepted rather than producing "'break' outside of a loop".
+    const auto prog = must_lower("fn f() { while (break) { } }");
+    (void)prog;
+}
+
+static void test_continue_in_while_condition_accepted() {
+    // Same reasoning: `continue` is Never, compatible with bool.
+    const auto prog = must_lower("fn f() { while continue { } }");
+    (void)prog;
+}
+
+static void test_continue_in_for_condition_accepted() {
+    // `continue` in the for condition — Never is compatible with bool.
+    const auto prog = must_lower("fn f() { for (; continue; ) { } }");
+    (void)prog;
+}
+
+static void test_break_in_for_step_ok() {
+    // `break` in the for-step is syntactically odd but should be accepted
+    // (it's inside the loop context)
+    const auto prog = must_lower("fn f() { for (;; break) { } }");
+    (void)prog;
+}
+
+static void test_continue_in_for_step_ok() {
+    const auto prog = must_lower("fn f() { for (;; continue) { } }");
+    (void)prog;
+}
+
 // ─── Nested loops ────────────────────────────────────────────────────────────
 
 static void test_nested_loop_different_break_types() {
@@ -549,6 +583,13 @@ int main() {
     test_break_value_in_for_error();
     test_bare_break_in_while_ok();
     test_bare_break_in_for_ok();
+
+    // Break/continue in loop headers
+    test_break_in_while_condition_accepted();
+    test_continue_in_while_condition_accepted();
+    test_continue_in_for_condition_accepted();
+    test_break_in_for_step_ok();
+    test_continue_in_for_step_ok();
 
     // Nested loops
     test_nested_loop_different_break_types();

@@ -750,15 +750,19 @@ struct LowerCtx {
 
             // ── While ─────────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::WhileExpr>) {
+                ctx.push_loop(LoopKind::While);
                 auto cond = lower_expr(node.condition, ctx);
-                if (!cond)
+                if (!cond) {
+                    ctx.pop_loop();
                     return std::unexpected(std::move(cond.error()));
-                if (!compatible((*cond)->ty, tyir::ty::bool_()))
+                }
+                if (!compatible((*cond)->ty, tyir::ty::bool_())) {
+                    ctx.pop_loop();
                     return make_error(
                         node.condition->span, "'while' condition must have type 'bool', found '"
                                                   + (*cond)->ty.display() + "'");
+                }
 
-                ctx.push_loop(LoopKind::While);
                 auto body = lower_block(*node.body, ctx);
                 if (!body) {
                     ctx.pop_loop();
@@ -776,6 +780,7 @@ struct LowerCtx {
             else if constexpr (std::is_same_v<N, ast::ForExpr>) {
                 // The for-init introduces a new scope that outlives the header
                 ctx.scope.push();
+                ctx.push_loop(LoopKind::For);
 
                 std::optional<tyir::TyForInit> lowered_init;
 
@@ -784,6 +789,7 @@ struct LowerCtx {
                     if (const auto* init_let = std::get_if<ast::ForInitLet>(&init_var)) {
                         auto init_expr = lower_expr(init_let->initializer, ctx);
                         if (!init_expr) {
+                            ctx.pop_loop();
                             ctx.scope.pop();
                             return std::unexpected(std::move(init_expr.error()));
                         }
@@ -792,10 +798,12 @@ struct LowerCtx {
                             auto ann =
                                 lower_type(*init_let->type_annotation, ctx.env, init_let->span);
                             if (!ann) {
+                                ctx.pop_loop();
                                 ctx.scope.pop();
                                 return std::unexpected(std::move(ann.error()));
                             }
                             if (!compatible((*init_expr)->ty, *ann)) {
+                                ctx.pop_loop();
                                 ctx.scope.pop();
                                 return make_error(
                                     init_let->span, "for-init type mismatch: expected '"
@@ -816,6 +824,7 @@ struct LowerCtx {
                         const auto& init_expr_ptr = std::get<ast::ExprPtr>(init_var);
                         auto init_expr = lower_expr(init_expr_ptr, ctx);
                         if (!init_expr) {
+                            ctx.pop_loop();
                             ctx.scope.pop();
                             return std::unexpected(std::move(init_expr.error()));
                         }
@@ -830,10 +839,12 @@ struct LowerCtx {
                 if (node.condition.has_value()) {
                     auto cond = lower_expr(*node.condition, ctx);
                     if (!cond) {
+                        ctx.pop_loop();
                         ctx.scope.pop();
                         return std::unexpected(std::move(cond.error()));
                     }
                     if (!compatible((*cond)->ty, tyir::ty::bool_())) {
+                        ctx.pop_loop();
                         ctx.scope.pop();
                         return make_error(
                             (*node.condition)->span,
@@ -847,13 +858,13 @@ struct LowerCtx {
                 if (node.step.has_value()) {
                     auto step = lower_expr(*node.step, ctx);
                     if (!step) {
+                        ctx.pop_loop();
                         ctx.scope.pop();
                         return std::unexpected(std::move(step.error()));
                     }
                     lowered_step = std::move(*step);
                 }
 
-                ctx.push_loop(LoopKind::For);
                 auto body = lower_block(*node.body, ctx);
                 if (!body) {
                     ctx.pop_loop();
