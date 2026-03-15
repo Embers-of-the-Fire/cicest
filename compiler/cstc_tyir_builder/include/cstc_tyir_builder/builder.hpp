@@ -359,7 +359,9 @@ struct LowerCtx {
         if (!stmt_can_fallthrough(stmt))
             return false;
     }
-    return true;
+    if (!block.tail.has_value())
+        return true;
+    return !(*block.tail)->ty.is_never();
 }
 
 // ─── Block lowering ──────────────────────────────────────────────────────────
