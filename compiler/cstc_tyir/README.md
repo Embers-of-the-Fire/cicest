@@ -83,7 +83,7 @@ Concrete expression variants:
 struct TyBlock {
     std::vector<TyStmt> stmts;
     std::optional<TyExprPtr> tail;
-    Ty ty;   // = tail->ty if tail present, else Unit
+    Ty ty;   // = tail->ty when tail exists; else Unit or Never (by fallthrough)
     SourceSpan span;
 };
 ```

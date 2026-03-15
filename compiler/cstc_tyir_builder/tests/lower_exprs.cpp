@@ -207,6 +207,13 @@ static void test_if_else() {
     assert(std::holds_alternative<TyIf>(tail.node));
 }
 
+static void test_if_else_both_bare_return_is_never() {
+    const auto prog = must_lower("fn f(b: bool) { if b { return; } else { return; } }");
+    const auto& tail = *(*first_fn(prog).body->tail);
+    assert(tail.ty == ty::never());
+    assert(std::holds_alternative<TyIf>(tail.node));
+}
+
 static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if x { } }"); }
 
 // ─── Control flow ─────────────────────────────────────────────────────────────
@@ -502,6 +509,17 @@ static void test_diverging_stmt_followed_by_let_still_diverges() {
     assert(inner->ty == ty::never());
 }
 
+static void test_diverging_stmt_followed_by_tail_still_diverges() {
+    // { return 1; 2 } — tail is unreachable, so block type remains Never.
+    const auto prog = must_lower("fn f() -> num { { return 1; 2 } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->tail.has_value());
+    assert((*inner->tail)->ty == ty::num());
+    assert(inner->ty == ty::never());
+}
+
 static void test_if_one_branch_diverges_other_unit() {
     // if b { return; } (no else) — if without else is always Unit
     const auto prog = must_lower("fn f(b: bool) { if b { return; } }");
@@ -684,6 +702,7 @@ int main() {
     test_unary_type_errors();
     test_if_no_else();
     test_if_else();
+    test_if_else_both_bare_return_is_never();
     test_if_condition_must_be_bool();
     test_loop_is_unit();
     test_while();
@@ -732,6 +751,7 @@ int main() {
     test_nested_diverging_blocks();
     test_non_diverging_block_stays_unit();
     test_diverging_stmt_followed_by_let_still_diverges();
+    test_diverging_stmt_followed_by_tail_still_diverges();
     test_if_one_branch_diverges_other_unit();
     test_if_else_one_branch_diverges();
     test_loop_body_diverges_via_return();
