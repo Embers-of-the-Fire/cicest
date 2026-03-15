@@ -76,6 +76,7 @@ Common errors:
 | Return type mismatch | `"function 'f' body has type 'bool' but return type is 'num'"` |
 | Non-bool condition | `"'if' condition must have type 'bool', found 'num'"` |
 | Field not found | `"no field 'z' in struct 'Point'"` |
+| Duplicate top-level declaration | `"duplicate function name 'main'"` |
 
 ## Usage
 

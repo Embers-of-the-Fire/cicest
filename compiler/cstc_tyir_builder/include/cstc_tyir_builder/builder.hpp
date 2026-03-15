@@ -918,15 +918,31 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
 
     // ── Phase 1: collect named-type names (placeholders) ─────────────────
     for (const ast::Item& item : program.items) {
-        std::visit(
-            [&](const auto& decl) {
-                using T = std::decay_t<decltype(decl)>;
-                if constexpr (std::is_same_v<T, ast::StructDecl>)
-                    env.struct_fields.emplace(decl.name, std::vector<tyir::TyFieldDecl>{});
-                else if constexpr (std::is_same_v<T, ast::EnumDecl>)
-                    env.enum_variants.emplace(decl.name, std::vector<tyir::TyEnumVariant>{});
-            },
-            item);
+        if (const auto* struct_decl = std::get_if<ast::StructDecl>(&item)) {
+            if (env.enum_variants.count(struct_decl->name) > 0)
+                return detail::make_error(
+                    struct_decl->span,
+                    "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
+
+            const auto insert_result =
+                env.struct_fields.emplace(struct_decl->name, std::vector<tyir::TyFieldDecl>{});
+            if (!insert_result.second)
+                return detail::make_error(
+                    struct_decl->span,
+                    "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
+        } else if (const auto* enum_decl = std::get_if<ast::EnumDecl>(&item)) {
+            if (env.struct_fields.count(enum_decl->name) > 0)
+                return detail::make_error(
+                    enum_decl->span,
+                    "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
+
+            const auto insert_result =
+                env.enum_variants.emplace(enum_decl->name, std::vector<tyir::TyEnumVariant>{});
+            if (!insert_result.second)
+                return detail::make_error(
+                    enum_decl->span,
+                    "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
+        }
     }
 
     // ── Phase 2: resolve struct fields and enum variants ──────────────────
@@ -952,7 +968,10 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             auto sig = detail::resolve_fn_signature(*fn, env);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
-            env.fn_signatures.emplace(fn->name, std::move(*sig));
+            const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
+            if (!insert_result.second)
+                return detail::make_error(
+                    fn->span, "duplicate function name '" + std::string(fn->name.as_str()) + "'");
         }
     }
 

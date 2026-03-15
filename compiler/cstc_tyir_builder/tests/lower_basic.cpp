@@ -27,6 +27,14 @@ static void must_fail(const char* source) {
     assert(!tyir.has_value());
 }
 
+static void must_fail_with_message(const char* source, const char* expected_message_part) {
+    const auto ast = cstc::parser::parse_source(source);
+    assert(ast.has_value());
+    const auto tyir = lower_program(*ast);
+    assert(!tyir.has_value());
+    assert(tyir.error().message.find(expected_message_part) != std::string::npos);
+}
+
 // ─── Empty program ────────────────────────────────────────────────────────────
 
 static void test_empty_program() {
@@ -69,6 +77,13 @@ static void test_struct_with_named_field() {
 
 static void test_struct_undefined_type_error() { must_fail("struct Foo { x: Unknown }"); }
 
+static void test_duplicate_struct_name_error() {
+    must_fail_with_message(
+        "struct Point { x: num }"
+        "struct Point { y: num }",
+        "duplicate struct name 'Point'");
+}
+
 // ─── Enum declaration ─────────────────────────────────────────────────────────
 
 static void test_enum_decl() {
@@ -80,6 +95,27 @@ static void test_enum_decl() {
     assert(decl.variants.size() == 4);
     assert(decl.variants[0].name == Symbol::intern("North"));
     assert(decl.variants[3].name == Symbol::intern("West"));
+}
+
+static void test_duplicate_enum_name_error() {
+    must_fail_with_message(
+        "enum Dir { North }"
+        "enum Dir { South }",
+        "duplicate enum name 'Dir'");
+}
+
+static void test_enum_struct_name_collision_error() {
+    must_fail_with_message(
+        "enum Thing { A }"
+        "struct Thing;",
+        "duplicate struct name 'Thing'");
+}
+
+static void test_struct_enum_name_collision_error() {
+    must_fail_with_message(
+        "struct Thing;"
+        "enum Thing { A }",
+        "duplicate enum name 'Thing'");
 }
 
 // ─── Function declaration ─────────────────────────────────────────────────────
@@ -124,6 +160,10 @@ static void test_fn_str_return() {
     assert(fn.return_ty == ty::str());
 }
 
+static void test_duplicate_function_name_error() {
+    must_fail_with_message("fn noop() { } fn noop() { }", "duplicate function name 'noop'");
+}
+
 // ─── Multiple items in order ──────────────────────────────────────────────────
 
 static void test_item_order() {
@@ -151,11 +191,16 @@ int main() {
     test_zst_struct();
     test_struct_with_named_field();
     test_struct_undefined_type_error();
+    test_duplicate_struct_name_error();
     test_enum_decl();
+    test_duplicate_enum_name_error();
+    test_enum_struct_name_collision_error();
+    test_struct_enum_name_collision_error();
     test_fn_no_return();
     test_fn_with_params_and_return();
     test_fn_bool_return();
     test_fn_str_return();
+    test_duplicate_function_name_error();
     test_item_order();
     test_return_type_mismatch();
     test_let_type_mismatch();
