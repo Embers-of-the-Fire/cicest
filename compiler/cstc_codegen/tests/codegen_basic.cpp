@@ -115,7 +115,7 @@ static void test_main_unit_returns_i32_zero() {
     assert(ir_contains(ir, "ret i32 0"));
 }
 
-static void test_main_num_returns_i32_fptosi() {
+static void test_main_num_returns_i32() {
     const std::string ir = must_codegen("fn main() -> num { 42 }");
     assert(ir_contains(ir, "define i32 @main()"));
     assert(ir_contains(ir, "ret i32"));
@@ -162,7 +162,7 @@ int main() {
     test_multiple_functions();
     test_fn_call();
     test_main_unit_returns_i32_zero();
-    test_main_num_returns_i32_fptosi();
+    test_main_num_returns_i32();
     test_main_num_fptosi_non_constant();
     test_main_never_returns_i32();
     test_non_main_fn_still_uses_double_return();
