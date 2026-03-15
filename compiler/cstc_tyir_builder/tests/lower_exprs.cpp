@@ -435,6 +435,134 @@ static void test_continue_in_for_ok() {
     (void)prog;
 }
 
+// ─── Block divergence typing ─────────────────────────────────────────────────
+
+static void test_block_with_return_stmt_is_never() {
+    // { return 1; } has type Never (the statement diverges), not Unit
+    const auto prog = must_lower("fn f() -> num { { return 1; } }");
+    const auto& body = *first_fn(prog).body;
+    // The inner block `{ return 1; }` is the tail of the outer block
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::never());
+}
+
+static void test_if_else_both_return_is_never() {
+    // Both if-branches end with `return;` → each block is Never →
+    // if-else type is Never → compatible with any return type
+    const auto prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  if b { return 1; } else { return 2; }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::never());
+}
+
+static void test_if_else_both_break_is_never() {
+    // Both if-branches end with `break;` in a loop → blocks are Never
+    const auto prog = must_lower(
+        "fn f() -> num {"
+        "  loop {"
+        "    if true { break 1; } else { break 2; }"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_nested_diverging_blocks() {
+    // Deeply nested: return inside nested if inside nested block
+    const auto prog = must_lower(
+        "fn f(a: bool, b: bool) -> num {"
+        "  if a {"
+        "    if b { return 1; } else { return 2; }"
+        "  } else {"
+        "    return 3;"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::never());
+}
+
+static void test_non_diverging_block_stays_unit() {
+    // { let x = 5; } — no divergence, block type is Unit
+    const auto prog = must_lower("fn f() { { let x = 5; } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::unit());
+}
+
+static void test_diverging_stmt_followed_by_let_still_diverges() {
+    // { return 1; let x = 5; } — diverges at the return
+    const auto prog = must_lower("fn f() -> num { { return 1; let x = 5; } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::never());
+}
+
+static void test_if_one_branch_diverges_other_unit() {
+    // if b { return; } (no else) — if without else is always Unit
+    const auto prog = must_lower("fn f(b: bool) { if b { return; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::unit());
+}
+
+static void test_if_else_one_branch_diverges() {
+    // if b { return 1; } else { 42 } — then is Never, else is num → result is num
+    const auto prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  if b { return 1; } else { 42 }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_loop_body_diverges_via_return() {
+    // loop { return 1; } — no break, loop type is Never (diverges via return)
+    // The loop body itself diverges, but loop type comes from break_ty (no break → Never)
+    const auto prog = must_lower("fn f() -> num { loop { return 1; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::never());
+}
+
+static void test_block_only_let_stmts_is_unit() {
+    // Block with only let statements → type Unit
+    const auto prog = must_lower("fn f() { { let a = 1; let b = 2; } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::unit());
+}
+
+static void test_empty_block_is_unit() {
+    // {} — no stmts, no tail → Unit
+    const auto prog = must_lower("fn f() { {} }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::unit());
+}
+
+static void test_block_divergence_with_continue() {
+    // { continue; } inside a loop — block type is Never
+    const auto prog = must_lower("fn f() { loop { { continue; } } }");
+    const auto& loop_node = std::get<TyLoop>((*first_fn(prog).body->tail)->node);
+    assert(loop_node.body->tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*loop_node.body->tail)->node);
+    assert(inner->ty == ty::never());
+}
+
+static void test_block_divergence_with_break() {
+    // { break; } inside a loop — block type is Never
+    const auto prog = must_lower("fn f() { loop { { break; } } }");
+    const auto& loop_node = std::get<TyLoop>((*first_fn(prog).body->tail)->node);
+    assert(loop_node.body->tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*loop_node.body->tail)->node);
+    assert(inner->ty == ty::never());
+}
+
 // ─── Function calls ───────────────────────────────────────────────────────────
 
 static void test_fn_call() {
@@ -596,6 +724,21 @@ int main() {
     test_break_value_in_loop_nested_inside_while();
     test_continue_in_while_ok();
     test_continue_in_for_ok();
+
+    // Block divergence typing
+    test_block_with_return_stmt_is_never();
+    test_if_else_both_return_is_never();
+    test_if_else_both_break_is_never();
+    test_nested_diverging_blocks();
+    test_non_diverging_block_stays_unit();
+    test_diverging_stmt_followed_by_let_still_diverges();
+    test_if_one_branch_diverges_other_unit();
+    test_if_else_one_branch_diverges();
+    test_loop_body_diverges_via_return();
+    test_block_only_let_stmts_is_unit();
+    test_empty_block_is_unit();
+    test_block_divergence_with_continue();
+    test_block_divergence_with_break();
 
     test_fn_call();
     test_call_undefined_fn_error();

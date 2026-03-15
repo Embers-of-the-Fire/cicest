@@ -281,6 +281,33 @@ When multiple `break` statements exist in the same `loop`:
 
 Each loop form maintains its own break-type context. A `break` targets the innermost enclosing loop. Inner and outer loops may have different break types independently.
 
+### 5.2 Block and Statement Typing Rules
+
+#### Statement types
+
+Every statement has an implicit type used for block type computation:
+
+- `LetStmt` (`let x = expr;`) — type is `Unit`.
+- `ExprStmt` (`expr;`) — type is the inner expression's type. When the expression diverges (type `Never`, e.g., `return;`, `break;`, `continue;`), the statement type is `Never`.
+
+#### Block type computation
+
+A block `{ stmt1; stmt2; ... [tail] }` has its type computed as follows:
+
+1. If a **tail expression** is present (final expression without `;`), the block type is the tail expression's type.
+2. If **no tail expression** is present:
+   - If any statement in the block has type `Never` (i.e., an `ExprStmt` wrapping a diverging expression), the block type is `Never`.
+   - Otherwise, the block type is `Unit`.
+
+This means `{ return 1; }` has type `Never` (not `Unit`), which cascades correctly through `if`/`else` branches:
+
+```text
+// Both branches diverge → if-else type is Never → compatible with num
+fn f(b: bool) -> num {
+    if b { return 1; } else { return 2; }
+}
+```
+
 ## 7. Valid Syntax Examples
 
 ```text
