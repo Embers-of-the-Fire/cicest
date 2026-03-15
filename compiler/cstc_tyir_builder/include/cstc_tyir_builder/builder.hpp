@@ -342,6 +342,26 @@ struct LowerCtx {
         stmt);
 }
 
+[[nodiscard]] inline bool stmt_can_fallthrough(const tyir::TyStmt& stmt) {
+    return std::visit(
+        [](const auto& s) {
+            using S = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<S, tyir::TyLetStmt>)
+                return !s.init->ty.is_never();
+            else
+                return !s.expr->ty.is_never();
+        },
+        stmt);
+}
+
+[[nodiscard]] inline bool block_can_fallthrough(const tyir::TyBlock& block) {
+    for (const tyir::TyStmt& stmt : block.stmts) {
+        if (!stmt_can_fallthrough(stmt))
+            return false;
+    }
+    return true;
+}
+
 // ─── Block lowering ──────────────────────────────────────────────────────────
 
 [[nodiscard]] inline std::expected<tyir::TyBlock, LowerError>
@@ -1029,6 +1049,15 @@ struct LowerCtx {
         return make_error(
             fn.body->span, "function '" + std::string(fn.name.as_str()) + "' body has type '"
                                + body->ty.display() + "' but return type is '"
+                               + sig.return_ty.display() + "'");
+
+    // Non-Unit functions without a tail expression must not reach the end of
+    // the body without returning.
+    if (!body->tail.has_value() && block_can_fallthrough(*body)
+        && !compatible(tyir::ty::unit(), sig.return_ty))
+        return make_error(
+            fn.body->span, "function '" + std::string(fn.name.as_str())
+                               + "' may fall through without returning a value of type '"
                                + sig.return_ty.display() + "'");
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));

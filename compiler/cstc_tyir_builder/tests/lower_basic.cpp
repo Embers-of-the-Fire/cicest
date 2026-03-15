@@ -181,6 +181,15 @@ static void test_item_order() {
 
 static void test_return_type_mismatch() { must_fail("fn f() -> num { true }"); }
 
+static void test_non_unit_fn_fallthrough_error() { must_fail("fn f() -> num { }"); }
+
+static void test_non_unit_fn_explicit_return_stmt() {
+    const auto prog = must_lower("fn f() -> num { return 1; }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::num());
+    assert(!fn.body->tail.has_value());
+}
+
 static void test_let_type_mismatch() { must_fail("fn f() { let x: bool = 42; }"); }
 
 int main() {
@@ -203,6 +212,8 @@ int main() {
     test_duplicate_function_name_error();
     test_item_order();
     test_return_type_mismatch();
+    test_non_unit_fn_fallthrough_error();
+    test_non_unit_fn_explicit_return_stmt();
     test_let_type_mismatch();
 
     return 0;
