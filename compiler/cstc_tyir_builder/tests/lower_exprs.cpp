@@ -265,6 +265,304 @@ static void test_return_is_never() {
     assert(std::holds_alternative<TyReturn>(stmt.expr->node));
 }
 
+// ─── Loop/break type inference ────────────────────────────────────────────────
+
+static void test_loop_break_num_type() {
+    // break 42 → loop type is num
+    const auto prog = must_lower("fn f() -> num { loop { break 42; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+    assert(std::holds_alternative<TyLoop>(tail->node));
+}
+
+static void test_loop_break_str_type() {
+    const auto prog = must_lower("fn f() -> str { loop { break \"hi\"; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::str());
+}
+
+static void test_loop_break_bool_type() {
+    const auto prog = must_lower("fn f() -> bool { loop { break true; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::bool_());
+}
+
+static void test_loop_bare_break_is_unit() {
+    const auto prog = must_lower("fn f() { loop { break; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::unit());
+    assert(std::holds_alternative<TyLoop>(tail->node));
+}
+
+static void test_loop_no_break_is_never() {
+    // loop with no break diverges → type is Never
+    const auto prog = must_lower("fn f() -> num { loop { return 1; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::never());
+}
+
+static void test_loop_multiple_breaks_same_type() {
+    const auto prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  loop {"
+        "    if b { break 1; } else { break 2; }"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_loop_break_type_mismatch_error() {
+    must_fail_with_message(
+        "fn f(b: bool) { loop { if b { break 1; } else { break true; } } }",
+        "'break' value type mismatch");
+}
+
+static void test_loop_break_bare_vs_value_mismatch_error() {
+    must_fail_with_message(
+        "fn f(b: bool) { loop { if b { break 42; } else { break; } } }",
+        "'break' value type mismatch");
+}
+
+// ─── Break/continue outside loop ─────────────────────────────────────────────
+
+static void test_break_outside_loop_error() {
+    must_fail_with_message("fn f() { break; }", "'break' outside of a loop");
+}
+
+static void test_continue_outside_loop_error() {
+    must_fail_with_message("fn f() { continue; }", "'continue' outside of a loop");
+}
+
+static void test_break_outside_loop_with_value_error() {
+    must_fail_with_message("fn f() { break 42; }", "'break' outside of a loop");
+}
+
+// ─── Break-with-value in while/for ───────────────────────────────────────────
+
+static void test_break_value_in_while_error() {
+    must_fail_with_message(
+        "fn f(b: bool) { while b { break 42; } }",
+        "'break' with a value is only allowed inside 'loop'");
+}
+
+static void test_break_value_in_for_error() {
+    must_fail_with_message(
+        "fn f() { for (;;) { break 42; } }", "'break' with a value is only allowed inside 'loop'");
+}
+
+static void test_bare_break_in_while_ok() {
+    const auto prog = must_lower("fn f(b: bool) { while b { break; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::unit());
+}
+
+static void test_bare_break_in_for_ok() {
+    const auto prog = must_lower("fn f() { for (;;) { break; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::unit());
+}
+
+// ─── Break/continue in loop headers ─────────────────────────────────────────
+
+static void test_break_in_while_condition_accepted() {
+    // `break` in the while condition is inside the loop context.
+    // Its type is Never (bottom), which is compatible with bool,
+    // so this is accepted rather than producing "'break' outside of a loop".
+    const auto prog = must_lower("fn f() { while (break) { } }");
+    (void)prog;
+}
+
+static void test_continue_in_while_condition_accepted() {
+    // Same reasoning: `continue` is Never, compatible with bool.
+    const auto prog = must_lower("fn f() { while continue { } }");
+    (void)prog;
+}
+
+static void test_continue_in_for_condition_accepted() {
+    // `continue` in the for condition — Never is compatible with bool.
+    const auto prog = must_lower("fn f() { for (; continue; ) { } }");
+    (void)prog;
+}
+
+static void test_break_in_for_step_ok() {
+    // `break` in the for-step is syntactically odd but should be accepted
+    // (it's inside the loop context)
+    const auto prog = must_lower("fn f() { for (;; break) { } }");
+    (void)prog;
+}
+
+static void test_continue_in_for_step_ok() {
+    const auto prog = must_lower("fn f() { for (;; continue) { } }");
+    (void)prog;
+}
+
+// ─── Nested loops ────────────────────────────────────────────────────────────
+
+static void test_nested_loop_different_break_types() {
+    // Outer loop breaks with num, inner loop breaks with bool — should be fine
+    const auto prog = must_lower(
+        "fn f() -> num {"
+        "  loop {"
+        "    loop { break true; };"
+        "    break 42;"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_break_value_in_loop_nested_inside_while() {
+    // `loop` nested inside `while` — break-with-value should target the `loop`
+    const auto prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  loop {"
+        "    while b { break; }"
+        "    break 42;"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_continue_in_while_ok() {
+    const auto prog = must_lower("fn f(b: bool) { while b { continue; } }");
+    (void)prog;
+}
+
+static void test_continue_in_for_ok() {
+    const auto prog = must_lower("fn f() { for (;;) { continue; break; } }");
+    (void)prog;
+}
+
+// ─── Block divergence typing ─────────────────────────────────────────────────
+
+static void test_block_with_return_stmt_is_never() {
+    // { return 1; } has type Never (the statement diverges), not Unit
+    const auto prog = must_lower("fn f() -> num { { return 1; } }");
+    const auto& body = *first_fn(prog).body;
+    // The inner block `{ return 1; }` is the tail of the outer block
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::never());
+}
+
+static void test_if_else_both_return_is_never() {
+    // Both if-branches end with `return;` → each block is Never →
+    // if-else type is Never → compatible with any return type
+    const auto prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  if b { return 1; } else { return 2; }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::never());
+}
+
+static void test_if_else_both_break_is_never() {
+    // Both if-branches end with `break;` in a loop → blocks are Never
+    const auto prog = must_lower(
+        "fn f() -> num {"
+        "  loop {"
+        "    if true { break 1; } else { break 2; }"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_nested_diverging_blocks() {
+    // Deeply nested: return inside nested if inside nested block
+    const auto prog = must_lower(
+        "fn f(a: bool, b: bool) -> num {"
+        "  if a {"
+        "    if b { return 1; } else { return 2; }"
+        "  } else {"
+        "    return 3;"
+        "  }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::never());
+}
+
+static void test_non_diverging_block_stays_unit() {
+    // { let x = 5; } — no divergence, block type is Unit
+    const auto prog = must_lower("fn f() { { let x = 5; } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::unit());
+}
+
+static void test_diverging_stmt_followed_by_let_still_diverges() {
+    // { return 1; let x = 5; } — diverges at the return
+    const auto prog = must_lower("fn f() -> num { { return 1; let x = 5; } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::never());
+}
+
+static void test_if_one_branch_diverges_other_unit() {
+    // if b { return; } (no else) — if without else is always Unit
+    const auto prog = must_lower("fn f(b: bool) { if b { return; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::unit());
+}
+
+static void test_if_else_one_branch_diverges() {
+    // if b { return 1; } else { 42 } — then is Never, else is num → result is num
+    const auto prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  if b { return 1; } else { 42 }"
+        "}");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+}
+
+static void test_loop_body_diverges_via_return() {
+    // loop { return 1; } — no break, loop type is Never (diverges via return)
+    // The loop body itself diverges, but loop type comes from break_ty (no break → Never)
+    const auto prog = must_lower("fn f() -> num { loop { return 1; } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::never());
+}
+
+static void test_block_only_let_stmts_is_unit() {
+    // Block with only let statements → type Unit
+    const auto prog = must_lower("fn f() { { let a = 1; let b = 2; } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::unit());
+}
+
+static void test_empty_block_is_unit() {
+    // {} — no stmts, no tail → Unit
+    const auto prog = must_lower("fn f() { {} }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*body.tail)->node);
+    assert(inner->ty == ty::unit());
+}
+
+static void test_block_divergence_with_continue() {
+    // { continue; } inside a loop — block type is Never
+    const auto prog = must_lower("fn f() { loop { { continue; } } }");
+    const auto& loop_node = std::get<TyLoop>((*first_fn(prog).body->tail)->node);
+    assert(loop_node.body->tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*loop_node.body->tail)->node);
+    assert(inner->ty == ty::never());
+}
+
+static void test_block_divergence_with_break() {
+    // { break; } inside a loop — block type is Never
+    const auto prog = must_lower("fn f() { loop { { break; } } }");
+    const auto& loop_node = std::get<TyLoop>((*first_fn(prog).body->tail)->node);
+    assert(loop_node.body->tail.has_value());
+    const auto& inner = std::get<TyBlockPtr>((*loop_node.body->tail)->node);
+    assert(inner->ty == ty::never());
+}
+
 // ─── Function calls ───────────────────────────────────────────────────────────
 
 static void test_fn_call() {
@@ -392,6 +690,56 @@ int main() {
     test_for_loop();
     test_break_and_continue_are_never();
     test_return_is_never();
+
+    // Loop/break type inference
+    test_loop_break_num_type();
+    test_loop_break_str_type();
+    test_loop_break_bool_type();
+    test_loop_bare_break_is_unit();
+    test_loop_no_break_is_never();
+    test_loop_multiple_breaks_same_type();
+    test_loop_break_type_mismatch_error();
+    test_loop_break_bare_vs_value_mismatch_error();
+
+    // Break/continue outside loop
+    test_break_outside_loop_error();
+    test_continue_outside_loop_error();
+    test_break_outside_loop_with_value_error();
+
+    // Break-with-value in while/for
+    test_break_value_in_while_error();
+    test_break_value_in_for_error();
+    test_bare_break_in_while_ok();
+    test_bare_break_in_for_ok();
+
+    // Break/continue in loop headers
+    test_break_in_while_condition_accepted();
+    test_continue_in_while_condition_accepted();
+    test_continue_in_for_condition_accepted();
+    test_break_in_for_step_ok();
+    test_continue_in_for_step_ok();
+
+    // Nested loops
+    test_nested_loop_different_break_types();
+    test_break_value_in_loop_nested_inside_while();
+    test_continue_in_while_ok();
+    test_continue_in_for_ok();
+
+    // Block divergence typing
+    test_block_with_return_stmt_is_never();
+    test_if_else_both_return_is_never();
+    test_if_else_both_break_is_never();
+    test_nested_diverging_blocks();
+    test_non_diverging_block_stays_unit();
+    test_diverging_stmt_followed_by_let_still_diverges();
+    test_if_one_branch_diverges_other_unit();
+    test_if_else_one_branch_diverges();
+    test_loop_body_diverges_via_return();
+    test_block_only_let_stmts_is_unit();
+    test_empty_block_is_unit();
+    test_block_divergence_with_continue();
+    test_block_divergence_with_break();
+
     test_fn_call();
     test_call_undefined_fn_error();
     test_call_arg_count_error();

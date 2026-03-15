@@ -128,6 +128,11 @@ BuiltinType        = "Unit" | "num" | "str" | "bool" ;
 UserType           = IDENT ;
 ```
 
+> **Note:** The `Never` type (`!`) is **non-denotable** — it cannot appear in
+> source-level type annotations.  It exists only as an internally inferred type
+> produced by diverging expressions (`return`, `break`, `continue`, and
+> body-less `loop`).  See §5.1 for its role in loop/break type inference.
+
 No generic parameters are allowed anywhere.
 
 ### 3.3 Blocks and statements
@@ -247,10 +252,66 @@ Mandatory constraints for frontend validation:
 - No duplicate variant names inside one enum.
 - No duplicate parameter names within one function signature.
 - Condition expressions in `if`/`while`/`for` must type-check as `bool`.
-- `break`/`continue` allowed only inside loop forms.
+- `break`/`continue` allowed only inside loop forms (`loop`, `while`, `for`).
+- `break` with a value (`break expr`) is allowed only inside `loop`, not inside `while` or `for`.
 - `return` allowed only inside function bodies.
 - Enum variant usage must be fully scoped (`E::V`), not bare `V`.
 - Only named struct declarations are permitted; unnamed structs are invalid.
+
+### 5.1 Loop and Break Typing Rules
+
+#### `loop` expression typing
+
+The type of a `loop` expression is inferred from its `break` values:
+
+- If the loop contains no `break` statements (e.g., it diverges via `return`), the loop has type `Never` (bottom type, `!`).  `Never` is non-denotable; it is assigned only by the type checker (see the type grammar note in §3.2).
+- If the loop contains only bare `break;` (no value), the loop has type `Unit`.
+- If the loop contains `break expr;`, the loop has the type of `expr`.
+- All `break` values within a single `loop` must have the same type. Conflicting break types produce a type error.
+
+#### `while` and `for` expression typing
+
+`while` and `for` expressions always have type `Unit`, regardless of their body.
+`break` with a value is rejected inside `while` and `for`; only bare `break;` is permitted.
+
+#### Break type unification
+
+When multiple `break` statements exist in the same `loop`:
+
+- The first `break` establishes the expected break type.
+- Subsequent `break` values must be compatible with the established type.
+- `Never`-typed values (e.g., from nested `return`) are compatible with any type.
+
+#### Nested loops
+
+Each loop form maintains its own break-type context. A `break` targets the innermost enclosing loop. Inner and outer loops may have different break types independently.
+
+### 5.2 Block and Statement Typing Rules
+
+#### Statement types
+
+Every statement has an implicit type used for block type computation:
+
+- `LetStmt` (`let x = expr;`) — type is `Unit`.
+- `ExprStmt` (`expr;`) — type is the inner expression's type. When the expression diverges (type `Never`, e.g., `return;`, `break;`, `continue;`), the statement type is `Never`.
+
+#### Block type computation
+
+A block `{ stmt1; stmt2; ... [tail] }` has its type computed as follows:
+
+1. If a **tail expression** is present (final expression without `;`), the block type is the tail expression's type.
+2. If **no tail expression** is present:
+   - If any statement in the block has type `Never` (i.e., an `ExprStmt` wrapping a diverging expression), the block type is `Never`.
+   - Otherwise, the block type is `Unit`.
+
+This means `{ return 1; }` has type `Never` (not `Unit`), which cascades correctly through `if`/`else` branches:
+
+```text
+// Both branches diverge → if-else type is Never → compatible with num
+fn f(b: bool) -> num {
+    if b { return 1; } else { return 2; }
+}
+```
 
 ## 7. Valid Syntax Examples
 

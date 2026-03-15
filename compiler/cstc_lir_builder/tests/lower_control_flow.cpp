@@ -127,16 +127,23 @@ static void test_loop_break() {
 
 static void test_loop_break_value() {
     // loop { break 42; }  →  store 42 into result local then jump
-    // Note: tyir always types loop as unit, so the function must return unit.
-    const LirProgram prog = must_lower("fn f() { loop { break 42; } }");
+    // The loop is typed as num since break carries a value.
+    const LirProgram prog = must_lower("fn f() -> num { loop { break 42; } }");
     assert(output_contains(prog, "42"));
     assert(output_contains(prog, "jump"));
 }
 
 static void test_loop_infinite_with_return() {
     // loop { return; }  →  loop body block has a return terminator (no back-edge)
-    // Note: tyir always types loop as unit; use void return to avoid type mismatch.
+    // Loop with no break has type Never, which is compatible with unit return.
     const LirProgram prog = must_lower("fn f() { loop { return; } }");
+    assert(output_contains(prog, "return"));
+}
+
+static void test_loop_break_value_returned() {
+    // loop { break 42; } with -> num return → codegen stores 42 and returns it
+    const LirProgram prog = must_lower("fn f() -> num { loop { break 42; } }");
+    assert(output_contains(prog, "42"));
     assert(output_contains(prog, "return"));
 }
 
@@ -329,6 +336,7 @@ int main() {
 
     test_loop_break();
     test_loop_break_value();
+    test_loop_break_value_returned();
     test_loop_infinite_with_return();
 
     test_while_simple();
