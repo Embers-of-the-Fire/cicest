@@ -104,6 +104,20 @@ static void test_duplicate_enum_name_error() {
         "duplicate enum name 'Dir'");
 }
 
+static void test_enum_struct_name_collision_error() {
+    must_fail_with_message(
+        "enum Thing { A }"
+        "struct Thing;",
+        "duplicate struct name 'Thing'");
+}
+
+static void test_struct_enum_name_collision_error() {
+    must_fail_with_message(
+        "struct Thing;"
+        "enum Thing { A }",
+        "duplicate enum name 'Thing'");
+}
+
 // ─── Function declaration ─────────────────────────────────────────────────────
 
 static void test_fn_no_return() {
@@ -180,6 +194,8 @@ int main() {
     test_duplicate_struct_name_error();
     test_enum_decl();
     test_duplicate_enum_name_error();
+    test_enum_struct_name_collision_error();
+    test_struct_enum_name_collision_error();
     test_fn_no_return();
     test_fn_with_params_and_return();
     test_fn_bool_return();

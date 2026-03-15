@@ -919,6 +919,11 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
     // ── Phase 1: collect named-type names (placeholders) ─────────────────
     for (const ast::Item& item : program.items) {
         if (const auto* struct_decl = std::get_if<ast::StructDecl>(&item)) {
+            if (env.enum_variants.count(struct_decl->name) > 0)
+                return detail::make_error(
+                    struct_decl->span,
+                    "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
+
             const auto insert_result =
                 env.struct_fields.emplace(struct_decl->name, std::vector<tyir::TyFieldDecl>{});
             if (!insert_result.second)
@@ -926,6 +931,11 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                     struct_decl->span,
                     "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
         } else if (const auto* enum_decl = std::get_if<ast::EnumDecl>(&item)) {
+            if (env.struct_fields.count(enum_decl->name) > 0)
+                return detail::make_error(
+                    enum_decl->span,
+                    "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
+
             const auto insert_result =
                 env.enum_variants.emplace(enum_decl->name, std::vector<tyir::TyEnumVariant>{});
             if (!insert_result.second)
