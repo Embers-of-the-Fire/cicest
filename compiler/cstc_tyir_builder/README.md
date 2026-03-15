@@ -11,13 +11,14 @@ Source → Lexer → Tokens → Parser → AST → [cstc_tyir_builder] → TyIR
 
 ## What the lowering pass does
 
-The pass runs in four phases over the AST:
+The pass runs in five phases over the AST:
 
 | Phase | Description |
 |---|---|
 | 1 — Name collection | All struct and enum names are registered so later phases can resolve forward references |
 | 2 — Type definition resolution | Struct field types and enum variants are resolved into `tyir::Ty` values |
 | 3 — Signature resolution | Function parameter and return types are resolved |
+| 3.5 — Main return type validation | If a `main` function exists, its return type is constrained to `Unit`, `num`, or `!` (never) |
 | 4 — Function body lowering | Each function body is type-checked and all expressions are annotated with `tyir::Ty` |
 
 ## Type checking rules
@@ -56,6 +57,17 @@ The pass runs in four phases over the AST:
 The `Never` (display: `!`) type is produced by `break`, `continue`, and
 `return` expressions.  It is compatible with any expected type (bottom type
 semantics), so `break` / `return` can appear in any expression position.
+It can also be used as an explicit return type annotation: `fn f() -> ! { loop {} }`.
+
+### Main function constraints
+
+The `main` function, if present, is restricted to return one of:
+
+- `Unit` (implicit; `fn main() { }`)
+- `num` (exit code; `fn main() -> num { 0 }`)
+- `!` (never returns; `fn main() -> ! { loop {} }`)
+
+Other return types (e.g., `str`, `bool`, user-defined types) produce a compile error.
 
 ## Error model
 
@@ -77,6 +89,7 @@ Common errors:
 | Non-bool condition | `"'if' condition must have type 'bool', found 'num'"` |
 | Field not found | `"no field 'z' in struct 'Point'"` |
 | Duplicate top-level declaration | `"duplicate function name 'main'"` |
+| Invalid main return type | `"'main' function must return 'Unit', 'num', or '!' (never), found 'str'"` |
 
 ## Usage
 
