@@ -38,6 +38,7 @@ inline void indent(std::ostringstream& output, std::size_t level) {
     case TypeKind::Str: return "str";
     case TypeKind::Bool: return "bool";
     case TypeKind::Named: return "<named>";
+    case TypeKind::Never: return "!";
     }
     return "<unknown-type>";
 }

@@ -214,6 +214,72 @@ static void test_non_unit_fn_while_condition_return_no_fallthrough() {
 
 static void test_let_type_mismatch() { must_fail("fn f() { let x: bool = 42; }"); }
 
+// ─── Never (!) return type ────────────────────────────────────────────────────
+
+static void test_fn_never_return_type_valid() {
+    const auto prog = must_lower("fn f() -> ! { loop {} }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::never());
+}
+
+static void test_fn_never_return_type_mismatch() {
+    must_fail_with_message("fn f() -> ! { 42 }", "body has type 'num' but return type is '!'");
+}
+
+// ─── main return type constraints ─────────────────────────────────────────────
+
+static void test_main_returns_unit() {
+    const auto prog = must_lower("fn main() { }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::unit());
+}
+
+static void test_main_returns_num() {
+    const auto prog = must_lower("fn main() -> num { 0 }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::num());
+}
+
+static void test_main_returns_never() {
+    const auto prog = must_lower("fn main() -> ! { loop {} }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::never());
+}
+
+static void test_main_returns_str_error() {
+    must_fail_with_message(
+        "fn main() -> str { \"hi\" }",
+        "'main' function must return 'Unit', 'num', or '!' (never), found 'str'");
+}
+
+static void test_main_returns_bool_error() {
+    must_fail_with_message(
+        "fn main() -> bool { true }",
+        "'main' function must return 'Unit', 'num', or '!' (never), found 'bool'");
+}
+
+static void test_main_returns_struct_error() {
+    must_fail_with_message(
+        "struct Point { x: num } fn main() -> Point { Point { x: 0 } }",
+        "'main' function must return 'Unit', 'num', or '!' (never), found 'Point'");
+}
+
+static void test_main_returns_enum_error() {
+    must_fail_with_message(
+        "enum Dir { North } fn main() -> Dir { Dir::North }",
+        "'main' function must return 'Unit', 'num', or '!' (never), found 'Dir'");
+}
+
+static void test_non_main_fn_accepts_any_return() {
+    // Regression: non-main functions should still accept any return type
+    const auto prog = must_lower(
+        "struct Point { x: num }"
+        "fn make_point() -> Point { Point { x: 1 } }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.return_ty == ty::named(Symbol::intern("Point")));
+}
+
 int main() {
     SymbolSession session;
 
@@ -240,6 +306,16 @@ int main() {
     test_non_unit_fn_if_condition_return_no_fallthrough();
     test_non_unit_fn_while_condition_return_no_fallthrough();
     test_let_type_mismatch();
+    test_fn_never_return_type_valid();
+    test_fn_never_return_type_mismatch();
+    test_main_returns_unit();
+    test_main_returns_num();
+    test_main_returns_never();
+    test_main_returns_str_error();
+    test_main_returns_bool_error();
+    test_main_returns_struct_error();
+    test_main_returns_enum_error();
+    test_non_main_fn_accepts_any_return();
 
     return 0;
 }

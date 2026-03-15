@@ -428,6 +428,8 @@ private:
             return ast::TypeRef{.kind = ast::TypeKind::Str, .symbol = previous().symbol};
         if (match(TokenKind::KwBool))
             return ast::TypeRef{.kind = ast::TypeKind::Bool, .symbol = previous().symbol};
+        if (match(TokenKind::Bang))
+            return ast::TypeRef{.kind = ast::TypeKind::Never, .symbol = previous().symbol};
 
         auto identifier = consume_identifier("expected type name");
         if (!identifier.has_value())

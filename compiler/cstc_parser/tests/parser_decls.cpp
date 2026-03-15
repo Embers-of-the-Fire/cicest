@@ -143,6 +143,18 @@ void test_fn_named_return_type() {
 }
 
 // ---------------------------------------------------------------------------
+// Never (!) return type
+// ---------------------------------------------------------------------------
+
+void test_fn_never_return_type() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("fn diverge() -> ! { loop {} }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.return_type.has_value());
+    assert(fn.return_type->kind == cstc::ast::TypeKind::Never);
+}
+
+// ---------------------------------------------------------------------------
 // Statements in blocks
 // ---------------------------------------------------------------------------
 
@@ -238,6 +250,7 @@ int main() {
     test_fn_no_params_with_return();
     test_fn_trailing_comma_params();
     test_fn_named_return_type();
+    test_fn_never_return_type();
     test_let_no_type_annotation();
     test_let_with_type_annotation();
     test_let_discard();

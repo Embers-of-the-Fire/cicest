@@ -223,7 +223,9 @@ private:
         case tyir::TyKind::Bool: return llvm::Type::getInt1Ty(context_);
         case tyir::TyKind::Str: return llvm::PointerType::getUnqual(context_);
         case tyir::TyKind::Unit: return llvm::StructType::get(context_);
-        case tyir::TyKind::Never: return llvm::Type::getVoidTy(context_);
+        case tyir::TyKind::Never:
+            // Never-typed locals use an empty struct to avoid void alloca.
+            return llvm::StructType::get(context_);
         case tyir::TyKind::Named: {
             const std::string type_name(ty.name.as_str());
             auto it = struct_types_.find(type_name);
@@ -311,6 +313,9 @@ private:
 
     // ─── Function forward declarations ──────────────────────────────────────
 
+    /// Returns true if a function is the program entry point.
+    bool is_main_fn(const LirFnDef& fn) const { return fn.name.as_str() == "main"; }
+
     /// Creates all function declarations first to support direct calls between
     /// functions regardless of source order.
     void declare_functions() {
@@ -320,7 +325,12 @@ private:
             for (const LirParam& p : fn.params)
                 param_types.push_back(map_type(p.ty));
 
-            llvm::Type* ret_ty = map_return_type(fn.return_ty);
+            llvm::Type* ret_ty;
+            if (is_main_fn(fn)) {
+                ret_ty = llvm::Type::getInt32Ty(context_);
+            } else {
+                ret_ty = map_return_type(fn.return_ty);
+            }
             auto* fn_ty = llvm::FunctionType::get(ret_ty, param_types, false);
             auto* llvm_fn = llvm::Function::Create(
                 fn_ty, llvm::Function::ExternalLinkage, std::string(fn.name.as_str()), &module_);
@@ -626,6 +636,21 @@ private:
 
     /// Lowers return terminators.
     void lower_terminator_node(const LirFnDef& fn, const LirReturn& ret) {
+        if (is_main_fn(fn)) {
+            if (fn.return_ty.kind == tyir::TyKind::Num && ret.value.has_value()) {
+                // Truncate double → i32 via fptosi
+                llvm::Value* double_val = lower_operand(*ret.value);
+                llvm::Value* int_val = builder_.CreateFPToSI(
+                    double_val, llvm::Type::getInt32Ty(context_), "exit_code");
+                builder_.CreateRet(int_val);
+            } else {
+                // Unit or Never: return 0
+                auto* zero = llvm::ConstantInt::get(llvm::Type::getInt32Ty(context_), 0);
+                builder_.CreateRet(zero);
+            }
+            return;
+        }
+
         if (!ret.value.has_value() || is_void_return(fn.return_ty)) {
             builder_.CreateRetVoid();
         } else {

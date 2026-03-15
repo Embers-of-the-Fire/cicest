@@ -256,6 +256,7 @@ struct LowerCtx {
     case ast::TypeKind::Num: return tyir::ty::num();
     case ast::TypeKind::Str: return tyir::ty::str();
     case ast::TypeKind::Bool: return tyir::ty::bool_();
+    case ast::TypeKind::Never: return tyir::ty::never();
     case ast::TypeKind::Named:
         if (!ref.symbol.is_valid())
             return make_error(span, "invalid named type reference");
@@ -1186,6 +1187,22 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             if (!insert_result.second)
                 return detail::make_error(
                     fn->span, "duplicate function name '" + std::string(fn->name.as_str()) + "'");
+        }
+    }
+
+    // ── Phase 3.5: validate main return type ─────────────────────────────
+    {
+        const auto main_sym = cstc::symbol::Symbol::intern("main");
+        const auto it = env.fn_signatures.find(main_sym);
+        if (it != env.fn_signatures.end()) {
+            const auto& ret = it->second.return_ty;
+            if (ret.kind != tyir::TyKind::Unit && ret.kind != tyir::TyKind::Num
+                && ret.kind != tyir::TyKind::Never) {
+                return detail::make_error(
+                    it->second.span,
+                    "'main' function must return 'Unit', 'num', or '!' (never), found '"
+                        + ret.display() + "'");
+            }
         }
     }
 

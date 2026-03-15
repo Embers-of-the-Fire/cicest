@@ -23,7 +23,7 @@ Source → Lexer → Tokens → Parser → AST → [Lower] → TyIR → (future:
 
 ## Type system
 
-Cicest has five source-level types and one compiler-internal type:
+Cicest has five source-level types and one bottom type:
 
 | Type | Kind | Notes |
 |---|---|---|
@@ -32,7 +32,7 @@ Cicest has five source-level types and one compiler-internal type:
 | `str` | built-in | String type |
 | `bool` | built-in | Boolean |
 | `TypeName` | user-defined | Struct or enum declared in the same program |
-| `!` | internal | Never / bottom type; produced by `break`, `continue`, `return` |
+| `!` | bottom | Never type; produced by `break`, `continue`, `return`; also denotable as `-> !` |
 
 The **Never** type (`!`) is a bottom type: it is compatible with any expected
 type.  This allows expressions like `return 42` to appear as the value of any
