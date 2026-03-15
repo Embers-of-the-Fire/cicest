@@ -28,6 +28,14 @@ static void must_fail(const char* source) {
     assert(!tyir.has_value());
 }
 
+static void must_fail_with_message(const char* source, const char* expected_message_part) {
+    const auto ast = cstc::parser::parse_source(source);
+    assert(ast.has_value());
+    const auto tyir = lower_program(*ast);
+    assert(!tyir.has_value());
+    assert(tyir.error().message.find(expected_message_part) != std::string::npos);
+}
+
 static const TyFnDecl& first_fn(const TyProgram& prog) {
     for (const auto& item : prog.items)
         if (const auto* fn = std::get_if<TyFnDecl>(&item))
@@ -323,6 +331,20 @@ static void test_struct_init_unknown_field_error() {
         "fn f() -> Point { Point { x: 0, y: 0, z: 0 } }");
 }
 
+static void test_struct_init_duplicate_field_error() {
+    must_fail_with_message(
+        "struct Point { x: num, y: num }"
+        "fn f() -> Point { Point { x: 0, x: 1 } }",
+        "duplicate field 'x'");
+}
+
+static void test_struct_init_missing_field_error() {
+    must_fail_with_message(
+        "struct Point { x: num, y: num }"
+        "fn f() -> Point { Point { x: 0 } }",
+        "missing field 'y'");
+}
+
 // ─── Field access ─────────────────────────────────────────────────────────────
 
 static void test_field_access() {
@@ -379,6 +401,8 @@ int main() {
     test_struct_init();
     test_struct_init_field_type_error();
     test_struct_init_unknown_field_error();
+    test_struct_init_duplicate_field_error();
+    test_struct_init_missing_field_error();
     test_field_access();
     test_field_access_unknown_field_error();
 

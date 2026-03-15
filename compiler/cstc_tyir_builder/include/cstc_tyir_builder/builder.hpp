@@ -416,9 +416,13 @@ struct LowerCtx {
 
                 const auto& expected_fields = ctx.env.struct_fields.at(type_name);
 
-                // Validate: no extra fields, each field type matches
+                // Validate: no extra/duplicate fields, each field type matches
                 std::vector<tyir::TyStructInitField> lowered_fields;
                 lowered_fields.reserve(node.fields.size());
+                std::unordered_map<
+                    cstc::symbol::Symbol, cstc::span::SourceSpan, cstc::symbol::SymbolHash>
+                    seen_fields;
+                seen_fields.reserve(node.fields.size());
 
                 for (const ast::StructInitField& field : node.fields) {
                     const auto expected_ty = ctx.env.field_ty(type_name, field.name);
@@ -427,6 +431,13 @@ struct LowerCtx {
                             field.span, "no field '" + std::string(field.name.as_str())
                                             + "' in struct '" + std::string(type_name.as_str())
                                             + "'");
+
+                    const auto [_, inserted] = seen_fields.emplace(field.name, field.span);
+                    if (!inserted)
+                        return make_error(
+                            field.span, "duplicate field '" + std::string(field.name.as_str())
+                                            + "' in struct initializer for '"
+                                            + std::string(type_name.as_str()) + "'");
 
                     auto val = lower_expr(field.value, ctx);
                     if (!val)
@@ -442,12 +453,15 @@ struct LowerCtx {
                         tyir::TyStructInitField{field.name, std::move(*val), field.span});
                 }
 
-                // Validate that all struct fields are initialised
-                if (lowered_fields.size() != expected_fields.size())
-                    return make_error(
-                        expr->span, "struct '" + std::string(type_name.as_str()) + "' expects "
-                                        + std::to_string(expected_fields.size()) + " field(s), "
-                                        + std::to_string(lowered_fields.size()) + " provided");
+                // Validate that every declared struct field is initialised exactly once.
+                for (const tyir::TyFieldDecl& expected_field : expected_fields) {
+                    if (seen_fields.count(expected_field.name) == 0)
+                        return make_error(
+                            expr->span, "missing field '"
+                                            + std::string(expected_field.name.as_str())
+                                            + "' in struct initializer for '"
+                                            + std::string(type_name.as_str()) + "'");
+                }
 
                 return tyir::make_ty_expr(
                     expr->span, tyir::TyStructInit{type_name, std::move(lowered_fields)},
