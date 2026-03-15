@@ -207,6 +207,13 @@ static void test_if_else() {
     assert(std::holds_alternative<TyIf>(tail.node));
 }
 
+static void test_if_else_both_return_is_never() {
+    const auto prog = must_lower("fn f(b: bool) { if b { return; } else { return; } }");
+    const auto& tail = *(*first_fn(prog).body->tail);
+    assert(tail.ty == ty::never());
+    assert(std::holds_alternative<TyIf>(tail.node));
+}
+
 static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if x { } }"); }
 
 // ─── Control flow ─────────────────────────────────────────────────────────────
@@ -684,6 +691,7 @@ int main() {
     test_unary_type_errors();
     test_if_no_else();
     test_if_else();
+    test_if_else_both_return_is_never();
     test_if_condition_must_be_bool();
     test_loop_is_unit();
     test_while();

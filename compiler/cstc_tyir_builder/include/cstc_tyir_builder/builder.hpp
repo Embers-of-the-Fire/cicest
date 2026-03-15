@@ -389,18 +389,7 @@ struct LowerCtx {
         result.ty = (*tail)->ty;
         result.tail = std::move(*tail);
     } else {
-        // No tail expression — block type is Unit unless a statement diverges.
-        // A diverging ExprStmt (wrapping a Never-typed expression such as
-        // `return`, `break`, or `continue`) makes the block itself diverge.
-        result.ty = tyir::ty::unit();
-        for (const tyir::TyStmt& s : result.stmts) {
-            if (const auto* es = std::get_if<tyir::TyExprStmt>(&s)) {
-                if (es->expr->ty.is_never()) {
-                    result.ty = tyir::ty::never();
-                    break;
-                }
-            }
-        }
+        result.ty = block_can_fallthrough(result) ? tyir::ty::unit() : tyir::ty::never();
     }
 
     ctx.scope.pop();

@@ -332,14 +332,16 @@ using TyStmt = std::variant<TyLetStmt, TyExprStmt>;
 
 /// Type-annotated block expression (statement list + optional tail expression).
 ///
-/// The block's `ty` equals the tail expression's type, or `Unit` if there is
-/// no tail.
+/// The block's `ty` equals the tail expression's type when a tail is present.
+/// Without a tail, `ty` is `Unit` if control can fall through the block end,
+/// otherwise `Never`.
 struct TyBlock {
     /// Ordered typed statements.
     std::vector<TyStmt> stmts;
     /// Optional final expression whose value is the block's value.
     std::optional<TyExprPtr> tail;
-    /// Inferred block type (`tail->ty` when a tail is present, else `Unit`).
+    /// Inferred block type (`tail->ty` with a tail, else `Unit` or `Never`
+    /// based on fallthrough).
     Ty ty;
     /// Source location for the full block.
     cstc::span::SourceSpan span;
