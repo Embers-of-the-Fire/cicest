@@ -638,7 +638,11 @@ private:
     void lower_terminator_node(const LirFnDef& fn, const LirReturn& ret) {
         if (is_main_fn(fn)) {
             if (fn.return_ty.kind == tyir::TyKind::Num && ret.value.has_value()) {
-                // Truncate double → i32 via fptosi
+                // Convert the num (double) to an i32 exit code via fptosi.
+                // This truncates the fractional part and may wrap on overflow
+                // (values outside [-2^31, 2^31-1] produce poison per LLVM
+                // semantics). This mirrors C's (int) cast behaviour and is the
+                // expected semantic for process exit codes.
                 llvm::Value* double_val = lower_operand(*ret.value);
                 llvm::Value* int_val = builder_.CreateFPToSI(
                     double_val, llvm::Type::getInt32Ty(context_), "exit_code");
