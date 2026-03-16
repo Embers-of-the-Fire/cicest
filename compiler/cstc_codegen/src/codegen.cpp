@@ -163,7 +163,7 @@ private:
 
         llvm::TargetOptions target_options;
         auto target_machine = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-            target_triple, "generic", "", target_options, std::nullopt));
+            target_triple, "generic", "", target_options, llvm::Reloc::PIC_));
         if (target_machine == nullptr)
             throw std::runtime_error(
                 "failed to create LLVM target machine for: " + target_triple.str());
