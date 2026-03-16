@@ -21,4 +21,5 @@ if(CICEST_BUILD_TESTS)
     enable_testing()
 endif()
 
+add_subdirectory(libraries)
 add_subdirectory(compiler)

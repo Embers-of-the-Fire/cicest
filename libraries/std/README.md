@@ -31,10 +31,29 @@ The `"lang"` ABI string indicates these functions are provided by the cicest
 language runtime. The compiler emits LLVM `declare` instructions for these
 functions, and the actual implementations are supplied at link time.
 
+## Runtime
+
+The actual implementations of prelude functions live in `runtime.c`. This file
+is compiled into a static library (`libcicest_rt.a`) by CMake and automatically
+linked into every executable produced by the compiler.
+
+| Cicest declaration | C signature |
+|--------------------|-------------|
+| `fn print(value: str)` | `void print(const char*)` |
+| `fn println(value: str)` | `void println(const char*)` |
+| `fn to_str(value: num) -> str` | `char* to_str(double)` |
+| `fn str_concat(a: str, b: str) -> str` | `char* str_concat(const char*, const char*)` |
+| `fn str_len(value: str) -> num` | `double str_len(const char*)` |
+
+Functions returning `str` allocate memory with `malloc`. There is currently no
+garbage collector or ownership tracking — allocations are freed when the process
+exits.
+
 ## Adding New Functions
 
 To add a new standard library function:
 
 1. Add the `extern "lang" fn` declaration to `prelude.cst`.
-2. Implement the function in the runtime (linked at build time).
+2. Implement the function in `runtime.c`.
 3. Update this README with the new function's documentation.
+4. Add tests in `compiler/cstc_codegen/tests/codegen_integration.cpp`.

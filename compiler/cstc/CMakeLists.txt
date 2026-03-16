@@ -4,6 +4,7 @@ add_executable(cstc
 
 target_compile_definitions(cstc PRIVATE
     CICEST_STD_PATH="${CMAKE_SOURCE_DIR}/libraries/std"
+    CICEST_RT_PATH="$<TARGET_FILE:cicest_rt>"
 )
 
 target_link_libraries(cstc

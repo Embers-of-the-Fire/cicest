@@ -101,6 +101,38 @@ In LLVM IR, extern structs are emitted as empty struct types:
 %Handle = type {}
 ```
 
+## Runtime library
+
+The actual implementations of the prelude functions live in
+`libraries/std/runtime.c`. This file is compiled into a static library
+(`libcicest_rt.a`) by CMake and automatically linked into every executable
+produced by the compiler.
+
+The runtime path is baked into the `cstc` binary at build time via the
+`CICEST_RT_PATH` compile definition. When the compiler invokes the linker,
+it passes the runtime archive as a positional argument alongside the user's
+object file:
+
+```
+c++  user.o  /path/to/libcicest_rt.a  -o  user
+```
+
+### Runtime function signatures
+
+The C implementations must match the LLVM IR signatures emitted by codegen:
+
+| Cicest declaration | LLVM IR | C signature |
+|--------------------|---------|-------------|
+| `fn print(value: str)` | `declare void @print(ptr)` | `void print(const char*)` |
+| `fn println(value: str)` | `declare void @println(ptr)` | `void println(const char*)` |
+| `fn to_str(value: num) -> str` | `declare ptr @to_str(double)` | `char* to_str(double)` |
+| `fn str_concat(a: str, b: str) -> str` | `declare ptr @str_concat(ptr, ptr)` | `char* str_concat(const char*, const char*)` |
+| `fn str_len(value: str) -> num` | `declare double @str_len(ptr)` | `double str_len(const char*)` |
+
+> **Note:** Functions returning `str` allocate memory with `malloc`. There is
+> currently no garbage collector or ownership tracking — allocations are freed
+> when the process exits.
+
 ## Available functions
 
 The prelude currently provides the following functions:
@@ -226,6 +258,6 @@ To add a new function to the standard library:
   opaque type handles.
 - The prelude is always injected — there is no mechanism to suppress it.
 - No module or import system exists. All prelude declarations are global.
-- The runtime implementations of the prelude functions are not yet provided.
-  Programs using prelude functions will compile but will fail at link time
-  without a runtime library.
+- Functions returning `str` allocate memory with `malloc`. There is currently
+  no garbage collector or ownership tracking — allocations are freed when the
+  process exits.

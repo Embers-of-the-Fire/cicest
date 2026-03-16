@@ -246,10 +246,8 @@ void link_object_to_executable(
 
     std::string linker_program = resolve_linker_program(options);
     std::vector<std::string> arguments{
-        linker_program,
-        object_path.string(),
-        "-o",
-        executable_path.string(),
+        linker_program, object_path.string(),     std::string(CICEST_RT_PATH),
+        "-o",           executable_path.string(),
     };
 
 #if defined(_WIN32)
