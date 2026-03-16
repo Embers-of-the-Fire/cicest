@@ -123,15 +123,16 @@ Notes:
 ### 3.2 Types
 
 ```ebnf
-Type               = BuiltinType | UserType ;
+Type               = BuiltinType | NeverType | UserType ;
 BuiltinType        = "Unit" | "num" | "str" | "bool" ;
+NeverType          = "!" ;
 UserType           = IDENT ;
 ```
 
-> **Note:** The `Never` type (`!`) is **non-denotable** — it cannot appear in
-> source-level type annotations.  It exists only as an internally inferred type
-> produced by diverging expressions (`return`, `break`, `continue`, and
-> body-less `loop`).  See §5.1 for its role in loop/break type inference.
+> **Note:** The `Never` type (`!`) is a bottom type produced by diverging
+> expressions (`return`, `break`, `continue`, and body-less `loop`).  It can
+> also be used as an explicit return type annotation (e.g., `fn f() -> ! { loop {} }`)
+> to indicate that a function never returns.
 
 No generic parameters are allowed anywhere.
 
@@ -264,7 +265,7 @@ Mandatory constraints for frontend validation:
 
 The type of a `loop` expression is inferred from its `break` values:
 
-- If the loop contains no `break` statements (e.g., it diverges via `return`), the loop has type `Never` (bottom type, `!`).  `Never` is non-denotable; it is assigned only by the type checker (see the type grammar note in §3.2).
+- If the loop contains no `break` statements (e.g., it diverges via `return`), the loop has type `Never` (bottom type, `!`).  See §3.2 for the type grammar.
 - If the loop contains only bare `break;` (no value), the loop has type `Unit`.
 - If the loop contains `break expr;`, the loop has the type of `expr`.
 - All `break` values within a single `loop` must have the same type. Conflicting break types produce a type error.

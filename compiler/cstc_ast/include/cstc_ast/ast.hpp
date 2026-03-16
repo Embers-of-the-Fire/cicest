@@ -35,6 +35,8 @@ enum class TypeKind {
     Bool,
     /// User-defined named type.
     Named,
+    /// Never / bottom type (`!`).
+    Never,
 };
 
 /// Type reference used in declarations and annotations.

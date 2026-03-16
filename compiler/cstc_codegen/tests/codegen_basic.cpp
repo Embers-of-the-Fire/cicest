@@ -107,6 +107,48 @@ static void test_fn_call() {
     assert(ir_contains(ir, "call double @double(double"));
 }
 
+// ─── main function ABI ──────────────────────────────────────────────────────
+
+static void test_main_unit_returns_i32_zero() {
+    const std::string ir = must_codegen("fn main() { }");
+    assert(ir_contains(ir, "define i32 @main()"));
+    assert(ir_contains(ir, "ret i32 0"));
+}
+
+static void test_main_num_returns_i32() {
+    const std::string ir = must_codegen("fn main() -> num { 42 }");
+    assert(ir_contains(ir, "define i32 @main()"));
+    assert(ir_contains(ir, "ret i32"));
+    // Must not contain ret double (it's main, returns i32)
+    assert(!ir_contains(ir, "ret double"));
+}
+
+static void test_main_num_fptosi_non_constant() {
+    // With a non-constant operand, fptosi should be visible
+    const std::string ir = must_codegen(
+        "fn get_code() -> num { 42 }"
+        "fn main() -> num { get_code() }");
+    assert(ir_contains(ir, "define i32 @main()"));
+    assert(ir_contains(ir, "fptosi"));
+    assert(ir_contains(ir, "ret i32"));
+}
+
+static void test_main_never_returns_i32() {
+    const std::string ir = must_codegen("fn main() -> ! { loop {} }");
+    assert(ir_contains(ir, "define i32 @main()"));
+    // Never-returning main should not have ret double
+    assert(!ir_contains(ir, "ret double"));
+}
+
+static void test_non_main_fn_still_uses_double_return() {
+    // Regression: non-main functions must use normal return types
+    const std::string ir = must_codegen(
+        "fn compute() -> num { 3.14 }"
+        "fn main() { }");
+    assert(ir_contains(ir, "define double @compute()"));
+    assert(ir_contains(ir, "define i32 @main()"));
+}
+
 int main() {
     SymbolSession session;
 
@@ -119,6 +161,11 @@ int main() {
     test_fn_with_params();
     test_multiple_functions();
     test_fn_call();
+    test_main_unit_returns_i32_zero();
+    test_main_num_returns_i32();
+    test_main_num_fptosi_non_constant();
+    test_main_never_returns_i32();
+    test_non_main_fn_still_uses_double_return();
 
     return 0;
 }
