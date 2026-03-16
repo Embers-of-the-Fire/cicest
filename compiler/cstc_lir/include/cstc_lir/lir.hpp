@@ -417,6 +417,20 @@ struct LirEnumDecl {
     cstc::span::SourceSpan span;
 };
 
+/// An extern function declaration (no body, just a signature).
+struct LirExternFnDecl {
+    /// ABI string (e.g. "lang", "c").
+    cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
+    /// Function name.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Parameter metadata.
+    std::vector<LirParam> params;
+    /// Declared return type.
+    Ty return_ty;
+    /// Source location.
+    cstc::span::SourceSpan span;
+};
+
 // ─── Program ────────────────────────────────────────────────────────────────
 
 /// Root of a fully-lowered LIR program.
@@ -424,6 +438,7 @@ struct LirProgram {
     std::vector<LirStructDecl> structs;
     std::vector<LirEnumDecl> enums;
     std::vector<LirFnDef> fns;
+    std::vector<LirExternFnDecl> extern_fns;
 };
 
 } // namespace cstc::lir

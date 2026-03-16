@@ -647,6 +647,22 @@ inline lir::LirProgram lower_program(const tyir::TyProgram& program) {
                     out.structs.push_back(detail::forward_struct(node));
                 } else if constexpr (std::is_same_v<T, tyir::TyEnumDecl>) {
                     out.enums.push_back(detail::forward_enum(node));
+                } else if constexpr (std::is_same_v<T, tyir::TyExternFnDecl>) {
+                    lir::LirExternFnDecl ext;
+                    ext.abi = node.abi;
+                    ext.name = node.name;
+                    ext.return_ty = node.return_ty;
+                    ext.span = node.span;
+                    for (std::size_t i = 0; i < node.params.size(); ++i) {
+                        ext.params.push_back(
+                            lir::LirParam{
+                                .local = static_cast<lir::LirLocalId>(i),
+                                .name = node.params[i].name,
+                                .ty = node.params[i].ty,
+                                .span = node.params[i].span,
+                            });
+                    }
+                    out.extern_fns.push_back(std::move(ext));
                 } else {
                     out.fns.push_back(detail::lower_fn(node));
                 }

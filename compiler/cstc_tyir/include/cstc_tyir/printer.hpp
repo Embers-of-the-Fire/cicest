@@ -262,8 +262,7 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                         out << " = " << variant.discriminant->as_str();
                     out << "\n";
                 }
-            } else {
-                // TyFnDecl
+            } else if constexpr (std::is_same_v<T, TyFnDecl>) {
                 indent(out, level);
                 out << "TyFnDecl " << node.name.as_str() << "(";
                 for (std::size_t i = 0; i < node.params.size(); ++i) {
@@ -273,6 +272,16 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 }
                 out << ") -> " << node.return_ty.display() << "\n";
                 print_ty_block(out, node.body, level + 1);
+            } else if constexpr (std::is_same_v<T, TyExternFnDecl>) {
+                indent(out, level);
+                out << "TyExternFnDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
+                    << "(";
+                for (std::size_t i = 0; i < node.params.size(); ++i) {
+                    if (i > 0)
+                        out << ", ";
+                    out << node.params[i].name.as_str() << ": " << node.params[i].ty.display();
+                }
+                out << ") -> " << node.return_ty.display() << "\n";
             }
         },
         item);

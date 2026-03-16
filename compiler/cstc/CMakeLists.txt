@@ -2,6 +2,10 @@ add_executable(cstc
     ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp
 )
 
+target_compile_definitions(cstc PRIVATE
+    CICEST_STD_PATH="${CMAKE_SOURCE_DIR}/libraries/std"
+)
+
 target_link_libraries(cstc
     PRIVATE
         cstc_codegen

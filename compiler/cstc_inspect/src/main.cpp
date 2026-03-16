@@ -143,11 +143,42 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     return output.str();
 }
 
-[[nodiscard]] std::string
-    render_tyir(const cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
-    const cstc::span::SourceFile* source_file = source_map.file(file_id);
+/// Parses the user source and merges it with the std prelude AST.
+///
+/// The prelude is loaded from `CICEST_STD_PATH/prelude.cst`, added to the
+/// source map as a separate file, parsed, and its items are prepended to the
+/// user program items.
+[[nodiscard]] cstc::ast::Program
+    parse_with_prelude(cstc::span::SourceMap& source_map, cstc::span::SourceFileId user_file_id) {
+    // Parse prelude
+    const std::filesystem::path prelude_path =
+        std::filesystem::path(CICEST_STD_PATH) / "prelude.cst";
+    const std::string prelude_source = read_source_file(prelude_path);
+    const cstc::span::SourceFileId prelude_file_id =
+        source_map.add_file(prelude_path.string(), prelude_source);
+    const cstc::span::SourceFile* prelude_file = source_map.file(prelude_file_id);
+    if (prelude_file == nullptr)
+        throw std::runtime_error("invalid source file id for std prelude");
+
+    const auto prelude_parsed =
+        cstc::parser::parse_source_at(prelude_file->source, prelude_file->start_pos);
+    if (!prelude_parsed.has_value()) {
+        const cstc::parser::ParseError& error = prelude_parsed.error();
+        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
+            throw std::runtime_error(
+                "parse error " + std::string(resolved->file_name) + ":"
+                + std::to_string(resolved->start.line) + ":"
+                + std::to_string(resolved->start.column) + ": " + error.message);
+        }
+        throw std::runtime_error(
+            "parse error [" + std::to_string(error.span.start) + ", "
+            + std::to_string(error.span.end) + "): " + error.message);
+    }
+
+    // Parse user source
+    const cstc::span::SourceFile* source_file = source_map.file(user_file_id);
     if (source_file == nullptr)
-        throw std::runtime_error("invalid source file id in render_tyir");
+        throw std::runtime_error("invalid source file id");
 
     const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
     if (!parsed.has_value()) {
@@ -163,7 +194,21 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
             + std::to_string(error.span.end) + "): " + error.message);
     }
 
-    const auto lowered = cstc::tyir_builder::lower_program(*parsed);
+    // Merge
+    cstc::ast::Program merged;
+    merged.items.reserve(prelude_parsed->items.size() + parsed->items.size());
+    for (const auto& item : prelude_parsed->items)
+        merged.items.push_back(item);
+    for (const auto& item : parsed->items)
+        merged.items.push_back(item);
+    return merged;
+}
+
+[[nodiscard]] std::string
+    render_tyir(cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
+    const auto merged = parse_with_prelude(source_map, file_id);
+
+    const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value()) {
         const cstc::tyir_builder::LowerError& error = lowered.error();
         if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
@@ -179,26 +224,10 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 }
 
 [[nodiscard]] std::string
-    render_lir(const cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
-    const cstc::span::SourceFile* source_file = source_map.file(file_id);
-    if (source_file == nullptr)
-        throw std::runtime_error("invalid source file id in render_lir");
+    render_lir(cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
+    const auto merged = parse_with_prelude(source_map, file_id);
 
-    const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
-    if (!parsed.has_value()) {
-        const cstc::parser::ParseError& error = parsed.error();
-        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-            throw std::runtime_error(
-                "parse error " + std::string(resolved->file_name) + ":"
-                + std::to_string(resolved->start.line) + ":"
-                + std::to_string(resolved->start.column) + ": " + error.message);
-        }
-        throw std::runtime_error(
-            "parse error [" + std::to_string(error.span.start) + ", "
-            + std::to_string(error.span.end) + "): " + error.message);
-    }
-
-    const auto lowered = cstc::tyir_builder::lower_program(*parsed);
+    const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value()) {
         const cstc::tyir_builder::LowerError& error = lowered.error();
         if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
@@ -215,26 +244,10 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 }
 
 [[nodiscard]] std::string
-    render_llvm(const cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
-    const cstc::span::SourceFile* source_file = source_map.file(file_id);
-    if (source_file == nullptr)
-        throw std::runtime_error("invalid source file id in render_llvm");
+    render_llvm(cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
+    const auto merged = parse_with_prelude(source_map, file_id);
 
-    const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
-    if (!parsed.has_value()) {
-        const cstc::parser::ParseError& error = parsed.error();
-        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-            throw std::runtime_error(
-                "parse error " + std::string(resolved->file_name) + ":"
-                + std::to_string(resolved->start.line) + ":"
-                + std::to_string(resolved->start.column) + ": " + error.message);
-        }
-        throw std::runtime_error(
-            "parse error [" + std::to_string(error.span.start) + ", "
-            + std::to_string(error.span.end) + "): " + error.message);
-    }
-
-    const auto lowered = cstc::tyir_builder::lower_program(*parsed);
+    const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value()) {
         const cstc::tyir_builder::LowerError& error = lowered.error();
         if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {

@@ -66,6 +66,8 @@ enum class TokenKind {
     KwStr,
     /// `bool` built-in type keyword.
     KwBool,
+    /// `extern` keyword.
+    KwExtern,
 
     /// `{`
     LBrace,
@@ -165,6 +167,7 @@ struct Token {
     case TokenKind::KwNum: return "KwNum";
     case TokenKind::KwStr: return "KwStr";
     case TokenKind::KwBool: return "KwBool";
+    case TokenKind::KwExtern: return "KwExtern";
     case TokenKind::LBrace: return "LBrace";
     case TokenKind::RBrace: return "RBrace";
     case TokenKind::LParen: return "LParen";

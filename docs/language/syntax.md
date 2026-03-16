@@ -16,6 +16,7 @@ Supported top-level items:
 - `struct` declarations.
 - `enum` declarations (scoped variants, similar in spirit to C++ `enum class`).
 - `fn` declarations.
+- `extern` declarations (external function and opaque struct declarations).
 
 Explicitly out of scope:
 
@@ -55,7 +56,7 @@ Reserved keywords:
 
 ```text
 struct enum fn let if else for while loop break continue return
-true false Unit num str bool
+true false Unit num str bool extern
 ```
 
 ### 2.4 Literals
@@ -97,7 +98,7 @@ It is not an assignment expression operator.
 ```ebnf
 Program            = { Item } , EOF ;
 
-Item               = StructDecl | EnumDecl | FnDecl ;
+Item               = StructDecl | EnumDecl | FnDecl | ExternDecl ;
 
 StructDecl         = "struct" , IDENT , ( StructFields | ";" ) ;
 StructFields       = "{" , [ FieldDeclList ] , "}" ;
@@ -112,6 +113,10 @@ FnDecl             = "fn" , IDENT , "(" , [ ParamList ] , ")" , [ ReturnType ] ,
 ParamList          = Param , { "," , Param } , [ "," ] ;
 Param              = IDENT , ":" , Type ;
 ReturnType         = "->" , Type ;
+
+ExternDecl         = "extern" , STR_LIT , ( ExternFnDecl | ExternStructDecl ) ;
+ExternFnDecl       = "fn" , IDENT , "(" , [ ParamList ] , ")" , [ ReturnType ] , ";" ;
+ExternStructDecl   = "struct" , IDENT , ";" ;
 ```
 
 Notes:
@@ -119,6 +124,8 @@ Notes:
 - `struct Name;` is a valid zero-sized type (ZST).
 - Enum variants are scoped and must be referenced as `EnumName::Variant`.
 - Enums are fieldless (C++ enum-class-like), i.e., no payload variants.
+- `extern` declarations use a string literal for the ABI (e.g., `"lang"`, `"c"`).
+- `extern` functions have no body; `extern` structs are opaque (no fields).
 
 ### 3.2 Types
 
@@ -317,6 +324,10 @@ fn f(b: bool) -> num {
 ## 7. Valid Syntax Examples
 
 ```text
+extern "lang" fn print(value: str);
+extern "lang" fn to_str(value: num) -> str;
+extern "lang" struct Handle;
+
 struct Empty;
 
 struct User {

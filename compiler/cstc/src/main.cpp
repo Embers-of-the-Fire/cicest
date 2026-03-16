@@ -311,6 +311,23 @@ void compile_file(const Options& options) {
 
     cstc::symbol::SymbolSession session;
     cstc::span::SourceMap source_map;
+
+    // ─── Inject std prelude ──────────────────────────────────────────────
+    const std::filesystem::path prelude_path =
+        std::filesystem::path(CICEST_STD_PATH) / "prelude.cst";
+    const std::string prelude_source = read_source_file(prelude_path);
+    const cstc::span::SourceFileId prelude_file_id =
+        source_map.add_file(prelude_path.string(), prelude_source);
+    const cstc::span::SourceFile* prelude_file = source_map.file(prelude_file_id);
+    if (prelude_file == nullptr)
+        throw std::runtime_error("invalid source file id for std prelude");
+
+    const auto prelude_parsed =
+        cstc::parser::parse_source_at(prelude_file->source, prelude_file->start_pos);
+    if (!prelude_parsed.has_value())
+        throw std::runtime_error(format_parse_error(source_map, prelude_parsed.error()));
+
+    // ─── Parse user source ───────────────────────────────────────────────
     const cstc::span::SourceFileId file_id = source_map.add_file(options.input_path, source);
 
     const cstc::span::SourceFile* source_file = source_map.file(file_id);
@@ -321,7 +338,15 @@ void compile_file(const Options& options) {
     if (!parsed.has_value())
         throw std::runtime_error(format_parse_error(source_map, parsed.error()));
 
-    const auto lowered = cstc::tyir_builder::lower_program(*parsed);
+    // ─── Merge prelude + user AST ────────────────────────────────────────
+    cstc::ast::Program merged;
+    merged.items.reserve(prelude_parsed->items.size() + parsed->items.size());
+    for (auto& item : prelude_parsed->items)
+        merged.items.push_back(item);
+    for (auto& item : parsed->items)
+        merged.items.push_back(item);
+
+    const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value())
         throw std::runtime_error(format_type_error(source_map, lowered.error()));
 

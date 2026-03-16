@@ -417,8 +417,22 @@ struct TyFnDecl {
     cstc::span::SourceSpan span;
 };
 
+/// Typed extern function declaration (no body).
+struct TyExternFnDecl {
+    /// ABI string (e.g. "lang", "c").
+    cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
+    /// Function name.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Typed parameter list.
+    std::vector<TyParam> params;
+    /// Resolved return type (defaults to `Unit` when absent in source).
+    Ty return_ty;
+    /// Source location for the full item.
+    cstc::span::SourceSpan span;
+};
+
 /// Any top-level TyIR item declaration.
-using TyItem = std::variant<TyStructDecl, TyEnumDecl, TyFnDecl>;
+using TyItem = std::variant<TyStructDecl, TyEnumDecl, TyFnDecl, TyExternFnDecl>;
 
 /// Full typed program — root of the TyIR tree.
 struct TyProgram {

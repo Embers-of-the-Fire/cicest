@@ -218,7 +218,11 @@ private:
             return ast::Item{std::move(*decl)};
         }
 
-        return std::unexpected(make_error_here("expected item (`struct`, `enum`, `fn`)"));
+        if (check(TokenKind::KwExtern)) {
+            return parse_extern_decl();
+        }
+
+        return std::unexpected(make_error_here("expected item (`struct`, `enum`, `fn`, `extern`)"));
     }
 
     [[nodiscard]] std::expected<ast::StructDecl, ParseError>
@@ -415,6 +419,130 @@ private:
         decl.return_type = std::move(return_type);
         decl.body = *body;
         decl.span = merge_spans(fn_keyword.span, (*body)->span);
+
+        return decl;
+    }
+
+    [[nodiscard]] std::expected<ast::Item, ParseError> parse_extern_decl() {
+        const Token extern_kw = advance(); // consume `extern`
+
+        if (!check(TokenKind::String)) {
+            return std::unexpected(
+                make_error_here("expected ABI string after `extern` (e.g. `\"lang\"`)"));
+        }
+        const Token abi_token = advance();
+        // Strip surrounding quotes from the ABI string.
+        const std::string_view raw_abi = abi_token.symbol.as_str();
+        const cstc::symbol::Symbol abi =
+            cstc::symbol::Symbol::intern(raw_abi.substr(1, raw_abi.size() - 2));
+
+        if (match(TokenKind::KwFn)) {
+            auto decl = parse_extern_fn_decl(extern_kw, abi);
+            if (!decl.has_value())
+                return std::unexpected(decl.error());
+            return ast::Item{std::move(*decl)};
+        }
+
+        if (match(TokenKind::KwStruct)) {
+            auto decl = parse_extern_struct_decl(extern_kw, abi);
+            if (!decl.has_value())
+                return std::unexpected(decl.error());
+            return ast::Item{std::move(*decl)};
+        }
+
+        return std::unexpected(
+            make_error_here("expected `fn` or `struct` after extern ABI string"));
+    }
+
+    [[nodiscard]] std::expected<ast::ExternFnDecl, ParseError>
+        parse_extern_fn_decl(const Token& extern_kw, cstc::symbol::Symbol abi) {
+        auto name_token = consume_identifier("expected function name");
+        if (!name_token.has_value())
+            return std::unexpected(name_token.error());
+
+        auto open_paren = consume(TokenKind::LParen, "expected `(` after function name");
+        if (!open_paren.has_value())
+            return std::unexpected(open_paren.error());
+
+        std::vector<ast::Param> params;
+        std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> seen_params;
+
+        if (!check(TokenKind::RParen)) {
+            while (true) {
+                auto param_name = consume_identifier("expected parameter name");
+                if (!param_name.has_value())
+                    return std::unexpected(param_name.error());
+
+                if (!seen_params.insert(param_name->symbol).second) {
+                    const std::string param_name_text = std::string(token_text(*param_name));
+                    return std::unexpected(make_error_token(
+                        *param_name, "duplicate parameter `" + param_name_text + "`"));
+                }
+
+                auto colon = consume(TokenKind::Colon, "expected `:` after parameter name");
+                if (!colon.has_value())
+                    return std::unexpected(colon.error());
+
+                auto param_type = parse_type();
+                if (!param_type.has_value())
+                    return std::unexpected(param_type.error());
+
+                params.push_back(
+                    ast::Param{
+                        .name = param_name->symbol,
+                        .type = std::move(*param_type),
+                        .span = merge_spans(param_name->span, previous().span),
+                    });
+
+                if (match(TokenKind::Comma)) {
+                    if (check(TokenKind::RParen))
+                        break;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        auto close_paren = consume(TokenKind::RParen, "expected `)` after function parameters");
+        if (!close_paren.has_value())
+            return std::unexpected(close_paren.error());
+
+        std::optional<ast::TypeRef> return_type;
+        if (match(TokenKind::Arrow)) {
+            auto parsed_return_type = parse_type();
+            if (!parsed_return_type.has_value())
+                return std::unexpected(parsed_return_type.error());
+            return_type = std::move(*parsed_return_type);
+        }
+
+        auto semi = consume(TokenKind::Semicolon, "expected `;` after extern fn declaration");
+        if (!semi.has_value())
+            return std::unexpected(semi.error());
+
+        ast::ExternFnDecl decl;
+        decl.abi = abi;
+        decl.name = name_token->symbol;
+        decl.params = std::move(params);
+        decl.return_type = std::move(return_type);
+        decl.span = merge_spans(extern_kw.span, semi->span);
+
+        return decl;
+    }
+
+    [[nodiscard]] std::expected<ast::ExternStructDecl, ParseError>
+        parse_extern_struct_decl(const Token& extern_kw, cstc::symbol::Symbol abi) {
+        auto name_token = consume_identifier("expected struct name");
+        if (!name_token.has_value())
+            return std::unexpected(name_token.error());
+
+        auto semi = consume(TokenKind::Semicolon, "expected `;` after extern struct declaration");
+        if (!semi.has_value())
+            return std::unexpected(semi.error());
+
+        ast::ExternStructDecl decl;
+        decl.abi = abi;
+        decl.name = name_token->symbol;
+        decl.span = merge_spans(extern_kw.span, semi->span);
 
         return decl;
     }

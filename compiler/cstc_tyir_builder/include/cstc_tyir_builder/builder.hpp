@@ -1158,6 +1158,14 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 return detail::make_error(
                     enum_decl->span,
                     "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
+        } else if (const auto* extern_struct = std::get_if<ast::ExternStructDecl>(&item)) {
+            if (env.enum_variants.count(extern_struct->name) > 0
+                || env.struct_fields.count(extern_struct->name) > 0)
+                return detail::make_error(
+                    extern_struct->span,
+                    "duplicate type name '" + std::string(extern_struct->name.as_str()) + "'");
+
+            env.struct_fields.emplace(extern_struct->name, std::vector<tyir::TyFieldDecl>{});
         }
     }
 
@@ -1188,6 +1196,29 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             if (!insert_result.second)
                 return detail::make_error(
                     fn->span, "duplicate function name '" + std::string(fn->name.as_str()) + "'");
+        } else if (const auto* ext_fn = std::get_if<ast::ExternFnDecl>(&item)) {
+            // Build a signature from the extern fn declaration.
+            detail::FnSignature sig;
+            sig.span = ext_fn->span;
+            if (ext_fn->return_type.has_value()) {
+                auto t = detail::lower_type(*ext_fn->return_type, env, ext_fn->span);
+                if (!t)
+                    return std::unexpected(std::move(t.error()));
+                sig.return_ty = *t;
+            } else {
+                sig.return_ty = tyir::ty::unit();
+            }
+            for (const ast::Param& p : ext_fn->params) {
+                auto pt = detail::lower_type(p.type, env, p.span);
+                if (!pt)
+                    return std::unexpected(std::move(pt.error()));
+                sig.param_types.push_back(*pt);
+            }
+            const auto insert_result = env.fn_signatures.emplace(ext_fn->name, std::move(sig));
+            if (!insert_result.second)
+                return detail::make_error(
+                    ext_fn->span,
+                    "duplicate function name '" + std::string(ext_fn->name.as_str()) + "'");
         }
     }
 
@@ -1228,6 +1259,28 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             if (!fn_result)
                 return std::unexpected(std::move(fn_result.error()));
             result.items.push_back(std::move(*fn_result));
+        } else if (const auto* ext_fn = std::get_if<ast::ExternFnDecl>(&item)) {
+            const auto& sig = env.fn_signatures.at(ext_fn->name);
+            tyir::TyExternFnDecl ty_decl;
+            ty_decl.abi = ext_fn->abi;
+            ty_decl.name = ext_fn->name;
+            ty_decl.return_ty = sig.return_ty;
+            ty_decl.span = ext_fn->span;
+            for (std::size_t i = 0; i < ext_fn->params.size(); ++i) {
+                ty_decl.params.push_back(
+                    tyir::TyParam{
+                        .name = ext_fn->params[i].name,
+                        .ty = sig.param_types[i],
+                        .span = ext_fn->params[i].span,
+                    });
+            }
+            result.items.push_back(std::move(ty_decl));
+        } else if (const auto* ext_struct = std::get_if<ast::ExternStructDecl>(&item)) {
+            tyir::TyStructDecl ty_decl;
+            ty_decl.name = ext_struct->name;
+            ty_decl.is_zst = true;
+            ty_decl.span = ext_struct->span;
+            result.items.push_back(std::move(ty_decl));
         }
     }
 

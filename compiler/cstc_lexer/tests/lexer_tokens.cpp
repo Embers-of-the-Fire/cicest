@@ -41,6 +41,7 @@ void test_all_keywords() {
         {     "num",      cstc::lexer::TokenKind::KwNum},
         {     "str",      cstc::lexer::TokenKind::KwStr},
         {    "bool",     cstc::lexer::TokenKind::KwBool},
+        {  "extern",   cstc::lexer::TokenKind::KwExtern},
     };
 
     for (const auto& [text, expected_kind] : cases) {

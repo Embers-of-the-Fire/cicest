@@ -120,6 +120,7 @@ private:
 
         declare_structs();
         declare_enums();
+        declare_extern_functions();
         declare_functions();
         define_functions();
         run_passes();
@@ -308,6 +309,28 @@ private:
                     disc_map[vname] = static_cast<uint32_t>(i);
                 }
             }
+        }
+    }
+
+    // ─── Extern function declarations ─────────────────────────────────────
+
+    /// Declares all extern functions as LLVM external declarations (no body).
+    ///
+    /// These are registered in the shared `functions_` map so that calls to
+    /// extern functions resolve the same way as calls to regular functions.
+    void declare_extern_functions() {
+        for (const LirExternFnDecl& ext : program_.extern_fns) {
+            std::vector<llvm::Type*> param_types;
+            param_types.reserve(ext.params.size());
+            for (const LirParam& p : ext.params)
+                param_types.push_back(map_type(p.ty));
+
+            llvm::Type* ret_ty = map_return_type(ext.return_ty);
+            auto* fn_ty = llvm::FunctionType::get(ret_ty, param_types, false);
+            auto* llvm_fn = llvm::Function::Create(
+                fn_ty, llvm::Function::ExternalLinkage, std::string(ext.name.as_str()), &module_);
+
+            functions_[std::string(ext.name.as_str())] = llvm_fn;
         }
     }
 
