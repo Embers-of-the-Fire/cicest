@@ -197,6 +197,26 @@ extern "lang" struct Handle;
     assert(std::holds_alternative<TyExternStructDecl>(prog.items[3]));
 }
 
+// ─── Error: unsupported ABI ─────────────────────────────────────────────────
+
+static void test_unsupported_abi_fn() {
+    SymbolSession session;
+    must_fail_with_message(R"(extern "bogus" fn foo();)", "unsupported ABI");
+}
+
+static void test_unsupported_abi_struct() {
+    SymbolSession session;
+    must_fail_with_message(R"(extern "bogus" struct Foo;)", "unsupported ABI");
+}
+
+static void test_c_abi_accepted() {
+    SymbolSession session;
+    const auto prog = must_lower(R"(extern "c" fn puts(s: str);)");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
+    assert(decl.abi == Symbol::intern("c"));
+}
+
 int main() {
     test_extern_fn_basic();
     test_extern_fn_with_return();
@@ -211,5 +231,8 @@ int main() {
     test_extern_fn_wrong_arg_type();
     test_extern_fn_wrong_arg_count();
     test_multiple_extern_items();
+    test_unsupported_abi_fn();
+    test_unsupported_abi_struct();
+    test_c_abi_accepted();
     return 0;
 }

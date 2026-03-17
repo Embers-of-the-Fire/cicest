@@ -245,6 +245,20 @@ struct LowerCtx {
     return std::unexpected(LowerError{span, std::move(msg)});
 }
 
+/// Returns true if the ABI string is a recognised extern ABI.
+[[nodiscard]] inline bool is_supported_abi(cstc::symbol::Symbol abi) {
+    const auto sv = abi.as_str();
+    return sv == "lang" || sv == "c";
+}
+
+/// Validates an extern ABI string, returning an error if unsupported.
+[[nodiscard]] inline std::optional<std::unexpected<LowerError>>
+    validate_abi(cstc::symbol::Symbol abi, cstc::span::SourceSpan span) {
+    if (!is_supported_abi(abi))
+        return make_error(span, "unsupported ABI \"" + std::string(abi.as_str()) + "\"");
+    return std::nullopt;
+}
+
 // ─── Type resolution ─────────────────────────────────────────────────────────
 
 /// Converts an AST `TypeRef` to a `tyir::Ty`, validating named types against
@@ -1159,6 +1173,9 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                     enum_decl->span,
                     "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
         } else if (const auto* extern_struct = std::get_if<ast::ExternStructDecl>(&item)) {
+            // Validate the ABI string.
+            if (auto err = detail::validate_abi(extern_struct->abi, extern_struct->span))
+                return *err;
             if (env.enum_variants.count(extern_struct->name) > 0
                 || env.struct_fields.count(extern_struct->name) > 0)
                 return detail::make_error(
@@ -1197,6 +1214,9 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 return detail::make_error(
                     fn->span, "duplicate function name '" + std::string(fn->name.as_str()) + "'");
         } else if (const auto* ext_fn = std::get_if<ast::ExternFnDecl>(&item)) {
+            // Validate the ABI string.
+            if (auto err = detail::validate_abi(ext_fn->abi, ext_fn->span))
+                return *err;
             // Build a signature from the extern fn declaration.
             detail::FnSignature sig;
             sig.span = ext_fn->span;
