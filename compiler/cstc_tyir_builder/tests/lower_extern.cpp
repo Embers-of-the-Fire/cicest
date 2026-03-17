@@ -217,6 +217,28 @@ static void test_c_abi_accepted() {
     assert(decl.abi == Symbol::intern("c"));
 }
 
+// ─── Error: constructing opaque extern struct ───────────────────────────────
+
+static void test_extern_struct_init_rejected() {
+    SymbolSession session;
+    must_fail_with_message(
+        R"(
+extern "lang" struct Handle;
+fn main() { let h: Handle = Handle {}; }
+)",
+        "cannot construct extern type");
+}
+
+static void test_extern_struct_init_with_fields_rejected() {
+    SymbolSession session;
+    must_fail_with_message(
+        R"(
+extern "lang" struct Handle;
+fn main() { let h: Handle = Handle { x: 1 }; }
+)",
+        "cannot construct extern type");
+}
+
 int main() {
     test_extern_fn_basic();
     test_extern_fn_with_return();
@@ -234,5 +256,7 @@ int main() {
     test_unsupported_abi_fn();
     test_unsupported_abi_struct();
     test_c_abi_accepted();
+    test_extern_struct_init_rejected();
+    test_extern_struct_init_with_fields_rejected();
     return 0;
 }

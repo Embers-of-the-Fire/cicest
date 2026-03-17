@@ -75,6 +75,7 @@ struct LowerError {
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <cstc_symbol/symbol.hpp>
@@ -107,8 +108,15 @@ struct TypeEnv {
     /// Maps each function name → its signature.
     std::unordered_map<cstc::symbol::Symbol, FnSignature, cstc::symbol::SymbolHash> fn_signatures;
 
+    /// Names of extern (opaque) struct types. These are valid as type
+    /// annotations but cannot be constructed via struct-init expressions.
+    std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> extern_struct_names;
+
     [[nodiscard]] bool is_struct(cstc::symbol::Symbol name) const {
         return struct_fields.count(name) > 0;
+    }
+    [[nodiscard]] bool is_extern_struct(cstc::symbol::Symbol name) const {
+        return extern_struct_names.count(name) > 0;
     }
     [[nodiscard]] bool is_enum(cstc::symbol::Symbol name) const {
         return enum_variants.count(name) > 0;
@@ -117,7 +125,7 @@ struct TypeEnv {
         return fn_signatures.count(name) > 0;
     }
     [[nodiscard]] bool is_named_type(cstc::symbol::Symbol name) const {
-        return is_struct(name) || is_enum(name);
+        return is_struct(name) || is_enum(name) || is_extern_struct(name);
     }
 
     /// Returns the resolved type of `field_name` on struct `struct_name`, or
@@ -548,6 +556,11 @@ struct LowerCtx {
             // ── Struct init ───────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::StructInitExpr>) {
                 const cstc::symbol::Symbol type_name = node.type_name;
+                if (ctx.env.is_extern_struct(type_name))
+                    return make_error(
+                        expr->span, "cannot construct extern type '"
+                                        + std::string(type_name.as_str())
+                                        + "'; extern structs are opaque");
                 if (!ctx.env.is_struct(type_name))
                     return make_error(
                         expr->span,
@@ -1149,7 +1162,8 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
     // ── Phase 1: collect named-type names (placeholders) ─────────────────
     for (const ast::Item& item : program.items) {
         if (const auto* struct_decl = std::get_if<ast::StructDecl>(&item)) {
-            if (env.enum_variants.count(struct_decl->name) > 0)
+            if (env.enum_variants.count(struct_decl->name) > 0
+                || env.extern_struct_names.count(struct_decl->name) > 0)
                 return detail::make_error(
                     struct_decl->span,
                     "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
@@ -1161,7 +1175,8 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                     struct_decl->span,
                     "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
         } else if (const auto* enum_decl = std::get_if<ast::EnumDecl>(&item)) {
-            if (env.struct_fields.count(enum_decl->name) > 0)
+            if (env.struct_fields.count(enum_decl->name) > 0
+                || env.extern_struct_names.count(enum_decl->name) > 0)
                 return detail::make_error(
                     enum_decl->span,
                     "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
@@ -1177,12 +1192,13 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             if (auto err = detail::validate_abi(extern_struct->abi, extern_struct->span))
                 return *err;
             if (env.enum_variants.count(extern_struct->name) > 0
-                || env.struct_fields.count(extern_struct->name) > 0)
+                || env.struct_fields.count(extern_struct->name) > 0
+                || env.extern_struct_names.count(extern_struct->name) > 0)
                 return detail::make_error(
                     extern_struct->span,
                     "duplicate type name '" + std::string(extern_struct->name.as_str()) + "'");
 
-            env.struct_fields.emplace(extern_struct->name, std::vector<tyir::TyFieldDecl>{});
+            env.extern_struct_names.insert(extern_struct->name);
         }
     }
 
