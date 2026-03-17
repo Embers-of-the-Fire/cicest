@@ -91,9 +91,9 @@ declare ptr @to_str(double)
 ### Extern structs
 
 Extern structs are opaque named types with no visible fields. They are
-registered in `TypeEnv::struct_fields` with an empty field list and lowered
-as zero-sized types (ZST). They can be used as type annotations but cannot be
-constructed with field initializers.
+tracked separately from regular structs and cannot be constructed with
+struct-init expressions (`ExternType {}` is a type error). They can be used
+as type annotations and passed through functions that return or accept them.
 
 In LLVM IR, extern structs are emitted as empty struct types:
 
@@ -236,13 +236,14 @@ Each pipeline stage has a corresponding node type for extern declarations:
 | Stage | Node | Container |
 |-------|------|-----------|
 | AST | `ExternFnDecl`, `ExternStructDecl` | `Item` variant |
-| TyIR | `TyExternFnDecl` | `TyItem` variant |
-| LIR | `LirExternFnDecl` | `LirProgram::extern_fns` |
+| TyIR | `TyExternFnDecl`, `TyExternStructDecl` | `TyItem` variant |
+| LIR | `LirExternFnDecl`, `LirExternStructDecl` | `LirProgram::extern_fns`, `LirProgram::extern_structs` |
 | LLVM IR | `declare` instruction | Module-level |
 
-Extern structs are lowered to `TyStructDecl` (with `is_zst = true`) at the
-TyIR stage and to `LirStructDecl` at the LIR stage. They do not have a
-dedicated node type beyond the AST.
+Extern structs have their own dedicated node at every stage. At TyIR,
+`TyExternStructDecl` preserves the ABI and opaque nature so that later
+passes can distinguish an extern struct from a normal user-defined ZST.
+At LIR, `LirExternStructDecl` is stored in `LirProgram::extern_structs`.
 
 ## Adding new standard library functions
 
