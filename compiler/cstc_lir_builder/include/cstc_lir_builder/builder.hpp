@@ -663,6 +663,12 @@ inline lir::LirProgram lower_program(const tyir::TyProgram& program) {
                             });
                     }
                     out.extern_fns.push_back(std::move(ext));
+                } else if constexpr (std::is_same_v<T, tyir::TyExternStructDecl>) {
+                    lir::LirExternStructDecl ext_s;
+                    ext_s.abi = node.abi;
+                    ext_s.name = node.name;
+                    ext_s.span = node.span;
+                    out.extern_structs.push_back(std::move(ext_s));
                 } else {
                     out.fns.push_back(detail::lower_fn(node));
                 }

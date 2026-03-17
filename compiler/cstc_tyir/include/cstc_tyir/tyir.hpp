@@ -431,8 +431,22 @@ struct TyExternFnDecl {
     cstc::span::SourceSpan span;
 };
 
+/// Typed extern struct declaration (opaque foreign type, no fields).
+///
+/// Unlike `TyStructDecl` with `is_zst`, an extern struct preserves its ABI
+/// and foreign/opaque nature so that later passes can distinguish it from a
+/// normal user-defined zero-sized type.
+struct TyExternStructDecl {
+    /// ABI string (e.g. "lang", "c").
+    cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
+    /// Struct type name.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Source location for the full item.
+    cstc::span::SourceSpan span;
+};
+
 /// Any top-level TyIR item declaration.
-using TyItem = std::variant<TyStructDecl, TyEnumDecl, TyFnDecl, TyExternFnDecl>;
+using TyItem = std::variant<TyStructDecl, TyEnumDecl, TyFnDecl, TyExternFnDecl, TyExternStructDecl>;
 
 /// Full typed program — root of the TyIR tree.
 struct TyProgram {

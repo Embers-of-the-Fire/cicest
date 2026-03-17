@@ -1276,9 +1276,9 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             }
             result.items.push_back(std::move(ty_decl));
         } else if (const auto* ext_struct = std::get_if<ast::ExternStructDecl>(&item)) {
-            tyir::TyStructDecl ty_decl;
+            tyir::TyExternStructDecl ty_decl;
+            ty_decl.abi = ext_struct->abi;
             ty_decl.name = ext_struct->name;
-            ty_decl.is_zst = true;
             ty_decl.span = ext_struct->span;
             result.items.push_back(std::move(ty_decl));
         }

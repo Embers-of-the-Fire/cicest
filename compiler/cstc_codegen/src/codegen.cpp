@@ -119,6 +119,7 @@ private:
             return;
 
         declare_structs();
+        declare_extern_structs();
         declare_enums();
         declare_extern_functions();
         declare_functions();
@@ -282,6 +283,22 @@ private:
                 struct_types_[name] = st;
                 struct_decls_[name] = &decl;
             }
+        }
+    }
+
+    // ─── Extern struct declarations ──────────────────────────────────────────
+
+    /// Declares all extern struct types as opaque LLVM struct types.
+    ///
+    /// Extern structs are foreign/opaque types with no fields; they get an
+    /// empty-bodied LLVM named struct so they can be referenced by name in
+    /// function signatures.
+    void declare_extern_structs() {
+        for (const LirExternStructDecl& decl : program_.extern_structs) {
+            std::string name(decl.name.as_str());
+            auto* st = llvm::StructType::create(context_, name);
+            st->setBody({});
+            struct_types_[name] = st;
         }
     }
 

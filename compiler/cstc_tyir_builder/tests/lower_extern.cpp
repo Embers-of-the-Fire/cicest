@@ -113,10 +113,9 @@ static void test_extern_struct_basic() {
     SymbolSession session;
     const auto prog = must_lower(R"(extern "lang" struct Handle;)");
     assert(prog.items.size() == 1);
-    const auto& decl = std::get<TyStructDecl>(prog.items[0]);
+    const auto& decl = std::get<TyExternStructDecl>(prog.items[0]);
+    assert(decl.abi == Symbol::intern("lang"));
     assert(decl.name == Symbol::intern("Handle"));
-    assert(decl.is_zst);
-    assert(decl.fields.empty());
 }
 
 static void test_extern_struct_usable_as_type() {
@@ -195,7 +194,7 @@ extern "lang" struct Handle;
     assert(std::holds_alternative<TyExternFnDecl>(prog.items[0]));
     assert(std::holds_alternative<TyExternFnDecl>(prog.items[1]));
     assert(std::holds_alternative<TyExternFnDecl>(prog.items[2]));
-    assert(std::holds_alternative<TyStructDecl>(prog.items[3]));
+    assert(std::holds_alternative<TyExternStructDecl>(prog.items[3]));
 }
 
 int main() {

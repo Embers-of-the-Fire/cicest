@@ -431,6 +431,16 @@ struct LirExternFnDecl {
     cstc::span::SourceSpan span;
 };
 
+/// An extern struct declaration (opaque foreign type, no fields).
+struct LirExternStructDecl {
+    /// ABI string (e.g. "lang", "c").
+    cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
+    /// Struct type name.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Source location.
+    cstc::span::SourceSpan span;
+};
+
 // ─── Program ────────────────────────────────────────────────────────────────
 
 /// Root of a fully-lowered LIR program.
@@ -439,6 +449,7 @@ struct LirProgram {
     std::vector<LirEnumDecl> enums;
     std::vector<LirFnDef> fns;
     std::vector<LirExternFnDecl> extern_fns;
+    std::vector<LirExternStructDecl> extern_structs;
 };
 
 } // namespace cstc::lir

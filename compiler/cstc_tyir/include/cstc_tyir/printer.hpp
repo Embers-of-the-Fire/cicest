@@ -282,6 +282,10 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                     out << node.params[i].name.as_str() << ": " << node.params[i].ty.display();
                 }
                 out << ") -> " << node.return_ty.display() << "\n";
+            } else if constexpr (std::is_same_v<T, TyExternStructDecl>) {
+                indent(out, level);
+                out << "TyExternStructDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
+                    << "\n";
             }
         },
         item);

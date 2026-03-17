@@ -113,14 +113,15 @@ fn main() { print("hello"); }
     assert(prog.fns[0].name == Symbol::intern("main"));
 }
 
-static void test_extern_struct_becomes_struct_decl() {
+static void test_extern_struct_becomes_extern_struct_decl() {
     SymbolSession session;
     const auto prog = must_lower(R"(extern "lang" struct Handle;)");
-    // Extern structs become regular struct declarations with is_zst=true
-    assert(prog.structs.size() == 1);
-    assert(prog.structs[0].name == Symbol::intern("Handle"));
-    assert(prog.structs[0].is_zst);
-    assert(prog.structs[0].fields.empty());
+    // Extern structs become dedicated extern struct declarations
+    assert(prog.extern_structs.size() == 1);
+    assert(prog.extern_structs[0].abi == Symbol::intern("lang"));
+    assert(prog.extern_structs[0].name == Symbol::intern("Handle"));
+    // Not in regular structs
+    assert(prog.structs.empty());
     // No extern fns
     assert(prog.extern_fns.empty());
 }
@@ -146,8 +147,10 @@ fn main() {
     destroy(h);
 }
 )");
-    // Extern struct + regular struct
-    assert(prog.structs.size() == 2);
+    // Extern struct separate from regular struct
+    assert(prog.structs.size() == 1);
+    assert(prog.extern_structs.size() == 1);
+    assert(prog.extern_structs[0].name == Symbol::intern("Handle"));
     // Extern fns
     assert(prog.extern_fns.size() == 2);
     assert(prog.extern_fns[0].name == Symbol::intern("create"));
@@ -165,7 +168,7 @@ int main() {
     test_extern_fn_param_local_ids();
     test_multiple_extern_fns();
     test_extern_fn_with_regular_fn();
-    test_extern_struct_becomes_struct_decl();
+    test_extern_struct_becomes_extern_struct_decl();
     test_extern_fn_abi_preserved();
     test_mixed_items();
     return 0;
