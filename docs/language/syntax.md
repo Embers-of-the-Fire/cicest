@@ -5,7 +5,8 @@ This document defines the complete surface syntax for the Cicest language.
 Design goals:
 
 - Minimal subset inspired by Rust and C++.
-- Pure functional semantics (immutable bindings, no reassignment).
+- Pure functional core (immutable bindings, no reassignment). `extern` calls may
+  perform side effects such as I/O.
 - Strongly scoped user types (`struct` and enum-like `enum`).
 - Syntax defined tightly for lexer, parser, token, and AST generation.
 
