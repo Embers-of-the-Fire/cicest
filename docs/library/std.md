@@ -108,10 +108,11 @@ The actual implementations of the prelude functions live in
 (`libcicest_rt.a`) by CMake and automatically linked into every executable
 produced by the compiler.
 
-The runtime path is baked into the `cstc` binary at build time via the
-`CICEST_RT_PATH` compile definition. When the compiler invokes the linker,
-it passes the runtime archive as a positional argument alongside the user's
-object file:
+The runtime path is resolved at startup: the compiler first checks for
+`<exe_dir>/../lib/cicest/libcicest_rt.a` (installed layout), then falls back to
+the `CICEST_RT_PATH` compile definition (development builds). When the compiler
+invokes the linker, it passes the runtime archive as a positional argument
+alongside the user's object file:
 
 ```
 c++  user.o  /path/to/libcicest_rt.a  -o  user
@@ -128,10 +129,12 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 | `fn to_str(value: num) -> str` | `declare ptr @to_str(double)` | `char* to_str(double)` |
 | `fn str_concat(a: str, b: str) -> str` | `declare ptr @str_concat(ptr, ptr)` | `char* str_concat(const char*, const char*)` |
 | `fn str_len(value: str) -> num` | `declare double @str_len(ptr)` | `double str_len(const char*)` |
+| `fn str_free(value: str)` | `declare void @str_free(ptr)` | `void str_free(const char*)` |
 
-> **Note:** Functions returning `str` allocate memory with `malloc`. There is
-> currently no garbage collector or ownership tracking — allocations are freed
-> when the process exits.
+> **Note:** Functions returning `str` (`to_str`, `str_concat`) allocate memory
+> with `malloc`. The caller owns the returned string and should release it with
+> `str_free` when it is no longer needed. String literals must not be passed to
+> `str_free`.
 
 ## Available functions
 
@@ -156,6 +159,7 @@ The prelude currently provides the following functions:
 |----------|-----------|-------------|
 | `str_concat` | `fn str_concat(a: str, b: str) -> str` | Concatenates two strings and returns the result. |
 | `str_len` | `fn str_len(value: str) -> num` | Returns the length of a string as a number. |
+| `str_free` | `fn str_free(value: str)` | Frees a heap-allocated string returned by `to_str` or `str_concat`. |
 
 ## Usage examples
 
@@ -258,6 +262,5 @@ To add a new function to the standard library:
   opaque type handles.
 - The prelude is always injected — there is no mechanism to suppress it.
 - No module or import system exists. All prelude declarations are global.
-- Functions returning `str` allocate memory with `malloc`. There is currently
-  no garbage collector or ownership tracking — allocations are freed when the
-  process exits.
+- Functions returning `str` allocate memory with `malloc`. Callers should use
+  `str_free` to release the returned string when it is no longer needed.
