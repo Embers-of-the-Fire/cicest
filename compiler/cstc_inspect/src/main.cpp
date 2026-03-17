@@ -22,6 +22,36 @@
 
 namespace {
 
+// ─── Resource path resolution ────────────────────────────────────────────────
+
+/// Returns the directory containing the currently running binary.
+[[nodiscard]] std::filesystem::path self_exe_dir() {
+#if defined(__linux__)
+    std::error_code ec;
+    auto exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec)
+        return exe.parent_path();
+#elif defined(__APPLE__)
+    char buf[4096];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0)
+        return std::filesystem::path(buf).parent_path();
+#endif
+    return {};
+}
+
+/// Returns the path to the std library directory.
+[[nodiscard]] std::filesystem::path resolve_std_dir() {
+    const auto bin_dir = self_exe_dir();
+    if (!bin_dir.empty()) {
+        auto installed = bin_dir / ".." / "share" / "cicest" / "std";
+        std::error_code ec;
+        if (std::filesystem::exists(installed / "prelude.cst", ec))
+            return std::filesystem::canonical(installed);
+    }
+    return std::filesystem::path(CICEST_STD_PATH);
+}
+
 struct Options {
     std::string input_path;
     std::string out_type;
@@ -151,8 +181,7 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 [[nodiscard]] cstc::ast::Program
     parse_with_prelude(cstc::span::SourceMap& source_map, cstc::span::SourceFileId user_file_id) {
     // Parse prelude
-    const std::filesystem::path prelude_path =
-        std::filesystem::path(CICEST_STD_PATH) / "prelude.cst";
+    const std::filesystem::path prelude_path = resolve_std_dir() / "prelude.cst";
     const std::string prelude_source = read_source_file(prelude_path);
     const cstc::span::SourceFileId prelude_file_id =
         source_map.add_file(prelude_path.string(), prelude_source);

@@ -33,6 +33,60 @@ extern char** environ;
 
 namespace {
 
+// ─── Resource path resolution ────────────────────────────────────────────────
+
+/// Returns the directory containing the currently running binary.
+///
+/// Used to resolve runtime resources (std library, runtime archive) relative
+/// to the installed binary location.  Falls back to an empty path on
+/// unsupported platforms.
+[[nodiscard]] std::filesystem::path self_exe_dir() {
+#if defined(__linux__)
+    std::error_code ec;
+    auto exe = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec)
+        return exe.parent_path();
+#elif defined(__APPLE__)
+    char buf[4096];
+    uint32_t size = sizeof(buf);
+    if (_NSGetExecutablePath(buf, &size) == 0)
+        return std::filesystem::path(buf).parent_path();
+#endif
+    return {};
+}
+
+/// Returns the path to the std library directory.
+///
+/// Searches `<exe_dir>/../share/cicest/std` first (installed layout), then
+/// falls back to the compile-time `CICEST_STD_PATH` constant (development
+/// builds).
+[[nodiscard]] std::filesystem::path resolve_std_dir() {
+    const auto bin_dir = self_exe_dir();
+    if (!bin_dir.empty()) {
+        auto installed = bin_dir / ".." / "share" / "cicest" / "std";
+        std::error_code ec;
+        if (std::filesystem::exists(installed / "prelude.cst", ec))
+            return std::filesystem::canonical(installed);
+    }
+    return std::filesystem::path(CICEST_STD_PATH);
+}
+
+/// Returns the path to the runtime static library.
+///
+/// Searches `<exe_dir>/../lib/cicest/libcicest_rt.a` first (installed layout),
+/// then falls back to the compile-time `CICEST_RT_PATH` constant (development
+/// builds).
+[[nodiscard]] std::filesystem::path resolve_rt_path() {
+    const auto bin_dir = self_exe_dir();
+    if (!bin_dir.empty()) {
+        auto installed = bin_dir / ".." / "lib" / "cicest" / "libcicest_rt.a";
+        std::error_code ec;
+        if (std::filesystem::exists(installed, ec))
+            return std::filesystem::canonical(installed);
+    }
+    return std::filesystem::path(CICEST_RT_PATH);
+}
+
 enum class EmitKind {
     Asm,
     Obj,
@@ -246,7 +300,7 @@ void link_object_to_executable(
 
     std::string linker_program = resolve_linker_program(options);
     std::vector<std::string> arguments{
-        linker_program, object_path.string(),     std::string(CICEST_RT_PATH),
+        linker_program, object_path.string(),     resolve_rt_path().string(),
         "-o",           executable_path.string(),
     };
 
@@ -311,8 +365,7 @@ void compile_file(const Options& options) {
     cstc::span::SourceMap source_map;
 
     // ─── Inject std prelude ──────────────────────────────────────────────
-    const std::filesystem::path prelude_path =
-        std::filesystem::path(CICEST_STD_PATH) / "prelude.cst";
+    const std::filesystem::path prelude_path = resolve_std_dir() / "prelude.cst";
     const std::string prelude_source = read_source_file(prelude_path);
     const cstc::span::SourceFileId prelude_file_id =
         source_map.add_file(prelude_path.string(), prelude_source);
