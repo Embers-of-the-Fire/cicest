@@ -300,19 +300,20 @@ struct LowerCtx {
 
 // ─── Function signature resolution ──────────────────────────────────────────
 
-[[nodiscard]] inline std::expected<FnSignature, LowerError>
-    resolve_fn_signature(const ast::FnDecl& fn, const TypeEnv& env) {
+[[nodiscard]] inline std::expected<FnSignature, LowerError> resolve_fn_signature(
+    const std::vector<ast::Param>& params, const std::optional<ast::TypeRef>& return_type,
+    cstc::span::SourceSpan span, const TypeEnv& env) {
     FnSignature sig;
-    sig.span = fn.span;
-    if (fn.return_type.has_value()) {
-        auto t = lower_type(*fn.return_type, env, fn.span);
+    sig.span = span;
+    if (return_type.has_value()) {
+        auto t = lower_type(*return_type, env, span);
         if (!t)
             return std::unexpected(std::move(t.error()));
         sig.return_ty = *t;
     } else {
         sig.return_ty = tyir::ty::unit();
     }
-    for (const ast::Param& p : fn.params) {
+    for (const ast::Param& p : params) {
         auto pt = lower_type(p.type, env, p.span);
         if (!pt)
             return std::unexpected(std::move(pt.error()));
@@ -1222,7 +1223,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
     // ── Phase 3: resolve function signatures ─────────────────────────────
     for (const ast::Item& item : program.items) {
         if (const auto* fn = std::get_if<ast::FnDecl>(&item)) {
-            auto sig = detail::resolve_fn_signature(*fn, env);
+            auto sig = detail::resolve_fn_signature(fn->params, fn->return_type, fn->span, env);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
@@ -1234,23 +1235,11 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             if (auto err = detail::validate_abi(ext_fn->abi, ext_fn->span))
                 return *err;
             // Build a signature from the extern fn declaration.
-            detail::FnSignature sig;
-            sig.span = ext_fn->span;
-            if (ext_fn->return_type.has_value()) {
-                auto t = detail::lower_type(*ext_fn->return_type, env, ext_fn->span);
-                if (!t)
-                    return std::unexpected(std::move(t.error()));
-                sig.return_ty = *t;
-            } else {
-                sig.return_ty = tyir::ty::unit();
-            }
-            for (const ast::Param& p : ext_fn->params) {
-                auto pt = detail::lower_type(p.type, env, p.span);
-                if (!pt)
-                    return std::unexpected(std::move(pt.error()));
-                sig.param_types.push_back(*pt);
-            }
-            const auto insert_result = env.fn_signatures.emplace(ext_fn->name, std::move(sig));
+            auto sig = detail::resolve_fn_signature(
+                ext_fn->params, ext_fn->return_type, ext_fn->span, env);
+            if (!sig)
+                return std::unexpected(std::move(sig.error()));
+            const auto insert_result = env.fn_signatures.emplace(ext_fn->name, std::move(*sig));
             if (!insert_result.second)
                 return detail::make_error(
                     ext_fn->span,
