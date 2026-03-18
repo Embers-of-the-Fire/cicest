@@ -20,6 +20,10 @@
 #include <string_view>
 #include <vector>
 
+#if defined(__APPLE__)
+# include <mach-o/dyld.h>
+#endif
+
 namespace {
 
 // ─── Resource path resolution ────────────────────────────────────────────────

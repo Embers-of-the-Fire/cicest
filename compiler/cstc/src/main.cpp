@@ -27,6 +27,10 @@
 # include <sys/wait.h>
 #endif
 
+#if defined(__APPLE__)
+# include <mach-o/dyld.h>
+#endif
+
 #if defined(__unix__) || defined(__APPLE__)
 extern char** environ;
 #endif
