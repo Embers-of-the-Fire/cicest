@@ -21,7 +21,11 @@
 #include <vector>
 
 #if defined(_WIN32)
+# ifndef NOMINMAX
+#  define NOMINMAX
+# endif
 # include <process.h>
+# include <windows.h>
 #elif defined(__unix__) || defined(__APPLE__)
 # include <spawn.h>
 # include <sys/wait.h>
@@ -39,23 +43,89 @@ namespace {
 
 // ─── Resource path resolution ────────────────────────────────────────────────
 
+[[nodiscard]] std::filesystem::path normalize_existing_path(const std::filesystem::path& path) {
+    std::error_code ec;
+    const auto normalized = std::filesystem::weakly_canonical(path, ec);
+    if (!ec)
+        return normalized;
+
+    return path.lexically_normal();
+}
+
+#if defined(__unix__) && !defined(__APPLE__)
+[[nodiscard]] std::filesystem::path procfs_self_exe_dir() {
+# if defined(__sun)
+    constexpr const char* proc_candidates[] = {
+        "/proc/self/path/a.out",
+        "/proc/self/exe",
+        "/proc/curproc/file",
+        "/proc/curproc/exe",
+    };
+# else
+    constexpr const char* proc_candidates[] = {
+        "/proc/self/exe",
+        "/proc/curproc/file",
+        "/proc/curproc/exe",
+    };
+# endif
+
+    for (const char* candidate : proc_candidates) {
+        std::error_code ec;
+        const auto target = std::filesystem::read_symlink(candidate, ec);
+        if (ec || target.empty())
+            continue;
+
+        const auto link_path = std::filesystem::path(candidate);
+        const auto exe_path = target.is_absolute() ? target : link_path.parent_path() / target;
+        return normalize_existing_path(exe_path).parent_path();
+    }
+
+    return {};
+}
+#endif
+
 /// Returns the directory containing the currently running binary.
 ///
-/// Used to resolve runtime resources (std library, runtime archive) relative
-/// to the installed binary location.  Falls back to an empty path on
-/// unsupported platforms.
+/// Uses platform APIs on Windows/macOS and procfs symlinks on supported Unix
+/// variants so installed layouts remain relocatable across those targets.
 [[nodiscard]] std::filesystem::path self_exe_dir() {
-#if defined(__linux__)
-    std::error_code ec;
-    auto exe = std::filesystem::read_symlink("/proc/self/exe", ec);
-    if (!ec)
-        return exe.parent_path();
+#if defined(_WIN32)
+    std::vector<wchar_t> buffer(MAX_PATH);
+    while (true) {
+        const DWORD length =
+            GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
+        if (length == 0)
+            return {};
+
+        if (length < buffer.size())
+            return normalize_existing_path(
+                       std::filesystem::path(std::wstring(buffer.data(), length)))
+                .parent_path();
+
+        if (buffer.size() >= 32768)
+            return {};
+
+        std::size_t next_size = buffer.size() * 2;
+        if (next_size > 32768)
+            next_size = 32768;
+        buffer.resize(next_size);
+    }
 #elif defined(__APPLE__)
-    char buf[4096];
-    uint32_t size = sizeof(buf);
-    if (_NSGetExecutablePath(buf, &size) == 0)
-        return std::filesystem::path(buf).parent_path();
+    std::vector<char> buffer(4096);
+    while (true) {
+        uint32_t size = static_cast<uint32_t>(buffer.size());
+        if (_NSGetExecutablePath(buffer.data(), &size) == 0)
+            return normalize_existing_path(std::filesystem::path(buffer.data())).parent_path();
+
+        if (size <= buffer.size())
+            return {};
+
+        buffer.resize(size);
+    }
+#elif defined(__unix__)
+    return procfs_self_exe_dir();
 #endif
+
     return {};
 }
 
