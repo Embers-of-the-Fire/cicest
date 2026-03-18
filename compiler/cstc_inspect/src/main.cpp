@@ -200,6 +200,17 @@ struct Options {
     return buffer.str();
 }
 
+[[nodiscard]] std::string format_type_error(
+    const cstc::span::SourceMap& source_map, const cstc::tyir_builder::LowerError& error) {
+    if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
+        return "type error " + std::string(resolved->file_name) + ":"
+             + std::to_string(resolved->start.line) + ":" + std::to_string(resolved->start.column)
+             + ": " + error.message;
+    }
+
+    return "type error: " + error.message;
+}
+
 void write_output(std::string_view text, const std::optional<std::string>& output_path) {
     if (!output_path.has_value()) {
         std::cout << text;
@@ -336,16 +347,8 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     const auto merged = parse_with_prelude(source_map, file_id);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
-    if (!lowered.has_value()) {
-        const cstc::tyir_builder::LowerError& error = lowered.error();
-        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-            throw std::runtime_error(
-                "type error " + std::string(resolved->file_name) + ":"
-                + std::to_string(resolved->start.line) + ":"
-                + std::to_string(resolved->start.column) + ": " + error.message);
-        }
-        throw std::runtime_error("type error: " + error.message);
-    }
+    if (!lowered.has_value())
+        throw std::runtime_error(format_type_error(source_map, lowered.error()));
 
     return cstc::tyir::format_program(*lowered);
 }
@@ -355,16 +358,8 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     const auto merged = parse_with_prelude(source_map, file_id);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
-    if (!lowered.has_value()) {
-        const cstc::tyir_builder::LowerError& error = lowered.error();
-        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-            throw std::runtime_error(
-                "type error " + std::string(resolved->file_name) + ":"
-                + std::to_string(resolved->start.line) + ":"
-                + std::to_string(resolved->start.column) + ": " + error.message);
-        }
-        throw std::runtime_error("type error: " + error.message);
-    }
+    if (!lowered.has_value())
+        throw std::runtime_error(format_type_error(source_map, lowered.error()));
 
     const auto lir = cstc::lir_builder::lower_program(*lowered);
     return cstc::lir::format_program(lir);
@@ -375,16 +370,8 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     const auto merged = parse_with_prelude(source_map, file_id);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
-    if (!lowered.has_value()) {
-        const cstc::tyir_builder::LowerError& error = lowered.error();
-        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-            throw std::runtime_error(
-                "type error " + std::string(resolved->file_name) + ":"
-                + std::to_string(resolved->start.line) + ":"
-                + std::to_string(resolved->start.column) + ": " + error.message);
-        }
-        throw std::runtime_error("type error: " + error.message);
-    }
+    if (!lowered.has_value())
+        throw std::runtime_error(format_type_error(source_map, lowered.error()));
 
     const auto lir = cstc::lir_builder::lower_program(*lowered);
     return cstc::codegen::emit_llvm_ir(lir);
