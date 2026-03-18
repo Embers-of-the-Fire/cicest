@@ -184,28 +184,45 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 /// user program items.
 [[nodiscard]] cstc::ast::Program
     parse_with_prelude(cstc::span::SourceMap& source_map, cstc::span::SourceFileId user_file_id) {
-    // Parse prelude
     const std::filesystem::path prelude_path = resolve_std_dir() / "prelude.cst";
-    const std::string prelude_source = read_source_file(prelude_path);
-    const cstc::span::SourceFileId prelude_file_id =
-        source_map.add_file(prelude_path.string(), prelude_source);
-    const cstc::span::SourceFile* prelude_file = source_map.file(prelude_file_id);
-    if (prelude_file == nullptr)
-        throw std::runtime_error("invalid source file id for std prelude");
 
-    const auto prelude_parsed =
-        cstc::parser::parse_source_at(prelude_file->source, prelude_file->start_pos);
-    if (!prelude_parsed.has_value()) {
-        const cstc::parser::ParseError& error = prelude_parsed.error();
-        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
+    // Skip prelude injection when inspecting the prelude itself to avoid
+    // merging every declaration twice.
+    const cstc::span::SourceFile* user_source = source_map.file(user_file_id);
+    if (user_source == nullptr)
+        throw std::runtime_error("invalid source file id");
+
+    const bool inject_prelude = [&] {
+        std::error_code ec;
+        return !std::filesystem::equivalent(user_source->name, prelude_path, ec);
+    }();
+
+    // Parse prelude
+    cstc::ast::Program prelude_program;
+    if (inject_prelude) {
+        const std::string prelude_source = read_source_file(prelude_path);
+        const cstc::span::SourceFileId prelude_file_id =
+            source_map.add_file(prelude_path.string(), prelude_source);
+        const cstc::span::SourceFile* prelude_file = source_map.file(prelude_file_id);
+        if (prelude_file == nullptr)
+            throw std::runtime_error("invalid source file id for std prelude");
+
+        const auto prelude_parsed =
+            cstc::parser::parse_source_at(prelude_file->source, prelude_file->start_pos);
+        if (!prelude_parsed.has_value()) {
+            const cstc::parser::ParseError& error = prelude_parsed.error();
+            if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
+                throw std::runtime_error(
+                    "parse error " + std::string(resolved->file_name) + ":"
+                    + std::to_string(resolved->start.line) + ":"
+                    + std::to_string(resolved->start.column) + ": " + error.message);
+            }
             throw std::runtime_error(
-                "parse error " + std::string(resolved->file_name) + ":"
-                + std::to_string(resolved->start.line) + ":"
-                + std::to_string(resolved->start.column) + ": " + error.message);
+                "parse error [" + std::to_string(error.span.start) + ", "
+                + std::to_string(error.span.end) + "): " + error.message);
         }
-        throw std::runtime_error(
-            "parse error [" + std::to_string(error.span.start) + ", "
-            + std::to_string(error.span.end) + "): " + error.message);
+
+        prelude_program = *prelude_parsed;
     }
 
     // Parse user source
@@ -229,8 +246,8 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 
     // Merge
     cstc::ast::Program merged;
-    merged.items.reserve(prelude_parsed->items.size() + parsed->items.size());
-    for (const auto& item : prelude_parsed->items)
+    merged.items.reserve(prelude_program.items.size() + parsed->items.size());
+    for (const auto& item : prelude_program.items)
         merged.items.push_back(item);
     for (const auto& item : parsed->items)
         merged.items.push_back(item);
