@@ -1,3 +1,5 @@
+add_subdirectory(cstc_resource_path)
+
 add_library(cicest_rt STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/std/runtime.c
 )

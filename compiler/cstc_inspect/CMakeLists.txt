@@ -14,6 +14,7 @@ target_link_libraries(cstc_inspect
         cstc_lir
         cstc_lir_builder
         cstc_parser
+        cstc_resource_path
         cstc_tyir
         cstc_tyir_builder
         cicest_options
