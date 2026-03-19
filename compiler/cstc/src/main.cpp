@@ -52,6 +52,32 @@ namespace {
     return path.lexically_normal();
 }
 
+[[nodiscard]] bool
+    path_exists(const std::filesystem::path& path, std::string_view resource_description) {
+    std::error_code ec;
+    const bool exists = std::filesystem::exists(path, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "failed to inspect " + std::string(resource_description) + " '" + path.string()
+            + "': " + ec.message());
+    }
+
+    return exists;
+}
+
+[[nodiscard]] std::filesystem::path canonicalize_or_throw(
+    const std::filesystem::path& path, std::string_view resource_description) {
+    std::error_code ec;
+    const auto canonical = std::filesystem::canonical(path, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "failed to resolve " + std::string(resource_description) + " '" + path.string()
+            + "': " + ec.message());
+    }
+
+    return canonical;
+}
+
 #if defined(__unix__) && !defined(__APPLE__)
 [[nodiscard]] std::filesystem::path procfs_self_exe_dir() {
 # if defined(__sun)
@@ -138,9 +164,8 @@ namespace {
     const auto bin_dir = self_exe_dir();
     if (!bin_dir.empty()) {
         auto installed = bin_dir / ".." / "share" / "cicest" / "std";
-        std::error_code ec;
-        if (std::filesystem::exists(installed / "prelude.cst", ec))
-            return std::filesystem::canonical(installed);
+        if (path_exists(installed / "prelude.cst", "installed std prelude"))
+            return canonicalize_or_throw(installed, "installed std library directory");
     }
     return std::filesystem::path(CICEST_STD_PATH);
 }
@@ -154,9 +179,8 @@ namespace {
     const auto bin_dir = self_exe_dir();
     if (!bin_dir.empty()) {
         auto installed = bin_dir / ".." / "lib" / "cicest" / "libcicest_rt.a";
-        std::error_code ec;
-        if (std::filesystem::exists(installed, ec))
-            return std::filesystem::canonical(installed);
+        if (path_exists(installed, "installed runtime static library"))
+            return canonicalize_or_throw(installed, "installed runtime static library");
     }
     return std::filesystem::path(CICEST_RT_PATH);
 }
