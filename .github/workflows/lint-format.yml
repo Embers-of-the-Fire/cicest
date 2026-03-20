@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - master
+      - scoped  # TODO: Remove this when "scoped" is merged to "main"
   pull_request:
 
 jobs:
