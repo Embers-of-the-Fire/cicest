@@ -276,7 +276,7 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                         output << " = " << variant.discriminant->as_str();
                     output << "\n";
                 }
-            } else {
+            } else if constexpr (std::is_same_v<ItemType, FnDecl>) {
                 indent(output, level);
                 output << "FnDecl " << node.name.as_str() << "(";
                 for (std::size_t index = 0; index < node.params.size(); ++index) {
@@ -290,6 +290,24 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                     output << " -> " << type_name(*node.return_type);
                 output << "\n";
                 print_block(output, node.body, level + 1);
+            } else if constexpr (std::is_same_v<ItemType, ExternFnDecl>) {
+                indent(output, level);
+                output << "ExternFnDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
+                       << "(";
+                for (std::size_t index = 0; index < node.params.size(); ++index) {
+                    if (index > 0)
+                        output << ", ";
+                    output << node.params[index].name.as_str() << ": "
+                           << type_name(node.params[index].type);
+                }
+                output << ")";
+                if (node.return_type.has_value())
+                    output << " -> " << type_name(*node.return_type);
+                output << "\n";
+            } else if constexpr (std::is_same_v<ItemType, ExternStructDecl>) {
+                indent(output, level);
+                output << "ExternStructDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
+                       << "\n";
             }
         },
         item);

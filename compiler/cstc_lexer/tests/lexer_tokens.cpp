@@ -41,6 +41,7 @@ void test_all_keywords() {
         {     "num",      cstc::lexer::TokenKind::KwNum},
         {     "str",      cstc::lexer::TokenKind::KwStr},
         {    "bool",     cstc::lexer::TokenKind::KwBool},
+        {  "extern",   cstc::lexer::TokenKind::KwExtern},
     };
 
     for (const auto& [text, expected_kind] : cases) {
@@ -249,21 +250,21 @@ void test_trivia_included_when_requested() {
 }
 
 void test_is_trivia() {
-    assert(cstc::lexer::is_trivia(cstc::lexer::TokenKind::Whitespace));
-    assert(cstc::lexer::is_trivia(cstc::lexer::TokenKind::LineComment));
-    assert(cstc::lexer::is_trivia(cstc::lexer::TokenKind::BlockComment));
-    assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::Identifier));
-    assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::Number));
-    assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::KwFn));
-    assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::EndOfFile));
+    static_assert(cstc::lexer::is_trivia(cstc::lexer::TokenKind::Whitespace));
+    static_assert(cstc::lexer::is_trivia(cstc::lexer::TokenKind::LineComment));
+    static_assert(cstc::lexer::is_trivia(cstc::lexer::TokenKind::BlockComment));
+    static_assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::Identifier));
+    static_assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::Number));
+    static_assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::KwFn));
+    static_assert(!cstc::lexer::is_trivia(cstc::lexer::TokenKind::EndOfFile));
 }
 
 void test_token_kind_name() {
     cstc::symbol::SymbolSession session;
 
-    assert(!cstc::lexer::token_kind_name(cstc::lexer::TokenKind::KwFn).empty());
-    assert(!cstc::lexer::token_kind_name(cstc::lexer::TokenKind::Identifier).empty());
-    assert(!cstc::lexer::token_kind_name(cstc::lexer::TokenKind::EndOfFile).empty());
+    static_assert(!cstc::lexer::token_kind_name(cstc::lexer::TokenKind::KwFn).empty());
+    static_assert(!cstc::lexer::token_kind_name(cstc::lexer::TokenKind::Identifier).empty());
+    static_assert(!cstc::lexer::token_kind_name(cstc::lexer::TokenKind::EndOfFile).empty());
 }
 
 } // namespace

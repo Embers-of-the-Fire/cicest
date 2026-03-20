@@ -15,7 +15,7 @@ int main() {
     assert(alpha_0.as_str() == "alpha");
     assert(beta.as_str() == "beta");
     assert(alpha_0.is_valid());
-    assert(!cstc::symbol::kInvalidSymbol.is_valid());
+    static_assert(!cstc::symbol::kInvalidSymbol.is_valid());
 
     // kw:: constants are always valid within a session
     assert(cstc::symbol::kw::Struct.as_str() == "struct");

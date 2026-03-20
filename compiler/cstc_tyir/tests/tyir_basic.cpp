@@ -11,16 +11,16 @@ using namespace cstc::symbol;
 // ─── Ty helpers ──────────────────────────────────────────────────────────────
 
 static void test_ty_primitives() {
-    assert(ty::unit().is_unit());
-    assert(!ty::unit().is_never());
-    assert(!ty::unit().is_named());
+    static_assert(ty::unit().is_unit());
+    static_assert(!ty::unit().is_never());
+    static_assert(!ty::unit().is_named());
 
-    assert(ty::never().is_never());
-    assert(!ty::never().is_unit());
+    static_assert(ty::never().is_never());
+    static_assert(!ty::never().is_unit());
 
-    assert(ty::num() == ty::num());
-    assert(ty::num() != ty::str());
-    assert(ty::bool_() != ty::unit());
+    static_assert(ty::num() == ty::num());
+    static_assert(ty::num() != ty::str());
+    static_assert(ty::bool_() != ty::unit());
 
     assert(ty::unit().display() == "Unit");
     assert(ty::num().display() == "num");

@@ -119,7 +119,9 @@ private:
             return;
 
         declare_structs();
+        declare_extern_structs();
         declare_enums();
+        declare_extern_functions();
         declare_functions();
         define_functions();
         run_passes();
@@ -162,7 +164,7 @@ private:
 
         llvm::TargetOptions target_options;
         auto target_machine = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-            target_triple, "generic", "", target_options, std::nullopt));
+            target_triple, "generic", "", target_options, llvm::Reloc::PIC_));
         if (target_machine == nullptr)
             throw std::runtime_error(
                 "failed to create LLVM target machine for: " + target_triple.str());
@@ -222,9 +224,9 @@ private:
         case tyir::TyKind::Num: return llvm::Type::getDoubleTy(context_);
         case tyir::TyKind::Bool: return llvm::Type::getInt1Ty(context_);
         case tyir::TyKind::Str: return llvm::PointerType::getUnqual(context_);
-        case tyir::TyKind::Unit: return llvm::StructType::get(context_);
+        case tyir::TyKind::Unit:
         case tyir::TyKind::Never:
-            // Never-typed locals use an empty struct to avoid void alloca.
+            // Unit and never-typed locals use an empty struct to avoid void alloca.
             return llvm::StructType::get(context_);
         case tyir::TyKind::Named: {
             const std::string type_name(ty.name.as_str());
@@ -284,6 +286,22 @@ private:
         }
     }
 
+    // ─── Extern struct declarations ──────────────────────────────────────────
+
+    /// Declares all extern struct types as opaque LLVM struct types.
+    ///
+    /// Extern structs are foreign/opaque types with no fields; they get an
+    /// empty-bodied LLVM named struct so they can be referenced by name in
+    /// function signatures.
+    void declare_extern_structs() {
+        for (const LirExternStructDecl& decl : program_.extern_structs) {
+            std::string name(decl.name.as_str());
+            auto* st = llvm::StructType::create(context_, name);
+            st->setBody({});
+            struct_types_[name] = st;
+        }
+    }
+
     // ─── Enum declarations ──────────────────────────────────────────────────
 
     /// Declares all enum types and records variant discriminant mappings.
@@ -311,6 +329,28 @@ private:
         }
     }
 
+    // ─── Extern function declarations ─────────────────────────────────────
+
+    /// Declares all extern functions as LLVM external declarations (no body).
+    ///
+    /// These are registered in the shared `functions_` map so that calls to
+    /// extern functions resolve the same way as calls to regular functions.
+    void declare_extern_functions() {
+        for (const LirExternFnDecl& ext : program_.extern_fns) {
+            std::vector<llvm::Type*> param_types;
+            param_types.reserve(ext.params.size());
+            for (const LirParam& p : ext.params)
+                param_types.push_back(map_type(p.ty));
+
+            llvm::Type* ret_ty = map_return_type(ext.return_ty);
+            auto* fn_ty = llvm::FunctionType::get(ret_ty, param_types, false);
+            auto* llvm_fn = llvm::Function::Create(
+                fn_ty, llvm::Function::ExternalLinkage, std::string(ext.name.as_str()), &module_);
+
+            functions_[std::string(ext.name.as_str())] = llvm_fn;
+        }
+    }
+
     // ─── Function forward declarations ──────────────────────────────────────
 
     /// Returns true if a function is the program entry point.
@@ -325,7 +365,7 @@ private:
             for (const LirParam& p : fn.params)
                 param_types.push_back(map_type(p.ty));
 
-            llvm::Type* ret_ty;
+            llvm::Type* ret_ty = nullptr;
             if (is_main_fn(fn)) {
                 ret_ty = llvm::Type::getInt32Ty(context_);
             } else {

@@ -34,25 +34,25 @@ void test_all_keywords() {
 void test_keyword_indices_are_fixed() {
     cstc::symbol::SymbolSession session;
 
-    assert(cstc::symbol::kw::Struct.index == 1);
-    assert(cstc::symbol::kw::Enum.index == 2);
-    assert(cstc::symbol::kw::Fn.index == 3);
-    assert(cstc::symbol::kw::Let.index == 4);
-    assert(cstc::symbol::kw::If.index == 5);
-    assert(cstc::symbol::kw::Else.index == 6);
-    assert(cstc::symbol::kw::For.index == 7);
-    assert(cstc::symbol::kw::While.index == 8);
-    assert(cstc::symbol::kw::Loop.index == 9);
-    assert(cstc::symbol::kw::Break.index == 10);
-    assert(cstc::symbol::kw::Continue.index == 11);
-    assert(cstc::symbol::kw::Return_.index == 12);
-    assert(cstc::symbol::kw::True_.index == 13);
-    assert(cstc::symbol::kw::False_.index == 14);
-    assert(cstc::symbol::kw::Unit.index == 15);
-    assert(cstc::symbol::kw::Num.index == 16);
-    assert(cstc::symbol::kw::Str.index == 17);
-    assert(cstc::symbol::kw::Bool.index == 18);
-    assert(cstc::symbol::kw::UnitLit.index == 19);
+    static_assert(cstc::symbol::kw::Struct.index == 1);
+    static_assert(cstc::symbol::kw::Enum.index == 2);
+    static_assert(cstc::symbol::kw::Fn.index == 3);
+    static_assert(cstc::symbol::kw::Let.index == 4);
+    static_assert(cstc::symbol::kw::If.index == 5);
+    static_assert(cstc::symbol::kw::Else.index == 6);
+    static_assert(cstc::symbol::kw::For.index == 7);
+    static_assert(cstc::symbol::kw::While.index == 8);
+    static_assert(cstc::symbol::kw::Loop.index == 9);
+    static_assert(cstc::symbol::kw::Break.index == 10);
+    static_assert(cstc::symbol::kw::Continue.index == 11);
+    static_assert(cstc::symbol::kw::Return_.index == 12);
+    static_assert(cstc::symbol::kw::True_.index == 13);
+    static_assert(cstc::symbol::kw::False_.index == 14);
+    static_assert(cstc::symbol::kw::Unit.index == 15);
+    static_assert(cstc::symbol::kw::Num.index == 16);
+    static_assert(cstc::symbol::kw::Str.index == 17);
+    static_assert(cstc::symbol::kw::Bool.index == 18);
+    static_assert(cstc::symbol::kw::UnitLit.index == 19);
 }
 
 void test_intern_matches_keyword() {
@@ -110,7 +110,7 @@ void test_empty_string_is_invalid_symbol() {
     const auto empty = cstc::symbol::Symbol::intern("");
     assert(!empty.is_valid());
     assert(empty == cstc::symbol::kInvalidSymbol);
-    assert(empty.as_str() == "");
+    assert(empty.as_str().empty());
 }
 
 void test_sessions_have_independent_interners() {

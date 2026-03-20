@@ -82,6 +82,8 @@ namespace detail {
         return TokenKind::KwStr;
     if (text == "bool")
         return TokenKind::KwBool;
+    if (text == "extern")
+        return TokenKind::KwExtern;
 
     return TokenKind::Identifier;
 }

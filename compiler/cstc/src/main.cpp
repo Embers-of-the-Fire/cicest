@@ -1,6 +1,9 @@
+#include <cstc_cli_support/support.hpp>
 #include <cstc_codegen/codegen.hpp>
 #include <cstc_lir_builder/builder.hpp>
+#include <cstc_parser/diagnostics.hpp>
 #include <cstc_parser/parser.hpp>
+#include <cstc_resource_path/resource_path.hpp>
 #include <cstc_span/span.hpp>
 #include <cstc_symbol/symbol.hpp>
 #include <cstc_tyir_builder/builder.hpp>
@@ -11,24 +14,23 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#if defined(_WIN32)
+#ifdef _WIN32
 # include <process.h>
 #elif defined(__unix__) || defined(__APPLE__)
+# ifdef __APPLE__
+#  include <crt_externs.h>
+# else
+#  include <unistd.h>
+# endif
 # include <spawn.h>
 # include <sys/wait.h>
-#endif
-
-#if defined(__unix__) || defined(__APPLE__)
-extern char** environ;
 #endif
 
 namespace {
@@ -161,44 +163,9 @@ void parse_and_add_emit(std::vector<EmitKind>& emits, std::string_view emit_valu
     return options;
 }
 
-[[nodiscard]] std::string read_source_file(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file)
-        throw std::runtime_error("failed to open input file: " + path.string());
-
-    std::ostringstream buffer;
-    buffer << file.rdbuf();
-    if (!file.good() && !file.eof())
-        throw std::runtime_error("failed while reading input file: " + path.string());
-    return buffer.str();
-}
-
-[[nodiscard]] std::string format_parse_error(
-    const cstc::span::SourceMap& source_map, const cstc::parser::ParseError& error) {
-    if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-        return "parse error " + std::string(resolved->file_name) + ":"
-             + std::to_string(resolved->start.line) + ":" + std::to_string(resolved->start.column)
-             + ": " + error.message;
-    }
-
-    return "parse error [" + std::to_string(error.span.start) + ", "
-         + std::to_string(error.span.end) + "): " + error.message;
-}
-
-[[nodiscard]] std::string format_type_error(
-    const cstc::span::SourceMap& source_map, const cstc::tyir_builder::LowerError& error) {
-    if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-        return "type error " + std::string(resolved->file_name) + ":"
-             + std::to_string(resolved->start.line) + ":" + std::to_string(resolved->start.column)
-             + ": " + error.message;
-    }
-
-    return "type error: " + error.message;
-}
-
 [[nodiscard]] std::filesystem::path resolve_output_stem(const Options& options) {
     if (options.output_stem.has_value())
-        return std::filesystem::path(*options.output_stem);
+        return {*options.output_stem};
 
     const std::filesystem::path input_path(options.input_path);
     const std::filesystem::path stem = input_path.stem();
@@ -228,7 +195,7 @@ void ensure_parent_directory(const std::filesystem::path& path) {
     if (const char* cxx = std::getenv("CXX"); cxx != nullptr && cxx[0] != '\0')
         return cxx;
 
-#if defined(_WIN32)
+#ifdef _WIN32
 # if defined(__MINGW32__) || defined(__MINGW64__)
     return "c++";
 # else
@@ -239,6 +206,16 @@ void ensure_parent_directory(const std::filesystem::path& path) {
 #endif
 }
 
+#if defined(__unix__) || defined(__APPLE__)
+[[nodiscard]] char** process_environment() {
+# ifdef __APPLE__
+    return *_NSGetEnviron();
+# else
+    return ::environ;
+# endif
+}
+#endif
+
 void link_object_to_executable(
     const std::filesystem::path& object_path, const std::filesystem::path& executable_path,
     const Options& options) {
@@ -248,11 +225,12 @@ void link_object_to_executable(
     std::vector<std::string> arguments{
         linker_program,
         object_path.string(),
+        cstc::resource_path::resolve_rt_path(CICEST_RT_PATH).string(),
         "-o",
         executable_path.string(),
     };
 
-#if defined(_WIN32)
+#ifdef _WIN32
     std::vector<const char*> argv;
     argv.reserve(arguments.size() + 1);
     for (const std::string& argument : arguments)
@@ -279,8 +257,8 @@ void link_object_to_executable(
     argv.push_back(nullptr);
 
     pid_t child_pid = 0;
-    const int spawn_error =
-        posix_spawnp(&child_pid, linker_program.c_str(), nullptr, nullptr, argv.data(), environ);
+    const int spawn_error = posix_spawnp(
+        &child_pid, linker_program.c_str(), nullptr, nullptr, argv.data(), process_environment());
     if (spawn_error != 0) {
         throw std::runtime_error(
             "failed to start linker '" + linker_program + "': " + std::strerror(spawn_error));
@@ -307,23 +285,17 @@ void link_object_to_executable(
 }
 
 void compile_file(const Options& options) {
-    const std::string source = read_source_file(options.input_path);
+    const std::string source = cstc::cli_support::read_source_file(options.input_path);
 
     cstc::symbol::SymbolSession session;
     cstc::span::SourceMap source_map;
     const cstc::span::SourceFileId file_id = source_map.add_file(options.input_path, source);
+    const cstc::ast::Program merged =
+        cstc::cli_support::parse_with_std_prelude(source_map, file_id, CICEST_STD_PATH);
 
-    const cstc::span::SourceFile* source_file = source_map.file(file_id);
-    if (source_file == nullptr)
-        throw std::runtime_error("invalid source file id while compiling");
-
-    const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
-    if (!parsed.has_value())
-        throw std::runtime_error(format_parse_error(source_map, parsed.error()));
-
-    const auto lowered = cstc::tyir_builder::lower_program(*parsed);
+    const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value())
-        throw std::runtime_error(format_type_error(source_map, lowered.error()));
+        throw std::runtime_error(cstc::cli_support::format_type_error(source_map, lowered.error()));
 
     const auto lir = cstc::lir_builder::lower_program(*lowered);
 
@@ -351,7 +323,7 @@ void compile_file(const Options& options) {
     }
 
     if (emit_exe) {
-        const std::filesystem::path executable_path = output_stem;
+        const std::filesystem::path& executable_path = output_stem;
         link_object_to_executable(object_path, executable_path, options);
         std::cout << "emitted " << executable_path.string() << '\n';
 

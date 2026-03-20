@@ -75,6 +75,7 @@ struct LowerError {
 #include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <cstc_symbol/symbol.hpp>
@@ -107,8 +108,15 @@ struct TypeEnv {
     /// Maps each function name → its signature.
     std::unordered_map<cstc::symbol::Symbol, FnSignature, cstc::symbol::SymbolHash> fn_signatures;
 
+    /// Names of extern (opaque) struct types. These are valid as type
+    /// annotations but cannot be constructed via struct-init expressions.
+    std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> extern_struct_names;
+
     [[nodiscard]] bool is_struct(cstc::symbol::Symbol name) const {
         return struct_fields.count(name) > 0;
+    }
+    [[nodiscard]] bool is_extern_struct(cstc::symbol::Symbol name) const {
+        return extern_struct_names.count(name) > 0;
     }
     [[nodiscard]] bool is_enum(cstc::symbol::Symbol name) const {
         return enum_variants.count(name) > 0;
@@ -117,7 +125,7 @@ struct TypeEnv {
         return fn_signatures.count(name) > 0;
     }
     [[nodiscard]] bool is_named_type(cstc::symbol::Symbol name) const {
-        return is_struct(name) || is_enum(name);
+        return is_struct(name) || is_enum(name) || is_extern_struct(name);
     }
 
     /// Returns the resolved type of `field_name` on struct `struct_name`, or
@@ -245,6 +253,20 @@ struct LowerCtx {
     return std::unexpected(LowerError{span, std::move(msg)});
 }
 
+/// Returns true if the ABI string is a recognised extern ABI.
+[[nodiscard]] inline bool is_supported_abi(cstc::symbol::Symbol abi) {
+    const auto sv = abi.as_str();
+    return sv == "lang" || sv == "c";
+}
+
+/// Validates an extern ABI string, returning an error if unsupported.
+[[nodiscard]] inline std::optional<std::unexpected<LowerError>>
+    validate_abi(cstc::symbol::Symbol abi, cstc::span::SourceSpan span) {
+    if (!is_supported_abi(abi))
+        return make_error(span, "unsupported ABI \"" + std::string(abi.as_str()) + "\"");
+    return std::nullopt;
+}
+
 // ─── Type resolution ─────────────────────────────────────────────────────────
 
 /// Converts an AST `TypeRef` to a `tyir::Ty`, validating named types against
@@ -278,19 +300,20 @@ struct LowerCtx {
 
 // ─── Function signature resolution ──────────────────────────────────────────
 
-[[nodiscard]] inline std::expected<FnSignature, LowerError>
-    resolve_fn_signature(const ast::FnDecl& fn, const TypeEnv& env) {
+[[nodiscard]] inline std::expected<FnSignature, LowerError> resolve_fn_signature(
+    const std::vector<ast::Param>& params, const std::optional<ast::TypeRef>& return_type,
+    cstc::span::SourceSpan span, const TypeEnv& env) {
     FnSignature sig;
-    sig.span = fn.span;
-    if (fn.return_type.has_value()) {
-        auto t = lower_type(*fn.return_type, env, fn.span);
+    sig.span = span;
+    if (return_type.has_value()) {
+        auto t = lower_type(*return_type, env, span);
         if (!t)
             return std::unexpected(std::move(t.error()));
         sig.return_ty = *t;
     } else {
         sig.return_ty = tyir::ty::unit();
     }
-    for (const ast::Param& p : fn.params) {
+    for (const ast::Param& p : params) {
         auto pt = lower_type(p.type, env, p.span);
         if (!pt)
             return std::unexpected(std::move(pt.error()));
@@ -334,7 +357,7 @@ struct LowerCtx {
 
                 return tyir::TyLetStmt{s.discard, s.name, binding_ty, std::move(*init), s.span};
 
-            } else { // ast::ExprStmt
+            } else {                                          // ast::ExprStmt
                 auto expr = lower_expr(s.expr, ctx);
                 if (!expr)
                     return std::unexpected(std::move(expr.error()));
@@ -370,7 +393,7 @@ struct LowerCtx {
 
             if constexpr (
                 std::is_same_v<N, tyir::TyLiteral> || std::is_same_v<N, tyir::LocalRef>
-                || std::is_same_v<N, tyir::EnumVariantRef>) {
+                || std::is_same_v<N, tyir::EnumVariantRef>) { // NOLINT(bugprone-branch-clone)
                 return true;
             } else if constexpr (std::is_same_v<N, tyir::TyStructInit>) {
                 for (const tyir::TyStructInitField& field : node.fields) {
@@ -534,6 +557,11 @@ struct LowerCtx {
             // ── Struct init ───────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::StructInitExpr>) {
                 const cstc::symbol::Symbol type_name = node.type_name;
+                if (ctx.env.is_extern_struct(type_name))
+                    return make_error(
+                        expr->span, "cannot construct extern type '"
+                                        + std::string(type_name.as_str())
+                                        + "'; extern structs are opaque");
                 if (!ctx.env.is_struct(type_name))
                     return make_error(
                         expr->span,
@@ -1135,7 +1163,8 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
     // ── Phase 1: collect named-type names (placeholders) ─────────────────
     for (const ast::Item& item : program.items) {
         if (const auto* struct_decl = std::get_if<ast::StructDecl>(&item)) {
-            if (env.enum_variants.count(struct_decl->name) > 0)
+            if (env.enum_variants.count(struct_decl->name) > 0
+                || env.extern_struct_names.count(struct_decl->name) > 0)
                 return detail::make_error(
                     struct_decl->span,
                     "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
@@ -1147,7 +1176,8 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                     struct_decl->span,
                     "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
         } else if (const auto* enum_decl = std::get_if<ast::EnumDecl>(&item)) {
-            if (env.struct_fields.count(enum_decl->name) > 0)
+            if (env.struct_fields.count(enum_decl->name) > 0
+                || env.extern_struct_names.count(enum_decl->name) > 0)
                 return detail::make_error(
                     enum_decl->span,
                     "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
@@ -1158,6 +1188,18 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 return detail::make_error(
                     enum_decl->span,
                     "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
+        } else if (const auto* extern_struct = std::get_if<ast::ExternStructDecl>(&item)) {
+            // Validate the ABI string.
+            if (auto err = detail::validate_abi(extern_struct->abi, extern_struct->span))
+                return *err;
+            if (env.enum_variants.count(extern_struct->name) > 0
+                || env.struct_fields.count(extern_struct->name) > 0
+                || env.extern_struct_names.count(extern_struct->name) > 0)
+                return detail::make_error(
+                    extern_struct->span,
+                    "duplicate type name '" + std::string(extern_struct->name.as_str()) + "'");
+
+            env.extern_struct_names.insert(extern_struct->name);
         }
     }
 
@@ -1181,13 +1223,27 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
     // ── Phase 3: resolve function signatures ─────────────────────────────
     for (const ast::Item& item : program.items) {
         if (const auto* fn = std::get_if<ast::FnDecl>(&item)) {
-            auto sig = detail::resolve_fn_signature(*fn, env);
+            auto sig = detail::resolve_fn_signature(fn->params, fn->return_type, fn->span, env);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
             if (!insert_result.second)
                 return detail::make_error(
                     fn->span, "duplicate function name '" + std::string(fn->name.as_str()) + "'");
+        } else if (const auto* ext_fn = std::get_if<ast::ExternFnDecl>(&item)) {
+            // Validate the ABI string.
+            if (auto err = detail::validate_abi(ext_fn->abi, ext_fn->span))
+                return *err;
+            // Build a signature from the extern fn declaration.
+            auto sig = detail::resolve_fn_signature(
+                ext_fn->params, ext_fn->return_type, ext_fn->span, env);
+            if (!sig)
+                return std::unexpected(std::move(sig.error()));
+            const auto insert_result = env.fn_signatures.emplace(ext_fn->name, std::move(*sig));
+            if (!insert_result.second)
+                return detail::make_error(
+                    ext_fn->span,
+                    "duplicate function name '" + std::string(ext_fn->name.as_str()) + "'");
         }
     }
 
@@ -1228,6 +1284,28 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             if (!fn_result)
                 return std::unexpected(std::move(fn_result.error()));
             result.items.push_back(std::move(*fn_result));
+        } else if (const auto* ext_fn = std::get_if<ast::ExternFnDecl>(&item)) {
+            const auto& sig = env.fn_signatures.at(ext_fn->name);
+            tyir::TyExternFnDecl ty_decl;
+            ty_decl.abi = ext_fn->abi;
+            ty_decl.name = ext_fn->name;
+            ty_decl.return_ty = sig.return_ty;
+            ty_decl.span = ext_fn->span;
+            for (std::size_t i = 0; i < ext_fn->params.size(); ++i) {
+                ty_decl.params.push_back(
+                    tyir::TyParam{
+                        .name = ext_fn->params[i].name,
+                        .ty = sig.param_types[i],
+                        .span = ext_fn->params[i].span,
+                    });
+            }
+            result.items.push_back(std::move(ty_decl));
+        } else if (const auto* ext_struct = std::get_if<ast::ExternStructDecl>(&item)) {
+            tyir::TyExternStructDecl ty_decl;
+            ty_decl.abi = ext_struct->abi;
+            ty_decl.name = ext_struct->name;
+            ty_decl.span = ext_struct->span;
+            result.items.push_back(std::move(ty_decl));
         }
     }
 

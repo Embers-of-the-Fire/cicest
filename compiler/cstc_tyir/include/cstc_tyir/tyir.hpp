@@ -100,15 +100,15 @@ struct Ty {
 /// Factory helpers for the well-known primitive types.
 namespace ty {
 /// Unit type `()`.
-inline constexpr Ty unit() { return {TyKind::Unit, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty unit() { return {TyKind::Unit, cstc::symbol::kInvalidSymbol}; }
 /// Numeric type `num`.
-inline constexpr Ty num() { return {TyKind::Num, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty num() { return {TyKind::Num, cstc::symbol::kInvalidSymbol}; }
 /// String type `str`.
-inline constexpr Ty str() { return {TyKind::Str, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty str() { return {TyKind::Str, cstc::symbol::kInvalidSymbol}; }
 /// Boolean type `bool`.
-inline constexpr Ty bool_() { return {TyKind::Bool, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty bool_() { return {TyKind::Bool, cstc::symbol::kInvalidSymbol}; }
 /// Never / bottom type (diverging expression).
-inline constexpr Ty never() { return {TyKind::Never, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty never() { return {TyKind::Never, cstc::symbol::kInvalidSymbol}; }
 /// User-defined named type (struct or enum).
 inline Ty named(cstc::symbol::Symbol sym) { return {TyKind::Named, sym}; }
 } // namespace ty
@@ -417,8 +417,36 @@ struct TyFnDecl {
     cstc::span::SourceSpan span;
 };
 
+/// Typed extern function declaration (no body).
+struct TyExternFnDecl {
+    /// ABI string (e.g. "lang", "c").
+    cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
+    /// Function name.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Typed parameter list.
+    std::vector<TyParam> params;
+    /// Resolved return type (defaults to `Unit` when absent in source).
+    Ty return_ty;
+    /// Source location for the full item.
+    cstc::span::SourceSpan span;
+};
+
+/// Typed extern struct declaration (opaque foreign type, no fields).
+///
+/// Unlike `TyStructDecl` with `is_zst`, an extern struct preserves its ABI
+/// and foreign/opaque nature so that later passes can distinguish it from a
+/// normal user-defined zero-sized type.
+struct TyExternStructDecl {
+    /// ABI string (e.g. "lang", "c").
+    cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
+    /// Struct type name.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Source location for the full item.
+    cstc::span::SourceSpan span;
+};
+
 /// Any top-level TyIR item declaration.
-using TyItem = std::variant<TyStructDecl, TyEnumDecl, TyFnDecl>;
+using TyItem = std::variant<TyStructDecl, TyEnumDecl, TyFnDecl, TyExternFnDecl, TyExternStructDecl>;
 
 /// Full typed program — root of the TyIR tree.
 struct TyProgram {

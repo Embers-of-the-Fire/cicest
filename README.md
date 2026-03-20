@@ -34,7 +34,7 @@ Current semantic/lowering stages include:
 - LLVM IR emission
 - native assembly/object artifact emission
 
-For full syntax and grammar notes, see [docs/language/index.md](docs/language/index.md).
+For language, library, and unresolved design notes, see [docs/index.md](docs/index.md).
 
 ## Compiler Pipeline
 

@@ -170,7 +170,6 @@ public:
         };
     }
 
-private:
     [[nodiscard]] static std::vector<BytePos> build_line_starts(std::string_view source_text) {
         std::vector<BytePos> starts;
         starts.push_back(0);

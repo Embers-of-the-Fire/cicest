@@ -351,8 +351,32 @@ struct FnDecl {
     cstc::span::SourceSpan span;
 };
 
+/// Extern function declaration (no body).
+struct ExternFnDecl {
+    /// ABI string (e.g. "lang", "c").
+    cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
+    /// Function name.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Function parameter list.
+    std::vector<Param> params;
+    /// Optional explicit return type.
+    std::optional<TypeRef> return_type;
+    /// Source location for the full item.
+    cstc::span::SourceSpan span;
+};
+
+/// Extern struct declaration (opaque, no fields).
+struct ExternStructDecl {
+    /// ABI string (e.g. "lang", "c").
+    cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
+    /// Struct type name.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Source location for the full item.
+    cstc::span::SourceSpan span;
+};
+
 /// Any top-level declaration item.
-using Item = std::variant<StructDecl, EnumDecl, FnDecl>;
+using Item = std::variant<StructDecl, EnumDecl, FnDecl, ExternFnDecl, ExternStructDecl>;
 
 /// Full parsed source file.
 struct Program {

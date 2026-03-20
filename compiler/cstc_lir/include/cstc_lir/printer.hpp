@@ -227,6 +227,28 @@ inline void print_enum_decl(std::ostringstream& out, const LirEnumDecl& e, std::
     out << "}\n";
 }
 
+inline void
+    print_extern_fn_decl(std::ostringstream& out, const LirExternFnDecl& fn, std::size_t level) {
+    indent(out, level);
+    out << "extern \"" << fn.abi.as_str() << "\" fn ";
+    out << (fn.name.is_valid() ? std::string(fn.name.as_str()) : "<fn>");
+    out << "(";
+    for (std::size_t i = 0; i < fn.params.size(); ++i) {
+        if (i > 0)
+            out << ", ";
+        const LirParam& p = fn.params[i];
+        out << (p.name.is_valid() ? std::string(p.name.as_str()) : "<param>");
+        out << ": " << p.ty.display();
+    }
+    out << ") -> " << fn.return_ty.display() << "\n";
+}
+
+inline void print_extern_struct_decl(
+    std::ostringstream& out, const LirExternStructDecl& s, std::size_t level) {
+    indent(out, level);
+    out << "extern \"" << s.abi.as_str() << "\" struct " << s.name.as_str() << ";\n";
+}
+
 } // namespace detail
 
 inline std::string format_program(const LirProgram& program) {
@@ -236,6 +258,10 @@ inline std::string format_program(const LirProgram& program) {
         detail::print_struct_decl(out, s, 1);
     for (const LirEnumDecl& e : program.enums)
         detail::print_enum_decl(out, e, 1);
+    for (const LirExternFnDecl& ext : program.extern_fns)
+        detail::print_extern_fn_decl(out, ext, 1);
+    for (const LirExternStructDecl& ext_s : program.extern_structs)
+        detail::print_extern_struct_decl(out, ext_s, 1);
     for (const LirFnDef& fn : program.fns)
         detail::print_fn_def(out, fn, 1);
     return out.str();
