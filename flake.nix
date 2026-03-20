@@ -38,6 +38,7 @@
         fish
 
         git
+        jq
         curl
         unzip
         file

@@ -1,0 +1,108 @@
+# Comprehensive clang-tidy configuration for the cicest compiler.
+#
+# Enabled check families:
+#   bugprone-*              — common bug patterns
+#   clang-analyzer-*        — Clang static analyzer (null deref, leaks, logic)
+#   cppcoreguidelines-*     — C++ Core Guidelines
+#   misc-*                  — miscellaneous quality checks
+#   modernize-*             — modern C++ idioms
+#   performance-*           — unnecessary copies, moves, allocations
+#   readability-*           — clarity and simplification
+#
+# Excluded checks and justifications:
+#
+#   bugprone-easily-swappable-parameters   — too noisy for compiler IR builders
+#   bugprone-exception-escape              — fires on main(), not actionable
+#   bugprone-unchecked-optional-access     — false positives with assert() guards in tests
+#   cppcoreguidelines-avoid-magic-numbers  — compiler code uses numeric constants legitimately
+#   cppcoreguidelines-avoid-c-arrays       — C-style arrays used in test data and C runtime
+#   cppcoreguidelines-pro-bounds-pointer-arithmetic — unavoidable with C APIs / LLVM
+#   cppcoreguidelines-pro-type-reinterpret-cast     — defensive exclusion for LLVM header leakage
+#   cppcoreguidelines-pro-type-vararg      — fires on assert() macro
+#   cppcoreguidelines-owning-memory        — requires GSL, not adopted
+#   cppcoreguidelines-avoid-non-const-global-variables — thread_local symbol table is intentional
+#   cppcoreguidelines-special-member-functions — too noisy for simple AST/IR node structs
+#   cppcoreguidelines-avoid-const-or-ref-data-members — intentional design in IR nodes
+#   misc-non-private-member-variables-in-classes — project uses public struct fields (AST/IR nodes)
+#   misc-no-recursion                      — recursive descent parser is inherently recursive
+#   misc-include-cleaner                   — too noisy with header-only libraries; add later
+#   misc-definitions-in-headers            — header-only library design (parser, lexer, span, etc.)
+#   misc-use-anonymous-namespace           — incompatible with header-only libraries (ODR)
+#   misc-const-correctness                 — too noisy (308 violations), many false positives
+#   modernize-use-trailing-return-type     — project uses traditional return types
+#   modernize-use-ranges                   — large refactor; add later
+#   modernize-use-std-print                — project uses iostream consistently
+#   modernize-use-auto                     — project prefers explicit types
+#   modernize-use-designated-initializers  — too noisy (1017 violations), style preference
+#   modernize-use-emplace                  — too noisy (204 violations), defer optimization
+#   modernize-loop-convert                 — too noisy (31 violations), style preference
+#   performance-enum-size                  — micro-optimization with potential ABI concerns
+#   performance-move-const-arg             — too noisy (419 violations), defer cleanup
+#   readability-identifier-length          — short names (i, ch, op) are idiomatic in compiler code
+#   readability-function-cognitive-complexity — parser/codegen dispatchers are inherently complex
+#   readability-else-after-return          — mixed style in project, not worth enforcing
+#   readability-magic-numbers              — alias of cppcoreguidelines-avoid-magic-numbers
+#   readability-braces-around-statements   — project uses braceless single-line if/for/while
+#   readability-implicit-bool-conversion   — standard C++ idiom (if (!ptr), if (file))
+#   readability-use-anyofallof             — manual loops are clearer in compiler dispatch code
+#   readability-duplicate-include          — too noisy (251 violations), defer cleanup
+#   readability-container-contains         — too noisy (204 violations), C++20 modernization
+#   readability-convert-member-functions-to-static — too noisy (94 violations), style preference
+#   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling — snprintf/memcpy are fine in C runtime
+#   clang-analyzer-security.ArrayBound     — false positive from LLVM header internals
+
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  cppcoreguidelines-*,
+  misc-*,
+  modernize-*,
+  performance-*,
+  readability-*,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-unchecked-optional-access,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  -clang-analyzer-security.ArrayBound,
+  -cppcoreguidelines-avoid-magic-numbers,
+  -cppcoreguidelines-avoid-c-arrays,
+  -cppcoreguidelines-pro-bounds-pointer-arithmetic,
+  -cppcoreguidelines-pro-type-reinterpret-cast,
+  -cppcoreguidelines-pro-type-vararg,
+  -cppcoreguidelines-owning-memory,
+  -cppcoreguidelines-avoid-non-const-global-variables,
+  -cppcoreguidelines-special-member-functions,
+  -cppcoreguidelines-avoid-const-or-ref-data-members,
+  -misc-non-private-member-variables-in-classes,
+  -misc-no-recursion,
+  -misc-include-cleaner,
+  -misc-definitions-in-headers,
+  -misc-use-anonymous-namespace,
+  -misc-const-correctness,
+  -modernize-use-trailing-return-type,
+  -modernize-use-ranges,
+  -modernize-use-std-print,
+  -modernize-use-auto,
+  -modernize-use-designated-initializers,
+  -modernize-use-emplace,
+  -modernize-loop-convert,
+  -modernize-avoid-c-arrays,
+  -performance-enum-size,
+  -performance-move-const-arg,
+  -readability-identifier-length,
+  -readability-function-cognitive-complexity,
+  -readability-else-after-return,
+  -readability-magic-numbers,
+  -readability-braces-around-statements,
+  -readability-implicit-bool-conversion,
+  -readability-use-anyofallof,
+  -readability-duplicate-include,
+  -readability-container-contains,
+  -readability-convert-member-functions-to-static,
+
+# All findings are hard failures.
+WarningsAsErrors: '*'
+
+# Only report diagnostics from project headers; suppress LLVM/system header noise.
+HeaderFilterRegex: '.*(compiler|libraries)/.*'
