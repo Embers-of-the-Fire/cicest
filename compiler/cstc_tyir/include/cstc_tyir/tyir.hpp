@@ -100,15 +100,15 @@ struct Ty {
 /// Factory helpers for the well-known primitive types.
 namespace ty {
 /// Unit type `()`.
-inline constexpr Ty unit() { return {TyKind::Unit, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty unit() { return {TyKind::Unit, cstc::symbol::kInvalidSymbol}; }
 /// Numeric type `num`.
-inline constexpr Ty num() { return {TyKind::Num, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty num() { return {TyKind::Num, cstc::symbol::kInvalidSymbol}; }
 /// String type `str`.
-inline constexpr Ty str() { return {TyKind::Str, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty str() { return {TyKind::Str, cstc::symbol::kInvalidSymbol}; }
 /// Boolean type `bool`.
-inline constexpr Ty bool_() { return {TyKind::Bool, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty bool_() { return {TyKind::Bool, cstc::symbol::kInvalidSymbol}; }
 /// Never / bottom type (diverging expression).
-inline constexpr Ty never() { return {TyKind::Never, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty never() { return {TyKind::Never, cstc::symbol::kInvalidSymbol}; }
 /// User-defined named type (struct or enum).
 inline Ty named(cstc::symbol::Symbol sym) { return {TyKind::Named, sym}; }
 } // namespace ty

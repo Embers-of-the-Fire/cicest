@@ -1209,7 +1209,6 @@ private:
         return std::unexpected(make_error_here("expected expression"));
     }
 
-private:
     std::vector<Token> tokens_;
     std::size_t cursor_ = 0;
 

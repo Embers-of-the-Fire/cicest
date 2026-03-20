@@ -12,11 +12,11 @@ using namespace cstc::tyir;
 
 static void test_primitive_types() {
     SymbolSession session;
-    assert((ty::unit() == Ty{TyKind::Unit, kInvalidSymbol}));
-    assert((ty::num() == Ty{TyKind::Num, kInvalidSymbol}));
-    assert((ty::str() == Ty{TyKind::Str, kInvalidSymbol}));
-    assert((ty::bool_() == Ty{TyKind::Bool, kInvalidSymbol}));
-    assert((ty::never() == Ty{TyKind::Never, kInvalidSymbol}));
+    static_assert((ty::unit() == Ty{TyKind::Unit, kInvalidSymbol}));
+    static_assert((ty::num() == Ty{TyKind::Num, kInvalidSymbol}));
+    static_assert((ty::str() == Ty{TyKind::Str, kInvalidSymbol}));
+    static_assert((ty::bool_() == Ty{TyKind::Bool, kInvalidSymbol}));
+    static_assert((ty::never() == Ty{TyKind::Never, kInvalidSymbol}));
 }
 
 static void test_named_type() {
@@ -30,9 +30,9 @@ static void test_named_type() {
 
 static void test_type_equality() {
     SymbolSession session;
-    assert(ty::num() == ty::num());
-    assert(!(ty::num() == ty::bool_()));
-    assert(!(ty::str() == ty::unit()));
+    static_assert(ty::num() == ty::num());
+    static_assert(!(ty::num() == ty::bool_()));
+    static_assert(!(ty::str() == ty::unit()));
     const Symbol s = Symbol::intern("Foo");
     assert(ty::named(s) == ty::named(s));
     assert(!(ty::named(s) == ty::num()));
@@ -40,12 +40,12 @@ static void test_type_equality() {
 
 static void test_type_predicates() {
     SymbolSession session;
-    assert(ty::unit().is_unit());
-    assert(!ty::num().is_unit());
-    assert(ty::never().is_never());
-    assert(!ty::bool_().is_never());
+    static_assert(ty::unit().is_unit());
+    static_assert(!ty::num().is_unit());
+    static_assert(ty::never().is_never());
+    static_assert(!ty::bool_().is_never());
     assert(ty::named(Symbol::intern("X")).is_named());
-    assert(!ty::num().is_named());
+    static_assert(!ty::num().is_named());
 }
 
 static void test_type_display() {

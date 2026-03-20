@@ -224,9 +224,9 @@ private:
         case tyir::TyKind::Num: return llvm::Type::getDoubleTy(context_);
         case tyir::TyKind::Bool: return llvm::Type::getInt1Ty(context_);
         case tyir::TyKind::Str: return llvm::PointerType::getUnqual(context_);
-        case tyir::TyKind::Unit: return llvm::StructType::get(context_);
+        case tyir::TyKind::Unit:
         case tyir::TyKind::Never:
-            // Never-typed locals use an empty struct to avoid void alloca.
+            // Unit and never-typed locals use an empty struct to avoid void alloca.
             return llvm::StructType::get(context_);
         case tyir::TyKind::Named: {
             const std::string type_name(ty.name.as_str());
@@ -365,7 +365,7 @@ private:
             for (const LirParam& p : fn.params)
                 param_types.push_back(map_type(p.ty));
 
-            llvm::Type* ret_ty;
+            llvm::Type* ret_ty = nullptr;
             if (is_main_fn(fn)) {
                 ret_ty = llvm::Type::getInt32Ty(context_);
             } else {

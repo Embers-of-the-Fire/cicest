@@ -19,7 +19,7 @@ class SymbolTable {
 public:
     SymbolTable() {
         entries_.push_back("");
-        indices_.emplace("", 0u);
+        indices_.emplace("", 0U);
     }
 
     std::uint32_t intern(std::string_view text) {

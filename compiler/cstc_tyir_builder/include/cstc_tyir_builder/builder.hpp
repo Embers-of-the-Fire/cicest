@@ -357,7 +357,7 @@ struct LowerCtx {
 
                 return tyir::TyLetStmt{s.discard, s.name, binding_ty, std::move(*init), s.span};
 
-            } else { // ast::ExprStmt
+            } else {                                          // ast::ExprStmt
                 auto expr = lower_expr(s.expr, ctx);
                 if (!expr)
                     return std::unexpected(std::move(expr.error()));
@@ -393,7 +393,7 @@ struct LowerCtx {
 
             if constexpr (
                 std::is_same_v<N, tyir::TyLiteral> || std::is_same_v<N, tyir::LocalRef>
-                || std::is_same_v<N, tyir::EnumVariantRef>) {
+                || std::is_same_v<N, tyir::EnumVariantRef>) { // NOLINT(bugprone-branch-clone)
                 return true;
             } else if constexpr (std::is_same_v<N, tyir::TyStructInit>) {
                 for (const tyir::TyStructInitField& field : node.fields) {

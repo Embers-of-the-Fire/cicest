@@ -21,15 +21,11 @@
 #include <string_view>
 #include <vector>
 
-#if defined(_WIN32)
+#ifdef _WIN32
 # include <process.h>
 #elif defined(__unix__) || defined(__APPLE__)
 # include <spawn.h>
 # include <sys/wait.h>
-#endif
-
-#if defined(__unix__) || defined(__APPLE__)
-extern char** environ;
 #endif
 
 namespace {
@@ -199,7 +195,7 @@ void parse_and_add_emit(std::vector<EmitKind>& emits, std::string_view emit_valu
 
 [[nodiscard]] std::filesystem::path resolve_output_stem(const Options& options) {
     if (options.output_stem.has_value())
-        return std::filesystem::path(*options.output_stem);
+        return {*options.output_stem};
 
     const std::filesystem::path input_path(options.input_path);
     const std::filesystem::path stem = input_path.stem();
@@ -229,7 +225,7 @@ void ensure_parent_directory(const std::filesystem::path& path) {
     if (const char* cxx = std::getenv("CXX"); cxx != nullptr && cxx[0] != '\0')
         return cxx;
 
-#if defined(_WIN32)
+#ifdef _WIN32
 # if defined(__MINGW32__) || defined(__MINGW64__)
     return "c++";
 # else
@@ -254,7 +250,7 @@ void link_object_to_executable(
         executable_path.string(),
     };
 
-#if defined(_WIN32)
+#ifdef _WIN32
     std::vector<const char*> argv;
     argv.reserve(arguments.size() + 1);
     for (const std::string& argument : arguments)
@@ -358,7 +354,7 @@ void compile_file(const Options& options) {
     merged.items.reserve(prelude_program.items.size() + parsed->items.size());
     for (auto& item : prelude_program.items)
         merged.items.push_back(item);
-    for (auto& item : parsed->items)
+    for (const auto& item : parsed->items)
         merged.items.push_back(item);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
@@ -391,7 +387,7 @@ void compile_file(const Options& options) {
     }
 
     if (emit_exe) {
-        const std::filesystem::path executable_path = output_stem;
+        const std::filesystem::path& executable_path = output_stem;
         link_object_to_executable(object_path, executable_path, options);
         std::cout << "emitted " << executable_path.string() << '\n';
 
