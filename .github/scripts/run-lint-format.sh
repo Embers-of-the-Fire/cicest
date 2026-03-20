@@ -70,10 +70,22 @@ fi
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DCMAKE_CXX_FLAGS="-Werror"
+  -DCMAKE_CXX_FLAGS="-Werror" \
+  -DCICEST_BUILD_TESTS=ON
 
 cmake --build build
 
+# ── clang-tidy ────────────────────────────────────────────────────────────────
+mapfile -t tidy_files < <(git ls-files '*.c' '*.cc' '*.cpp' '*.cxx')
+if ((${#tidy_files[@]} > 0)); then
+  echo "Running clang-tidy on ${#tidy_files[@]} file(s)…"
+  printf '%s\n' "${tidy_files[@]}" \
+    | xargs -P "$(nproc)" -n1 clang-tidy -p build
+else
+  echo "No C/C++ source files found for clang-tidy."
+fi
+
+# ── clang-format ──────────────────────────────────────────────────────────────
 mapfile -t source_files < <(git ls-files '*.h' '*.hh' '*.hpp' '*.c' '*.cc' '*.cpp' '*.cxx')
 if ((${#source_files[@]} == 0)); then
   echo "No C/C++ source files found for format check."
