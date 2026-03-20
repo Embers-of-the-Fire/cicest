@@ -137,7 +137,8 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 > **Note:** Functions returning `str` (`to_str`, `str_concat`) allocate memory
 > with `malloc`. The caller owns the returned string and should release it with
 > `str_free` when it is no longer needed. String literals must not be passed to
-> `str_free`.
+> `str_free`. This is a manual convention today, not a type-checked ownership
+> rule. See [docs/unresolved/string-lifetime.md](../unresolved/string-lifetime.md).
 
 ## Available functions
 
@@ -267,4 +268,6 @@ To add a new function to the standard library:
 - The prelude is always injected — there is no mechanism to suppress it.
 - No module or import system exists. All prelude declarations are global.
 - Functions returning `str` allocate memory with `malloc`. Callers should use
-  `str_free` to release the returned string when it is no longer needed.
+  `str_free` to release the returned string when it is no longer needed, but
+  the language does not yet define a settled lifetime/ownership model for
+  `str`. See [docs/unresolved/string-lifetime.md](../unresolved/string-lifetime.md).
