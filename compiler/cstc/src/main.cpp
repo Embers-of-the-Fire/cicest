@@ -1,5 +1,6 @@
 #include <cstc_codegen/codegen.hpp>
 #include <cstc_lir_builder/builder.hpp>
+#include <cstc_parser/diagnostics.hpp>
 #include <cstc_parser/parser.hpp>
 #include <cstc_resource_path/resource_path.hpp>
 #include <cstc_span/span.hpp>
@@ -175,18 +176,6 @@ void parse_and_add_emit(std::vector<EmitKind>& emits, std::string_view emit_valu
     return buffer.str();
 }
 
-[[nodiscard]] std::string format_parse_error(
-    const cstc::span::SourceMap& source_map, const cstc::parser::ParseError& error) {
-    if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-        return "parse error " + std::string(resolved->file_name) + ":"
-             + std::to_string(resolved->start.line) + ":" + std::to_string(resolved->start.column)
-             + ": " + error.message;
-    }
-
-    return "parse error [" + std::to_string(error.span.start) + ", "
-         + std::to_string(error.span.end) + "): " + error.message;
-}
-
 [[nodiscard]] std::string format_type_error(
     const cstc::span::SourceMap& source_map, const cstc::tyir_builder::LowerError& error) {
     if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
@@ -360,7 +349,8 @@ void compile_file(const Options& options) {
         const auto prelude_parsed =
             cstc::parser::parse_source_at(prelude_file->source, prelude_file->start_pos);
         if (!prelude_parsed.has_value())
-            throw std::runtime_error(format_parse_error(source_map, prelude_parsed.error()));
+            throw std::runtime_error(
+                cstc::parser::format_parse_error(source_map, prelude_parsed.error()));
 
         prelude_program = *prelude_parsed;
     }
@@ -374,7 +364,7 @@ void compile_file(const Options& options) {
 
     const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
     if (!parsed.has_value())
-        throw std::runtime_error(format_parse_error(source_map, parsed.error()));
+        throw std::runtime_error(cstc::parser::format_parse_error(source_map, parsed.error()));
 
     // ─── Merge prelude + user AST ────────────────────────────────────────
     cstc::ast::Program merged;

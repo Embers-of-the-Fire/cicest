@@ -4,6 +4,7 @@
 #include <cstc_lexer/token.hpp>
 #include <cstc_lir/printer.hpp>
 #include <cstc_lir_builder/builder.hpp>
+#include <cstc_parser/diagnostics.hpp>
 #include <cstc_parser/parser.hpp>
 #include <cstc_resource_path/resource_path.hpp>
 #include <cstc_span/span.hpp>
@@ -200,18 +201,9 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 
         const auto prelude_parsed =
             cstc::parser::parse_source_at(prelude_file->source, prelude_file->start_pos);
-        if (!prelude_parsed.has_value()) {
-            const cstc::parser::ParseError& error = prelude_parsed.error();
-            if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-                throw std::runtime_error(
-                    "parse error " + std::string(resolved->file_name) + ":"
-                    + std::to_string(resolved->start.line) + ":"
-                    + std::to_string(resolved->start.column) + ": " + error.message);
-            }
+        if (!prelude_parsed.has_value())
             throw std::runtime_error(
-                "parse error [" + std::to_string(error.span.start) + ", "
-                + std::to_string(error.span.end) + "): " + error.message);
-        }
+                cstc::parser::format_parse_error(source_map, prelude_parsed.error()));
 
         prelude_program = *prelude_parsed;
     }
@@ -222,18 +214,8 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
         throw std::runtime_error("invalid source file id");
 
     const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
-    if (!parsed.has_value()) {
-        const cstc::parser::ParseError& error = parsed.error();
-        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-            throw std::runtime_error(
-                "parse error " + std::string(resolved->file_name) + ":"
-                + std::to_string(resolved->start.line) + ":"
-                + std::to_string(resolved->start.column) + ": " + error.message);
-        }
-        throw std::runtime_error(
-            "parse error [" + std::to_string(error.span.start) + ", "
-            + std::to_string(error.span.end) + "): " + error.message);
-    }
+    if (!parsed.has_value())
+        throw std::runtime_error(cstc::parser::format_parse_error(source_map, parsed.error()));
 
     // Merge
     cstc::ast::Program merged;
@@ -287,21 +269,9 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
         throw std::runtime_error("invalid source file id in render_ast");
 
     const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
-    if (!parsed.has_value()) {
-        const cstc::parser::ParseError& error = parsed.error();
-
-        if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-            throw std::runtime_error(
-                "parse error " + std::string(resolved->file_name) + ":"
-                + std::to_string(resolved->start.line) + ":"
-                + std::to_string(resolved->start.column) + " [" + std::to_string(error.span.start)
-                + ", " + std::to_string(error.span.end) + "): " + error.message);
-        }
-
+    if (!parsed.has_value())
         throw std::runtime_error(
-            "parse error [" + std::to_string(error.span.start) + ", "
-            + std::to_string(error.span.end) + "): " + error.message);
-    }
+            cstc::parser::format_parse_error(source_map, parsed.error(), true));
 
     return cstc::ast::format_program(*parsed);
 }
