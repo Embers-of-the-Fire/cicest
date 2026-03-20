@@ -1,4 +1,5 @@
 #include <cstc_ast/printer.hpp>
+#include <cstc_cli_support/support.hpp>
 #include <cstc_codegen/codegen.hpp>
 #include <cstc_lexer/lexer.hpp>
 #include <cstc_lexer/token.hpp>
@@ -6,17 +7,14 @@
 #include <cstc_lir_builder/builder.hpp>
 #include <cstc_parser/diagnostics.hpp>
 #include <cstc_parser/parser.hpp>
-#include <cstc_resource_path/resource_path.hpp>
 #include <cstc_span/span.hpp>
 #include <cstc_symbol/symbol.hpp>
 #include <cstc_tyir/printer.hpp>
 #include <cstc_tyir_builder/builder.hpp>
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <optional>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -79,43 +77,6 @@ struct Options {
     return options;
 }
 
-[[nodiscard]] std::string read_source_file(const std::filesystem::path& path) {
-    std::ifstream file(path, std::ios::binary);
-    if (!file)
-        throw std::runtime_error("failed to open input file: " + path.string());
-
-    std::ostringstream buffer;
-    buffer << file.rdbuf();
-    if (!file.good() && !file.eof())
-        throw std::runtime_error("failed while reading input file: " + path.string());
-    return buffer.str();
-}
-
-[[nodiscard]] bool paths_refer_to_same_file(
-    const std::filesystem::path& lhs, const std::filesystem::path& rhs,
-    std::string_view lhs_description, std::string_view rhs_description) {
-    std::error_code error;
-    const bool equivalent = std::filesystem::equivalent(lhs, rhs, error);
-    if (error) {
-        throw std::runtime_error(
-            "failed to compare " + std::string(lhs_description) + " '" + lhs.string() + "' with "
-            + std::string(rhs_description) + " '" + rhs.string() + "': " + error.message());
-    }
-
-    return equivalent;
-}
-
-[[nodiscard]] std::string format_type_error(
-    const cstc::span::SourceMap& source_map, const cstc::tyir_builder::LowerError& error) {
-    if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-        return "type error " + std::string(resolved->file_name) + ":"
-             + std::to_string(resolved->start.line) + ":" + std::to_string(resolved->start.column)
-             + ": " + error.message;
-    }
-
-    return "type error: " + error.message;
-}
-
 void write_output(std::string_view text, const std::optional<std::string>& output_path) {
     if (!output_path.has_value()) {
         std::cout << text;
@@ -170,81 +131,26 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     return output.str();
 }
 
-/// Parses the user source and merges it with the std prelude AST.
-///
-/// The prelude is loaded from `CICEST_STD_PATH/prelude.cst`, added to the
-/// source map as a separate file, parsed, and its items are prepended to the
-/// user program items.
-[[nodiscard]] cstc::ast::Program
-    parse_with_prelude(cstc::span::SourceMap& source_map, cstc::span::SourceFileId user_file_id) {
-    const std::filesystem::path prelude_path =
-        cstc::resource_path::resolve_std_dir(CICEST_STD_PATH) / "prelude.cst";
-
-    // Skip prelude injection when inspecting the prelude itself to avoid
-    // merging every declaration twice.
-    const cstc::span::SourceFile* user_source = source_map.file(user_file_id);
-    if (user_source == nullptr)
-        throw std::runtime_error("invalid source file id");
-
-    const bool inject_prelude =
-        !paths_refer_to_same_file(user_source->name, prelude_path, "input file", "std prelude");
-
-    // Parse prelude
-    cstc::ast::Program prelude_program;
-    if (inject_prelude) {
-        const std::string prelude_source = read_source_file(prelude_path);
-        const cstc::span::SourceFileId prelude_file_id =
-            source_map.add_file(prelude_path.string(), prelude_source);
-        const cstc::span::SourceFile* prelude_file = source_map.file(prelude_file_id);
-        if (prelude_file == nullptr)
-            throw std::runtime_error("invalid source file id for std prelude");
-
-        const auto prelude_parsed =
-            cstc::parser::parse_source_at(prelude_file->source, prelude_file->start_pos);
-        if (!prelude_parsed.has_value())
-            throw std::runtime_error(
-                cstc::parser::format_parse_error(source_map, prelude_parsed.error()));
-
-        prelude_program = *prelude_parsed;
-    }
-
-    // Parse user source
-    const cstc::span::SourceFile* source_file = source_map.file(user_file_id);
-    if (source_file == nullptr)
-        throw std::runtime_error("invalid source file id");
-
-    const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
-    if (!parsed.has_value())
-        throw std::runtime_error(cstc::parser::format_parse_error(source_map, parsed.error()));
-
-    // Merge
-    cstc::ast::Program merged;
-    merged.items.reserve(prelude_program.items.size() + parsed->items.size());
-    for (const auto& item : prelude_program.items)
-        merged.items.push_back(item);
-    for (const auto& item : parsed->items)
-        merged.items.push_back(item);
-    return merged;
-}
-
 [[nodiscard]] std::string
     render_tyir(cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
-    const auto merged = parse_with_prelude(source_map, file_id);
+    const auto merged =
+        cstc::cli_support::parse_with_std_prelude(source_map, file_id, CICEST_STD_PATH);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value())
-        throw std::runtime_error(format_type_error(source_map, lowered.error()));
+        throw std::runtime_error(cstc::cli_support::format_type_error(source_map, lowered.error()));
 
     return cstc::tyir::format_program(*lowered);
 }
 
 [[nodiscard]] std::string
     render_lir(cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
-    const auto merged = parse_with_prelude(source_map, file_id);
+    const auto merged =
+        cstc::cli_support::parse_with_std_prelude(source_map, file_id, CICEST_STD_PATH);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value())
-        throw std::runtime_error(format_type_error(source_map, lowered.error()));
+        throw std::runtime_error(cstc::cli_support::format_type_error(source_map, lowered.error()));
 
     const auto lir = cstc::lir_builder::lower_program(*lowered);
     return cstc::lir::format_program(lir);
@@ -252,11 +158,12 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 
 [[nodiscard]] std::string
     render_llvm(cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
-    const auto merged = parse_with_prelude(source_map, file_id);
+    const auto merged =
+        cstc::cli_support::parse_with_std_prelude(source_map, file_id, CICEST_STD_PATH);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value())
-        throw std::runtime_error(format_type_error(source_map, lowered.error()));
+        throw std::runtime_error(cstc::cli_support::format_type_error(source_map, lowered.error()));
 
     const auto lir = cstc::lir_builder::lower_program(*lowered);
     return cstc::codegen::emit_llvm_ir(lir);
@@ -281,7 +188,7 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 int main(int argc, char** argv) {
     try {
         const Options options = parse_options(argc, argv);
-        const std::string source = read_source_file(options.input_path);
+        const std::string source = cstc::cli_support::read_source_file(options.input_path);
 
         cstc::symbol::SymbolSession session;
         cstc::span::SourceMap source_map;

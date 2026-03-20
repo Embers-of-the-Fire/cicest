@@ -9,6 +9,7 @@ target_compile_definitions(cstc_inspect PRIVATE
 target_link_libraries(cstc_inspect
     PRIVATE
         cstc_ast
+        cstc_cli_support
         cstc_codegen
         cstc_lexer
         cstc_lir
