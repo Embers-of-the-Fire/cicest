@@ -20,6 +20,16 @@
 
 namespace cstc::resource_path {
 
+/// Platform-correct filename for the runtime static library.
+///
+/// CMake produces `libcicest_rt.a` on GNU-like toolchains and `cicest_rt.lib`
+/// on MSVC, so the installed-layout probe must match.
+#if defined(_MSC_VER)
+inline constexpr const char* rt_library_filename = "cicest_rt.lib";
+#else
+inline constexpr const char* rt_library_filename = "libcicest_rt.a";
+#endif
+
 [[nodiscard]] inline std::filesystem::path
     normalize_existing_path(const std::filesystem::path& path) {
     std::error_code ec;
@@ -151,14 +161,15 @@ namespace cstc::resource_path {
 
 /// Returns the path to the runtime static library.
 ///
-/// Searches `<exe_dir>/../lib/cicest/libcicest_rt.a` first (installed layout),
-/// then falls back to the compile-time runtime archive path (development
-/// builds).
+/// Searches `<exe_dir>/../lib/cicest/<rt_library_filename>` first (installed
+/// layout), then falls back to the compile-time runtime archive path
+/// (development builds). The filename is derived from `rt_library_filename`
+/// so it matches the archive name CMake produces for the current toolchain.
 [[nodiscard]] inline std::filesystem::path
     resolve_rt_path(const std::filesystem::path& fallback_rt_path) {
     const auto bin_dir = self_exe_dir();
     if (!bin_dir.empty()) {
-        const auto installed = bin_dir / ".." / "lib" / "cicest" / "libcicest_rt.a";
+        const auto installed = bin_dir / ".." / "lib" / "cicest" / rt_library_filename;
         if (path_exists(installed, "installed runtime static library"))
             return canonicalize_or_throw(installed, "installed runtime static library");
     }

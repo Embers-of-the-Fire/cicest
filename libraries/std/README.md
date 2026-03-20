@@ -35,7 +35,8 @@ functions, and the actual implementations are supplied at link time.
 ## Runtime
 
 The actual implementations of prelude functions live in `runtime.c`. This file
-is compiled into a static library (`libcicest_rt.a`) by CMake and automatically
+is compiled into a static library (`libcicest_rt.a` on GNU-like toolchains,
+`cicest_rt.lib` on MSVC) by CMake and automatically
 linked into every executable produced by the compiler.
 
 | Cicest declaration | C signature |

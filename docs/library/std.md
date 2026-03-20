@@ -105,17 +105,20 @@ In LLVM IR, extern structs are emitted as empty struct types:
 
 The actual implementations of the prelude functions live in
 `libraries/std/runtime.c`. This file is compiled into a static library
-(`libcicest_rt.a`) by CMake and automatically linked into every executable
-produced by the compiler.
+(`libcicest_rt.a` on GNU-like toolchains, `cicest_rt.lib` on MSVC) by CMake and
+automatically linked into every executable produced by the compiler.
 
-The runtime path is resolved at startup: the compiler first checks for
-`<exe_dir>/../lib/cicest/libcicest_rt.a` (installed layout), then falls back to
-the `CICEST_RT_PATH` compile definition (development builds). When the compiler
-invokes the linker, it passes the runtime archive as a positional argument
-alongside the user's object file:
+The runtime path is resolved at startup: the compiler first checks for the
+platform-appropriate archive under `<exe_dir>/../lib/cicest/` (installed
+layout), then falls back to the `CICEST_RT_PATH` compile definition (development
+builds). The filename is derived at compile time so it matches the archive name
+CMake produces for the current toolchain. When the compiler invokes the linker,
+it passes the runtime archive as a positional argument alongside the user's
+object file:
 
 ```
-c++  user.o  /path/to/libcicest_rt.a  -o  user
+c++  user.o  /path/to/libcicest_rt.a  -o  user       # GNU / MinGW
+cl   user.obj  /path/to/cicest_rt.lib  /Fe:user.exe   # MSVC
 ```
 
 ### Runtime function signatures
