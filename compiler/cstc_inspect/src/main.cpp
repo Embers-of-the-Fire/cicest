@@ -90,6 +90,20 @@ struct Options {
     return buffer.str();
 }
 
+[[nodiscard]] bool paths_refer_to_same_file(
+    const std::filesystem::path& lhs, const std::filesystem::path& rhs,
+    std::string_view lhs_description, std::string_view rhs_description) {
+    std::error_code error;
+    const bool equivalent = std::filesystem::equivalent(lhs, rhs, error);
+    if (error) {
+        throw std::runtime_error(
+            "failed to compare " + std::string(lhs_description) + " '" + lhs.string() + "' with "
+            + std::string(rhs_description) + " '" + rhs.string() + "': " + error.message());
+    }
+
+    return equivalent;
+}
+
 [[nodiscard]] std::string format_type_error(
     const cstc::span::SourceMap& source_map, const cstc::tyir_builder::LowerError& error) {
     if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
@@ -171,10 +185,8 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     if (user_source == nullptr)
         throw std::runtime_error("invalid source file id");
 
-    const bool inject_prelude = [&] {
-        std::error_code ec;
-        return !std::filesystem::equivalent(user_source->name, prelude_path, ec);
-    }();
+    const bool inject_prelude =
+        !paths_refer_to_same_file(user_source->name, prelude_path, "input file", "std prelude");
 
     // Parse prelude
     cstc::ast::Program prelude_program;

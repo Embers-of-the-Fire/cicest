@@ -24,6 +24,11 @@
 #ifdef _WIN32
 # include <process.h>
 #elif defined(__unix__) || defined(__APPLE__)
+# ifdef __APPLE__
+#  include <crt_externs.h>
+# else
+#  include <unistd.h>
+# endif
 # include <spawn.h>
 # include <sys/wait.h>
 #endif
@@ -236,6 +241,30 @@ void ensure_parent_directory(const std::filesystem::path& path) {
 #endif
 }
 
+[[nodiscard]] bool paths_refer_to_same_file(
+    const std::filesystem::path& lhs, const std::filesystem::path& rhs,
+    std::string_view lhs_description, std::string_view rhs_description) {
+    std::error_code error;
+    const bool equivalent = std::filesystem::equivalent(lhs, rhs, error);
+    if (error) {
+        throw std::runtime_error(
+            "failed to compare " + std::string(lhs_description) + " '" + lhs.string() + "' with "
+            + std::string(rhs_description) + " '" + rhs.string() + "': " + error.message());
+    }
+
+    return equivalent;
+}
+
+#if defined(__unix__) || defined(__APPLE__)
+[[nodiscard]] char** process_environment() {
+# ifdef __APPLE__
+    return *_NSGetEnviron();
+# else
+    return ::environ;
+# endif
+}
+#endif
+
 void link_object_to_executable(
     const std::filesystem::path& object_path, const std::filesystem::path& executable_path,
     const Options& options) {
@@ -277,8 +306,8 @@ void link_object_to_executable(
     argv.push_back(nullptr);
 
     pid_t child_pid = 0;
-    const int spawn_error =
-        posix_spawnp(&child_pid, linker_program.c_str(), nullptr, nullptr, argv.data(), environ);
+    const int spawn_error = posix_spawnp(
+        &child_pid, linker_program.c_str(), nullptr, nullptr, argv.data(), process_environment());
     if (spawn_error != 0) {
         throw std::runtime_error(
             "failed to start linker '" + linker_program + "': " + std::strerror(spawn_error));
@@ -316,10 +345,8 @@ void compile_file(const Options& options) {
 
     // Skip prelude injection when compiling the prelude itself to avoid
     // merging every declaration twice.
-    const bool inject_prelude = [&] {
-        std::error_code ec;
-        return !std::filesystem::equivalent(options.input_path, prelude_path, ec);
-    }();
+    const bool inject_prelude =
+        !paths_refer_to_same_file(options.input_path, prelude_path, "input file", "std prelude");
 
     cstc::ast::Program prelude_program;
     if (inject_prelude) {
