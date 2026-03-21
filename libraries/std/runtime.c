@@ -11,7 +11,10 @@
 ///   str_concat(ptr,ptr) → ptr
 ///   str_len(ptr)        → double
 ///   str_free(ptr)       → void
+///   assert(i1)          → void
+///   assert_eq(double,double) → void
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,3 +61,18 @@ char* str_concat(const char* a, const char* b) {
 double str_len(const char* value) { return (double)strlen(value); }
 
 void str_free(const char* value) { free((void*)value); }
+
+void assert(int condition) {
+    if (!condition) {
+        fputs("assertion failed\n", stderr);
+        exit(1);
+    }
+}
+
+void assert_eq(double a, double b) {
+    const double epsilon = 1e-9;
+    if (fabs(a - b) > epsilon) {
+        fprintf(stderr, "assertion failed: %g != %g\n", a, b);
+        exit(1);
+    }
+}
