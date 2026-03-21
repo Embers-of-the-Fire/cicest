@@ -29,6 +29,7 @@ set(e2e_failures "")
 foreach(kind IN LISTS e2e_suite_kinds)
     set(test_dir "${E2E_SOURCE_DIR}/${kind}")
     set(report_path "${e2e_report_dir}/${kind}.json")
+    file(REMOVE "${report_path}")
 
     execute_process(
         COMMAND
