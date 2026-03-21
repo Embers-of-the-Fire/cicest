@@ -29,12 +29,16 @@ Behavior by platform:
     - Runs `.github/scripts/run-platform-tests.sh windows`
     - Configures CMake with `-DCICEST_BUILD_E2E_TESTS=OFF`, so the MinGW leg builds the
       project and runs non-e2e tests only
+    - This leg is non-blocking (`continue-on-error`) so CI can stay green if MinGW support is temporarily unavailable
   - **MSVC path**
     - Sets up the Visual Studio developer command environment
-    - Installs LLVM (`choco install llvm`)
+    - Installs LLVM and Ninja (`choco install llvm ninja`)
     - Runs `.github/scripts/run-msvc-tests.ps1`
-    - If LLVM CMake metadata is unavailable, the script skips this optional run
-  - Both Windows legs are non-blocking (`continue-on-error`) so CI remains green if Windows support is temporarily unavailable
+    - Prefers a Rust-style `Ninja + clang-cl` build on Windows, with a `Visual Studio 2022 + ClangCL` fallback if Ninja is unavailable
+    - Uses the installed LLVM if it exposes `LLVMConfig.cmake`; otherwise downloads the matching `clang+llvm-<version>-x86_64-pc-windows-msvc.tar.xz` developer archive as a fallback
+    - Runs the full CTest suite and then a CLI end-to-end smoke test that builds and executes a sample program through `cstc` / `cstc_inspect`
+    - If LLVM CMake metadata is unavailable, the script fails instead of skipping so this leg remains required
+    - This leg is required, alongside Linux and macOS
 
 ## 2) `Lint and Format` workflow
 
