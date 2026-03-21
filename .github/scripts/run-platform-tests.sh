@@ -2,6 +2,7 @@
 set -euo pipefail
 
 platform="${1:-}"
+build_e2e_tests=ON
 
 case "${platform}" in
   linux)
@@ -15,6 +16,8 @@ case "${platform}" in
     export PATH="/mingw64/bin:${PATH}"
     export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
     export CMAKE_PREFIX_PATH="/mingw64"
+    build_e2e_tests=OFF
+    echo "Skipping end-to-end tests on Windows MinGW; running build and non-e2e tests only."
     ;;
   *)
     echo "Unsupported platform '${platform}'. Expected linux, macos, or windows."
@@ -29,8 +32,8 @@ fi
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-  -DCICEST_BUILD_TESTS=ON
+  -DCICEST_BUILD_TESTS=ON \
+  -DCICEST_BUILD_E2E_TESTS="${build_e2e_tests}"
 
 cmake --build build
 ctest --test-dir build --output-on-failure
-

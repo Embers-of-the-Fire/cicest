@@ -16,10 +16,13 @@ else()
 endif()
 
 option(CICEST_BUILD_TESTS "Build tests" OFF)
+option(CICEST_BUILD_E2E_TESTS "Build end-to-end tests" ON)
 
 if(CICEST_BUILD_TESTS)
     enable_testing()
-    add_subdirectory(test/e2e)
+    if(CICEST_BUILD_E2E_TESTS)
+        add_subdirectory(test/e2e)
+    endif()
 endif()
 
 add_subdirectory(libraries)

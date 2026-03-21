@@ -1,3 +1,4 @@
+#include <cstc/linker_selection.hpp>
 #include <cstc_cli_support/support.hpp>
 #include <cstc_codegen/codegen.hpp>
 #include <cstc_lir_builder/builder.hpp>
@@ -188,6 +189,94 @@ void ensure_parent_directory(const std::filesystem::path& path) {
             "failed to create output directory '" + parent.string() + "': " + error.message());
 }
 
+[[nodiscard]] bool path_exists(const std::filesystem::path& path) {
+    std::error_code error;
+    return std::filesystem::exists(path, error) && !error;
+}
+
+[[nodiscard]] std::vector<std::string> executable_name_candidates(std::string_view program) {
+#ifdef _WIN32
+    const std::filesystem::path path(program);
+    if (path.has_extension())
+        return {std::string(program)};
+
+    std::vector<std::string> candidates;
+    const char* pathext = std::getenv("PATHEXT");
+    std::string_view extensions = ".COM;.EXE;.BAT;.CMD";
+    if (pathext != nullptr && pathext[0] != '\0')
+        extensions = pathext;
+
+    std::size_t start = 0;
+    while (start <= extensions.size()) {
+        const std::size_t end = extensions.find(';', start);
+        const std::string_view extension = extensions.substr(start, end - start);
+        if (!extension.empty())
+            candidates.push_back(std::string(program) + std::string(extension));
+        if (end == std::string_view::npos)
+            break;
+        start = end + 1;
+    }
+
+    candidates.push_back(std::string(program));
+    return candidates;
+#else
+    return {std::string(program)};
+#endif
+}
+
+[[nodiscard]] bool is_program_available(std::string_view program) {
+    if (program.empty())
+        return false;
+
+    for (const std::string& candidate : executable_name_candidates(program)) {
+        const std::filesystem::path candidate_path(candidate);
+        if (candidate_path.is_absolute() || candidate_path.has_parent_path()) {
+            if (path_exists(candidate_path))
+                return true;
+        }
+    }
+
+    const char* path_env = std::getenv("PATH");
+    if (path_env == nullptr || path_env[0] == '\0')
+        return false;
+
+#ifdef _WIN32
+    constexpr char path_separator = ';';
+#else
+    constexpr char path_separator = ':';
+#endif
+
+    std::string_view path_entries = path_env;
+    std::size_t start = 0;
+    while (start <= path_entries.size()) {
+        const std::size_t end = path_entries.find(path_separator, start);
+        const std::string_view entry = path_entries.substr(start, end - start);
+        const std::filesystem::path directory =
+            entry.empty() ? std::filesystem::current_path() : std::filesystem::path(entry);
+
+        for (const std::string& candidate : executable_name_candidates(program)) {
+            if (path_exists(directory / candidate))
+                return true;
+        }
+
+        if (end == std::string_view::npos)
+            break;
+        start = end + 1;
+    }
+
+    return false;
+}
+
+[[nodiscard]] std::string
+    find_available_program(std::initializer_list<std::string_view> candidates) {
+    for (const std::string_view candidate : candidates) {
+        if (is_program_available(candidate))
+            return std::string(candidate);
+    }
+
+    return "";
+}
+
 [[nodiscard]] std::string resolve_linker_program(const Options& options) {
     if (options.linker.has_value() && !options.linker->empty())
         return *options.linker;
@@ -195,15 +284,13 @@ void ensure_parent_directory(const std::filesystem::path& path) {
     if (const char* cxx = std::getenv("CXX"); cxx != nullptr && cxx[0] != '\0')
         return cxx;
 
-#ifdef _WIN32
-# if defined(__MINGW32__) || defined(__MINGW64__)
-    return "c++";
-# else
-    return "clang++";
-# endif
-#else
-    return "c++";
-#endif
+    const cstc::cli::LinkerFlavor flavor = cstc::cli::host_linker_flavor();
+    for (const std::string_view candidate : cstc::cli::linker_candidates(flavor)) {
+        if (std::string linker = find_available_program({candidate}); !linker.empty())
+            return linker;
+    }
+
+    return std::string(cstc::cli::fallback_linker_program(flavor));
 }
 
 #if defined(__unix__) || defined(__APPLE__)

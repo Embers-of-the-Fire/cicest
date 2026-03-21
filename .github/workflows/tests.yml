@@ -83,7 +83,7 @@ jobs:
         shell: bash
         run: bash .github/scripts/run-platform-tests.sh "${{ matrix.platform }}"
 
-      - name: Run test suite (Windows)
+      - name: Run test suite (Windows, MinGW without e2e)
         if: matrix.platform == 'windows'
         shell: msys2 {0}
         run: bash .github/scripts/run-platform-tests.sh "${{ matrix.platform }}"
