@@ -279,7 +279,7 @@ private:
     return relative.generic_string();
 }
 
-[[nodiscard]] fs::path resolve_executable_path(const fs::path& output_stem) {
+[[nodiscard]] std::optional<fs::path> resolve_executable_path(const fs::path& output_stem) {
     if (fs::exists(output_stem))
         return output_stem;
 
@@ -290,7 +290,7 @@ private:
         return candidate;
 #endif
 
-    return output_stem;
+    return std::nullopt;
 }
 
 [[nodiscard]] TestResult run_test(const fs::path& test_file, const Config& config) {
@@ -341,8 +341,14 @@ private:
         return result;
     }
 
-    const fs::path executable_path = resolve_executable_path(output_stem);
-    const ExecResult run_result = execute_command({executable_path.string()});
+    const std::optional<fs::path> executable_path = resolve_executable_path(output_stem);
+    if (!executable_path.has_value()) {
+        result.error_message = "compilation succeeded but did not produce executable artifact: "
+                             + output_stem.string();
+        return result;
+    }
+
+    const ExecResult run_result = execute_command({executable_path->string()});
 
     if (config.kind == TestKind::Pass) {
         if (!run_result.exited_successfully()) {
