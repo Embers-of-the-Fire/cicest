@@ -122,6 +122,24 @@ private:
     return buffer.str();
 }
 
+[[nodiscard]] std::string normalize_line_endings(std::string_view value) {
+    std::string normalized;
+    normalized.reserve(value.size());
+
+    for (std::size_t index = 0; index < value.size(); ++index) {
+        if (value[index] == '\r') {
+            normalized += '\n';
+            if (index + 1 < value.size() && value[index + 1] == '\n')
+                ++index;
+            continue;
+        }
+
+        normalized += value[index];
+    }
+
+    return normalized;
+}
+
 [[nodiscard]] std::string escape_json(std::string_view value) {
     std::string escaped;
     escaped.reserve(value.size());
@@ -292,10 +310,11 @@ private:
         fs::path expected_stderr = test_file;
         expected_stderr.replace_extension(".stderr");
         if (fs::exists(expected_stderr)) {
-            const std::string expected = read_file(expected_stderr);
-            if (compile_result.stderr_output != expected) {
-                result.error_message = format_output_difference(
-                    "compiler stderr", expected, compile_result.stderr_output);
+            const std::string expected = normalize_line_endings(read_file(expected_stderr));
+            const std::string actual = normalize_line_endings(compile_result.stderr_output);
+            if (actual != expected) {
+                result.error_message =
+                    format_output_difference("compiler stderr", expected, actual);
                 return result;
             }
         }
@@ -321,10 +340,10 @@ private:
         fs::path expected_stdout = test_file;
         expected_stdout.replace_extension(".stdout");
         if (fs::exists(expected_stdout)) {
-            const std::string expected = read_file(expected_stdout);
-            if (run_result.stdout_output != expected) {
-                result.error_message =
-                    format_output_difference("stdout", expected, run_result.stdout_output);
+            const std::string expected = normalize_line_endings(read_file(expected_stdout));
+            const std::string actual = normalize_line_endings(run_result.stdout_output);
+            if (actual != expected) {
+                result.error_message = format_output_difference("stdout", expected, actual);
                 return result;
             }
         }
@@ -346,10 +365,10 @@ private:
     fs::path expected_stderr = test_file;
     expected_stderr.replace_extension(".stderr");
     if (fs::exists(expected_stderr)) {
-        const std::string expected = read_file(expected_stderr);
-        if (run_result.stderr_output != expected) {
-            result.error_message =
-                format_output_difference("runtime stderr", expected, run_result.stderr_output);
+        const std::string expected = normalize_line_endings(read_file(expected_stderr));
+        const std::string actual = normalize_line_endings(run_result.stderr_output);
+        if (actual != expected) {
+            result.error_message = format_output_difference("runtime stderr", expected, actual);
             return result;
         }
     }
