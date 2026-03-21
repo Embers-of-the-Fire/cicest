@@ -1,0 +1,4 @@
+fn main() {
+    let x: num = "not a number";
+    println("This should not compile");
+}

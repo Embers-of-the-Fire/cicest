@@ -1,0 +1,10 @@
+fn add(a: num, b: num) -> num {
+    return a + b;
+}
+
+fn main() {
+    let result = add(10.0, 20.0);
+    assert_eq(result, 30.0);
+
+    println("Function calls work correctly!");
+}

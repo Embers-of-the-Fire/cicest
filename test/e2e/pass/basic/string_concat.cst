@@ -1,0 +1,8 @@
+fn main() {
+    let hello = "Hello, ";
+    let world = "World!";
+    let result = str_concat(hello, world);
+
+    println(result);
+    str_free(result);
+}

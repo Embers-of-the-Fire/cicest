@@ -19,6 +19,7 @@ option(CICEST_BUILD_TESTS "Build tests" OFF)
 
 if(CICEST_BUILD_TESTS)
     enable_testing()
+    add_subdirectory(test/e2e)
 endif()
 
 add_subdirectory(libraries)
