@@ -144,14 +144,27 @@ private:
     std::string escaped;
     escaped.reserve(value.size());
 
+    constexpr std::string_view hex_digits = "0123456789abcdef";
     for (const char ch : value) {
+        const auto byte = static_cast<unsigned char>(ch);
         switch (ch) {
         case '\\': escaped += "\\\\"; break;
         case '"': escaped += "\\\""; break;
+        case '\b': escaped += "\\b"; break;
+        case '\f': escaped += "\\f"; break;
         case '\n': escaped += "\\n"; break;
         case '\r': escaped += "\\r"; break;
         case '\t': escaped += "\\t"; break;
-        default: escaped += ch; break;
+        default:
+            if (byte < 0x20U) {
+                escaped += "\\u00";
+                escaped += hex_digits[byte >> 4U];
+                escaped += hex_digits[byte & 0x0FU];
+                break;
+            }
+
+            escaped += ch;
+            break;
         }
     }
 
