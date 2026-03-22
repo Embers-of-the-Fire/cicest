@@ -28,6 +28,17 @@ inline void indent(std::ostringstream& output, std::size_t level) {
     output << std::string(level * 2, ' ');
 }
 
+inline void print_attributes(
+    std::ostringstream& output, const std::vector<Attribute>& attributes, std::size_t level) {
+    for (const Attribute& attribute : attributes) {
+        indent(output, level);
+        output << "Attribute [[" << attribute.name.as_str();
+        if (attribute.value.has_value())
+            output << " = \"" << attribute.value->as_str() << "\"";
+        output << "]]\n";
+    }
+}
+
 [[nodiscard]] inline std::string_view type_name(const TypeRef& type) {
     if (type.symbol.is_valid())
         return type.symbol.as_str();
@@ -256,6 +267,7 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
         [&](const auto& node) {
             using ItemType = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<ItemType, StructDecl>) {
+                print_attributes(output, node.attributes, level);
                 indent(output, level);
                 if (node.is_zst) {
                     output << "StructDecl " << node.name.as_str() << " ;\n";
@@ -267,6 +279,7 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                     }
                 }
             } else if constexpr (std::is_same_v<ItemType, EnumDecl>) {
+                print_attributes(output, node.attributes, level);
                 indent(output, level);
                 output << "EnumDecl " << node.name.as_str() << "\n";
                 for (const EnumVariant& variant : node.variants) {
@@ -277,6 +290,7 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                     output << "\n";
                 }
             } else if constexpr (std::is_same_v<ItemType, FnDecl>) {
+                print_attributes(output, node.attributes, level);
                 indent(output, level);
                 output << "FnDecl " << node.name.as_str() << "(";
                 for (std::size_t index = 0; index < node.params.size(); ++index) {
@@ -291,6 +305,7 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                 output << "\n";
                 print_block(output, node.body, level + 1);
             } else if constexpr (std::is_same_v<ItemType, ExternFnDecl>) {
+                print_attributes(output, node.attributes, level);
                 indent(output, level);
                 output << "ExternFnDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
                        << "(";
@@ -305,6 +320,7 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                     output << " -> " << type_name(*node.return_type);
                 output << "\n";
             } else if constexpr (std::is_same_v<ItemType, ExternStructDecl>) {
+                print_attributes(output, node.attributes, level);
                 indent(output, level);
                 output << "ExternStructDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
                        << "\n";

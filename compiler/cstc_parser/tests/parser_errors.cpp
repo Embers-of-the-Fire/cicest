@@ -42,6 +42,11 @@ void test_error_attribute_without_item() {
     expect_error("[[foo]]", "expected item after attributes");
 }
 
+void test_error_single_bracket_between_attributes_and_item() {
+    cstc::symbol::SymbolSession session;
+    expect_error("[[a]] [b] fn f() { }", "expected second `[` to start attribute");
+}
+
 // ---------------------------------------------------------------------------
 // Struct declaration errors
 // ---------------------------------------------------------------------------
@@ -193,6 +198,7 @@ int main() {
     test_error_attribute_missing_name();
     test_error_attribute_non_string_value();
     test_error_attribute_without_item();
+    test_error_single_bracket_between_attributes_and_item();
     test_error_struct_missing_name();
     test_error_struct_missing_brace_or_semi();
     test_error_struct_missing_close_brace();

@@ -579,12 +579,11 @@ private:
     }
 
     [[nodiscard]] std::expected<std::vector<ast::Attribute>, ParseError> parse_attributes() {
-        if (check(TokenKind::LBracket) && peek(1).kind != TokenKind::LBracket) {
-            return std::unexpected(make_error_here("expected second `[` to start attribute"));
-        }
-
         std::vector<ast::Attribute> attributes;
-        while (check_attribute_start()) {
+        while (check(TokenKind::LBracket)) {
+            if (!check_attribute_start()) {
+                return std::unexpected(make_error_here("expected second `[` to start attribute"));
+            }
             auto attribute = parse_attribute();
             if (!attribute.has_value())
                 return std::unexpected(attribute.error());
