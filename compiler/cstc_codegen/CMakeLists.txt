@@ -45,8 +45,6 @@ endif()
 find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 
-set(LLVM_LIBS LLVM)
-
 add_library(cstc_codegen STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/codegen.cpp
 )
@@ -71,10 +69,22 @@ target_link_libraries(cstc_codegen
     PUBLIC
         cstc_lir
     PRIVATE
-        ${LLVM_LIBS}
+        $<$<NOT:$<BOOL:${MSVC}>>:LLVM>
         cicest_options
         cicest_warnings
 )
+
+if(MSVC)
+    llvm_config(cstc_codegen
+        core
+        native
+        nativecodegen
+        passes
+        support
+        targetparser
+        transformutils
+    )
+endif()
 
 if(CICEST_BUILD_TESTS)
     file(GLOB glob_test_sources ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp)

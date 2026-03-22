@@ -110,6 +110,93 @@ function Get-LlvmArchiveVersion {
     throw "Could not determine the LLVM version needed for the Windows developer archive fallback."
 }
 
+function Resolve-LatestVisualStudioInstallRoot {
+    if ($env:VSINSTALLDIR) {
+        $resolvedVsInstallDir = Resolve-ExistingPath $env:VSINSTALLDIR
+        if ($resolvedVsInstallDir) {
+            return $resolvedVsInstallDir.TrimEnd('\', '/')
+        }
+    }
+
+    $vswherePath = Resolve-ExistingPath (Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe")
+    if (-not $vswherePath) {
+        return $null
+    }
+
+    $installationPath = & $vswherePath `
+        -latest `
+        -products * `
+        -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+        -property installationPath 2>$null |
+        Select-Object -First 1
+
+    $resolvedInstallationPath = Resolve-ExistingPath $installationPath
+    if ($resolvedInstallationPath) {
+        return $resolvedInstallationPath.TrimEnd('\', '/')
+    }
+
+    return $null
+}
+
+function Repair-LlvmArchiveVisualStudioReferences {
+    param(
+        [string]$ExtractRoot
+    )
+
+    $resolvedExtractRoot = Resolve-ExistingPath $ExtractRoot
+    if (-not $resolvedExtractRoot) {
+        return
+    }
+
+    $vsInstallRoot = Resolve-LatestVisualStudioInstallRoot
+    if (-not $vsInstallRoot) {
+        Write-Warning "Could not resolve the latest Visual Studio installation. Leaving LLVM CMake exports unchanged."
+        return
+    }
+
+    $cmakeFiles = Get-ChildItem -Path $resolvedExtractRoot -Filter *.cmake -Recurse -File -ErrorAction SilentlyContinue
+    if (-not $cmakeFiles) {
+        return
+    }
+
+    $visualStudioPathPattern =
+        '(?<full>(?<root>[A-Za-z]:[/\\]Program Files \(x86\)[/\\]Microsoft Visual Studio[/\\]\d{4}[/\\][^/"\\\r\n]+[/\\])(?<relative>[^"\r\n]+?\.(?:lib|dll))))'
+    $normalizedVsInstallRoot = ($vsInstallRoot -replace '\\', '/').TrimEnd('/')
+    $rewrittenReferenceCount = 0
+
+    foreach ($cmakeFile in $cmakeFiles) {
+        $content = Get-Content -LiteralPath $cmakeFile.FullName -Raw
+        $updatedContent = $content
+        $fileRewriteCount = 0
+
+        foreach ($match in ([regex]::Matches($content, $visualStudioPathPattern) | Select-Object -Unique)) {
+            $relativePath = $match.Groups['relative'].Value -replace '[\\/]', [IO.Path]::DirectorySeparatorChar
+            $candidatePath = Join-Path $vsInstallRoot $relativePath
+            $resolvedCandidatePath = Resolve-ExistingPath $candidatePath
+            if (-not $resolvedCandidatePath) {
+                continue
+            }
+
+            $normalizedCandidatePath = $resolvedCandidatePath -replace '\\', '/'
+            if ($match.Groups['full'].Value -eq $normalizedCandidatePath) {
+                continue
+            }
+
+            $updatedContent = $updatedContent.Replace($match.Groups['full'].Value, $normalizedCandidatePath)
+            $fileRewriteCount++
+        }
+
+        if ($fileRewriteCount -gt 0) {
+            Set-Content -LiteralPath $cmakeFile.FullName -Value $updatedContent -Encoding utf8NoBOM
+            $rewrittenReferenceCount += $fileRewriteCount
+        }
+    }
+
+    if ($rewrittenReferenceCount -gt 0) {
+        Write-Host "Rewrote $rewrittenReferenceCount LLVM Visual Studio path reference(s) to use $normalizedVsInstallRoot."
+    }
+}
+
 function Install-LlvmDeveloperArchiveFallback {
     param(
         [string]$Version
@@ -129,6 +216,7 @@ function Install-LlvmDeveloperArchiveFallback {
     Invoke-WebRequest -Uri $archiveUrl -OutFile $archivePath
     New-Item -Path $extractRoot -ItemType Directory -Force | Out-Null
     tar -xf $archivePath -C $extractRoot
+    Repair-LlvmArchiveVisualStudioReferences $extractRoot
 
     $llvmConfig = Get-ChildItem -Path $extractRoot -Filter LLVMConfig.cmake -Recurse -File -ErrorAction Stop |
         Where-Object { $_.FullName -match "lib\\cmake\\llvm\\LLVMConfig\.cmake$" } |

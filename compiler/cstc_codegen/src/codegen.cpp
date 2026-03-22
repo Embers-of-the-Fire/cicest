@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include <llvm/Config/llvm-config.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
@@ -155,21 +156,31 @@ private:
     [[nodiscard]] std::unique_ptr<llvm::TargetMachine> create_native_target_machine() {
         initialize_native_target_once();
 
-        const llvm::Triple target_triple(llvm::sys::getDefaultTargetTriple());
+        const std::string target_triple_string = llvm::sys::getDefaultTargetTriple();
+        const llvm::Triple target_triple(target_triple_string);
         std::string target_error;
         const llvm::Target* target =
-            llvm::TargetRegistry::lookupTarget(target_triple, target_error);
+            llvm::TargetRegistry::lookupTarget(target_triple_string, target_error);
         if (target == nullptr)
             throw std::runtime_error("failed to resolve LLVM target: " + target_error);
 
         llvm::TargetOptions target_options;
         auto target_machine = std::unique_ptr<llvm::TargetMachine>(target->createTargetMachine(
-            target_triple, "generic", "", target_options, llvm::Reloc::PIC_));
+#if LLVM_VERSION_MAJOR >= 21
+            target_triple,
+#else
+            target_triple_string,
+#endif
+            "generic", "", target_options, llvm::Reloc::PIC_));
         if (target_machine == nullptr)
             throw std::runtime_error(
-                "failed to create LLVM target machine for: " + target_triple.str());
+                "failed to create LLVM target machine for: " + target_triple_string);
 
+#if LLVM_VERSION_MAJOR >= 21
         module_.setTargetTriple(target_triple);
+#else
+        module_.setTargetTriple(target_triple_string);
+#endif
         module_.setDataLayout(target_machine->createDataLayout());
         return target_machine;
     }
