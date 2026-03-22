@@ -166,6 +166,24 @@ void test_struct_attributes_rendered() {
     assert(out.find("StructDecl Tagged ;") != std::string::npos);
 }
 
+void test_struct_attribute_values_are_escaped() {
+    cstc::symbol::SymbolSession session;
+    cstc::ast::Program prog;
+    cstc::ast::StructDecl s;
+    s.name = cstc::symbol::Symbol::intern("Escaped");
+    s.is_zst = true;
+    s.attributes.push_back({
+        .name = cstc::symbol::Symbol::intern("value"),
+        .value = cstc::symbol::Symbol::intern("quote\" slash\\ line\nnext"),
+        .span = {},
+    });
+    prog.items.push_back(std::move(s));
+
+    const std::string out = cstc::ast::format_program(prog);
+    assert(
+        out.find("Attribute [[value = \"quote\\\" slash\\\\ line\\nnext\"]]") != std::string::npos);
+}
+
 void test_enum_plain_variants() {
     cstc::symbol::SymbolSession session;
     cstc::ast::Program prog;
@@ -614,6 +632,7 @@ int main() {
     test_zst_struct();
     test_struct_with_various_field_types();
     test_struct_attributes_rendered();
+    test_struct_attribute_values_are_escaped();
     test_enum_plain_variants();
     test_enum_with_discriminants();
     test_fn_decl_no_params_no_return();

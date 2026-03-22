@@ -28,13 +28,63 @@ inline void indent(std::ostringstream& output, std::size_t level) {
     output << std::string(level * 2, ' ');
 }
 
+[[nodiscard]] constexpr char hex_digit(unsigned char value) {
+    switch (value & 0x0f) {
+    case 0x0: return '0';
+    case 0x1: return '1';
+    case 0x2: return '2';
+    case 0x3: return '3';
+    case 0x4: return '4';
+    case 0x5: return '5';
+    case 0x6: return '6';
+    case 0x7: return '7';
+    case 0x8: return '8';
+    case 0x9: return '9';
+    case 0xa: return 'a';
+    case 0xb: return 'b';
+    case 0xc: return 'c';
+    case 0xd: return 'd';
+    case 0xe: return 'e';
+    case 0xf: return 'f';
+    default: return '0';
+    }
+}
+
+[[nodiscard]] inline std::string quote_string_literal(std::string_view text) {
+    std::string quoted;
+    quoted.reserve(text.size() + 2);
+    quoted += '"';
+
+    for (const unsigned char ch : text) {
+        switch (ch) {
+        case '\\': quoted += "\\\\"; break;
+        case '"': quoted += "\\\""; break;
+        case '\n': quoted += "\\n"; break;
+        case '\r': quoted += "\\r"; break;
+        case '\t': quoted += "\\t"; break;
+        default:
+            if (ch < 0x20 || ch == 0x7f) {
+                quoted += "\\x";
+                quoted += hex_digit(ch >> 4);
+                quoted += hex_digit(ch);
+            } else {
+                quoted += static_cast<char>(ch);
+            }
+            break;
+        }
+    }
+
+    quoted += '"';
+    return quoted;
+}
+
 inline void print_attributes(
     std::ostringstream& output, const std::vector<Attribute>& attributes, std::size_t level) {
     for (const Attribute& attribute : attributes) {
         indent(output, level);
         output << "Attribute [[" << attribute.name.as_str();
         if (attribute.value.has_value())
-            output << " = \"" << attribute.value->as_str() << "\"";
+            output << " = " << quote_string_literal(attribute.value->as_str());
         output << "]]\n";
     }
 }
