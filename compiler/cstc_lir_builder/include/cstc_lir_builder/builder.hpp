@@ -651,6 +651,7 @@ inline lir::LirProgram lower_program(const tyir::TyProgram& program) {
                     lir::LirExternFnDecl ext;
                     ext.abi = node.abi;
                     ext.name = node.name;
+                    ext.link_name = node.link_name;
                     ext.return_ty = node.return_ty;
                     ext.span = node.span;
                     for (std::size_t i = 0; i < node.params.size(); ++i) {

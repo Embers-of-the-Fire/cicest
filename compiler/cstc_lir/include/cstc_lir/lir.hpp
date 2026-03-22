@@ -423,6 +423,8 @@ struct LirExternFnDecl {
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Linked symbol name used by codegen.
+    cstc::symbol::Symbol link_name = cstc::symbol::kInvalidSymbol;
     /// Parameter metadata.
     std::vector<LirParam> params;
     /// Declared return type.

@@ -42,6 +42,7 @@ static void test_extern_fn_with_return() {
     assert(prog.extern_fns.size() == 1);
     const auto& ext = prog.extern_fns[0];
     assert(ext.name == Symbol::intern("to_str"));
+    assert(ext.link_name == Symbol::intern("to_str"));
     assert(ext.params.size() == 1);
     assert(ext.params[0].ty == cstc::tyir::ty::num());
     assert(ext.return_ty == cstc::tyir::ty::str());
@@ -66,8 +67,21 @@ static void test_extern_fn_no_params() {
     assert(prog.extern_fns.size() == 1);
     const auto& ext = prog.extern_fns[0];
     assert(ext.name == Symbol::intern("get_value"));
+    assert(ext.link_name == Symbol::intern("get_value"));
     assert(ext.params.empty());
     assert(ext.return_ty == cstc::tyir::ty::num());
+}
+
+static void test_extern_fn_custom_link_name() {
+    SymbolSession session;
+    const auto prog = must_lower(R"(
+[[lang = "cstc_std_print"]]
+extern "lang" fn print(value: str);
+)");
+    assert(prog.extern_fns.size() == 1);
+    const auto& ext = prog.extern_fns[0];
+    assert(ext.name == Symbol::intern("print"));
+    assert(ext.link_name == Symbol::intern("cstc_std_print"));
 }
 
 // ─── Extern fn param local IDs ──────────────────────────────────────────────
@@ -165,6 +179,7 @@ int main() {
     test_extern_fn_with_return();
     test_extern_fn_multiple_params();
     test_extern_fn_no_params();
+    test_extern_fn_custom_link_name();
     test_extern_fn_param_local_ids();
     test_multiple_extern_fns();
     test_extern_fn_with_regular_fn();

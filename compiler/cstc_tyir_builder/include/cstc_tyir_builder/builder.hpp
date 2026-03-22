@@ -267,6 +267,41 @@ struct LowerCtx {
     return std::nullopt;
 }
 
+/// Resolves the linked symbol name for an extern function declaration.
+[[nodiscard]] inline std::expected<cstc::symbol::Symbol, LowerError>
+    resolve_extern_link_name(const ast::ExternFnDecl& decl) {
+    const auto lang_attr_name = cstc::symbol::Symbol::intern("lang");
+    std::optional<cstc::symbol::Symbol> link_name;
+
+    for (const ast::Attribute& attr : decl.attributes) {
+        if (attr.name != lang_attr_name)
+            continue;
+
+        if (decl.abi.as_str() != "lang") {
+            return std::unexpected(
+                LowerError{
+                    attr.span,
+                    "attribute `lang` is only supported on `extern \"lang\" fn` declarations",
+                });
+        }
+        if (!attr.value.has_value()) {
+            return std::unexpected(
+                LowerError{attr.span, "attribute `lang` requires a string value"});
+        }
+        if (attr.value->as_str().empty()) {
+            return std::unexpected(
+                LowerError{attr.span, "attribute `lang` requires a non-empty string value"});
+        }
+        if (link_name.has_value()) {
+            return std::unexpected(LowerError{attr.span, "duplicate `lang` attribute"});
+        }
+
+        link_name = *attr.value;
+    }
+
+    return link_name.value_or(decl.name);
+}
+
 // ─── Type resolution ─────────────────────────────────────────────────────────
 
 /// Converts an AST `TypeRef` to a `tyir::Ty`, validating named types against
@@ -1234,6 +1269,9 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             // Validate the ABI string.
             if (auto err = detail::validate_abi(ext_fn->abi, ext_fn->span))
                 return *err;
+            auto link_name = detail::resolve_extern_link_name(*ext_fn);
+            if (!link_name)
+                return std::unexpected(std::move(link_name.error()));
             // Build a signature from the extern fn declaration.
             auto sig = detail::resolve_fn_signature(
                 ext_fn->params, ext_fn->return_type, ext_fn->span, env);
@@ -1286,9 +1324,13 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             result.items.push_back(std::move(*fn_result));
         } else if (const auto* ext_fn = std::get_if<ast::ExternFnDecl>(&item)) {
             const auto& sig = env.fn_signatures.at(ext_fn->name);
+            auto link_name = detail::resolve_extern_link_name(*ext_fn);
+            if (!link_name)
+                return std::unexpected(std::move(link_name.error()));
             tyir::TyExternFnDecl ty_decl;
             ty_decl.abi = ext_fn->abi;
             ty_decl.name = ext_fn->name;
+            ty_decl.link_name = *link_name;
             ty_decl.return_ty = sig.return_ty;
             ty_decl.span = ext_fn->span;
             for (std::size_t i = 0; i < ext_fn->params.size(); ++i) {
