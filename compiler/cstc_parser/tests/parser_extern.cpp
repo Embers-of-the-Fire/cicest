@@ -101,6 +101,29 @@ void test_extern_struct() {
     assert(s.name.as_str() == "Opaque");
 }
 
+void test_extern_items_with_attributes() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse(R"(
+[[link = "puts"]]
+extern "c" fn puts(s: str);
+[[opaque]]
+extern "lang" struct Handle;
+)");
+    assert(prog.items.size() == 2);
+
+    const auto& fn = std::get<cstc::ast::ExternFnDecl>(prog.items[0]);
+    assert(fn.attributes.size() == 1);
+    assert(fn.attributes[0].name.as_str() == "link");
+    assert(fn.attributes[0].value.has_value());
+    assert(fn.attributes[0].value->as_str() == "puts");
+    assert(fn.span.start == 1);
+
+    const auto& s = std::get<cstc::ast::ExternStructDecl>(prog.items[1]);
+    assert(s.attributes.size() == 1);
+    assert(s.attributes[0].name.as_str() == "opaque");
+    assert(!s.attributes[0].value.has_value());
+}
+
 // ---------------------------------------------------------------------------
 // Multiple extern items
 // ---------------------------------------------------------------------------
@@ -204,6 +227,7 @@ int main() {
     test_extern_fn_multiple_params();
     test_extern_fn_trailing_comma();
     test_extern_struct();
+    test_extern_items_with_attributes();
     test_multiple_extern_items();
     test_extern_mixed_with_regular();
     test_extern_c_abi();

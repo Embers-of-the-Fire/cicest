@@ -47,6 +47,16 @@ struct TypeRef {
     cstc::symbol::Symbol symbol = cstc::symbol::kInvalidSymbol;
 };
 
+/// Declaration attribute attached to an item.
+struct Attribute {
+    /// Attribute name.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Optional string payload, without surrounding quotes.
+    std::optional<cstc::symbol::Symbol> value;
+    /// Source location for the full attribute.
+    cstc::span::SourceSpan span;
+};
+
 /// Named field declaration inside a struct definition.
 struct FieldDecl {
     /// Field identifier.
@@ -67,6 +77,8 @@ struct StructDecl {
     bool is_zst = false;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// Attributes attached to the declaration.
+    std::vector<Attribute> attributes;
 };
 
 /// Fieldless enum variant declaration.
@@ -87,6 +99,8 @@ struct EnumDecl {
     std::vector<EnumVariant> variants;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// Attributes attached to the declaration.
+    std::vector<Attribute> attributes;
 };
 
 /// Function parameter declaration.
@@ -349,6 +363,8 @@ struct FnDecl {
     BlockPtr body;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// Attributes attached to the declaration.
+    std::vector<Attribute> attributes;
 };
 
 /// Extern function declaration (no body).
@@ -363,6 +379,8 @@ struct ExternFnDecl {
     std::optional<TypeRef> return_type;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// Attributes attached to the declaration.
+    std::vector<Attribute> attributes;
 };
 
 /// Extern struct declaration (opaque, no fields).
@@ -373,6 +391,8 @@ struct ExternStructDecl {
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// Attributes attached to the declaration.
+    std::vector<Attribute> attributes;
 };
 
 /// Any top-level declaration item.

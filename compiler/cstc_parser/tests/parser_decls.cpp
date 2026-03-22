@@ -70,6 +70,23 @@ void test_struct_empty_braces() {
     assert(s.fields.empty());
 }
 
+void test_struct_with_attributes() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse(R"(
+[[foo]]
+[[bar = "baz"]]
+struct Tagged;
+)");
+    const auto& s = std::get<cstc::ast::StructDecl>(prog.items[0]);
+    assert(s.attributes.size() == 2);
+    assert(s.attributes[0].name.as_str() == "foo");
+    assert(!s.attributes[0].value.has_value());
+    assert(s.attributes[1].name.as_str() == "bar");
+    assert(s.attributes[1].value.has_value());
+    assert(s.attributes[1].value->as_str() == "baz");
+    assert(s.span.start == 1);
+}
+
 // ---------------------------------------------------------------------------
 // Enum declarations
 // ---------------------------------------------------------------------------
@@ -100,6 +117,16 @@ void test_enum_with_discriminants() {
     assert(e.variants[0].discriminant.has_value());
     assert(e.variants[0].discriminant->as_str() == "0");
     assert(e.variants[1].discriminant->as_str() == "255");
+}
+
+void test_enum_with_attribute() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse(R"([[repr = "u8"]] enum Code { Ok = 0, })");
+    const auto& e = std::get<cstc::ast::EnumDecl>(prog.items[0]);
+    assert(e.attributes.size() == 1);
+    assert(e.attributes[0].name.as_str() == "repr");
+    assert(e.attributes[0].value.has_value());
+    assert(e.attributes[0].value->as_str() == "u8");
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +167,22 @@ void test_fn_named_return_type() {
     assert(fn.return_type.has_value());
     assert(fn.return_type->kind == cstc::ast::TypeKind::Named);
     assert(fn.return_type->symbol.as_str() == "MyType");
+}
+
+void test_fn_with_attributes() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse(R"(
+[[inline]]
+[[export = "entry"]]
+fn tagged() { }
+)");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.attributes.size() == 2);
+    assert(fn.attributes[0].name.as_str() == "inline");
+    assert(!fn.attributes[0].value.has_value());
+    assert(fn.attributes[1].name.as_str() == "export");
+    assert(fn.attributes[1].value.has_value());
+    assert(fn.attributes[1].value->as_str() == "entry");
 }
 
 // ---------------------------------------------------------------------------
@@ -243,13 +286,16 @@ int main() {
     test_zst_struct();
     test_struct_with_primitive_field_types();
     test_struct_empty_braces();
+    test_struct_with_attributes();
     test_enum_empty();
     test_enum_plain_variants();
     test_enum_with_discriminants();
+    test_enum_with_attribute();
     test_fn_no_params_no_return();
     test_fn_no_params_with_return();
     test_fn_trailing_comma_params();
     test_fn_named_return_type();
+    test_fn_with_attributes();
     test_fn_never_return_type();
     test_let_no_type_annotation();
     test_let_with_type_annotation();
