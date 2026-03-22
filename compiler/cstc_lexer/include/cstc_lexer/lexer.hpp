@@ -288,6 +288,14 @@ inline std::vector<Token>
             detail::append_token(
                 tokens, TokenKind::RParen, base_pos, start, index, source, keep_trivia);
             break;
+        case '[':
+            detail::append_token(
+                tokens, TokenKind::LBracket, base_pos, start, index, source, keep_trivia);
+            break;
+        case ']':
+            detail::append_token(
+                tokens, TokenKind::RBracket, base_pos, start, index, source, keep_trivia);
+            break;
         case ',':
             detail::append_token(
                 tokens, TokenKind::Comma, base_pos, start, index, source, keep_trivia);

@@ -101,6 +101,8 @@ void test_all_single_char_operators() {
         {"}",    cstc::lexer::TokenKind::RBrace},
         {"(",    cstc::lexer::TokenKind::LParen},
         {")",    cstc::lexer::TokenKind::RParen},
+        {"[",  cstc::lexer::TokenKind::LBracket},
+        {"]",  cstc::lexer::TokenKind::RBracket},
         {",",     cstc::lexer::TokenKind::Comma},
         {";", cstc::lexer::TokenKind::Semicolon},
         {":",     cstc::lexer::TokenKind::Colon},
@@ -154,6 +156,28 @@ void test_colon_vs_colon_colon() {
     assert(tokens.size() == 2);
     assert(tokens[0].kind == cstc::lexer::TokenKind::Colon);
     assert(tokens[1].kind == cstc::lexer::TokenKind::ColonColon);
+}
+
+void test_attribute_token_sequence() {
+    cstc::symbol::SymbolSession session;
+
+    const auto tokens = lex(R"([[foo = "bar"]])");
+    assert(tokens.size() == 7);
+    assert(tokens[0].kind == cstc::lexer::TokenKind::LBracket);
+    assert(tokens[1].kind == cstc::lexer::TokenKind::LBracket);
+    assert(tokens[2].kind == cstc::lexer::TokenKind::Identifier);
+    assert(tokens[2].symbol.as_str() == "foo");
+    assert(tokens[3].kind == cstc::lexer::TokenKind::Assign);
+    assert(tokens[4].kind == cstc::lexer::TokenKind::String);
+    assert(tokens[4].symbol.as_str() == "\"bar\"");
+    assert(tokens[5].kind == cstc::lexer::TokenKind::RBracket);
+    assert(tokens[6].kind == cstc::lexer::TokenKind::RBracket);
+
+    const auto eof_tokens = cstc::lexer::lex_source(R"([[foo]])", false);
+    assert(eof_tokens[2].kind == cstc::lexer::TokenKind::Identifier);
+    assert(eof_tokens[3].kind == cstc::lexer::TokenKind::RBracket);
+    assert(eof_tokens[4].kind == cstc::lexer::TokenKind::RBracket);
+    assert(eof_tokens[5].kind == cstc::lexer::TokenKind::EndOfFile);
 }
 
 void test_eof_always_present() {
@@ -277,6 +301,7 @@ int main() {
     test_all_single_char_operators();
     test_all_two_char_operators();
     test_colon_vs_colon_colon();
+    test_attribute_token_sequence();
     test_eof_always_present();
     test_spans_are_correct();
     test_span_base_position();

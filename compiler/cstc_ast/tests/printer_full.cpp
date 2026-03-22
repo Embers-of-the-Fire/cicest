@@ -142,6 +142,48 @@ void test_struct_with_various_field_types() {
     assert(out.find("e: Bar") != std::string::npos);
 }
 
+void test_struct_attributes_rendered() {
+    cstc::symbol::SymbolSession session;
+    cstc::ast::Program prog;
+    cstc::ast::StructDecl s;
+    s.name = cstc::symbol::Symbol::intern("Tagged");
+    s.is_zst = true;
+    s.attributes.push_back({
+        .name = cstc::symbol::Symbol::intern("foo"),
+        .value = std::nullopt,
+        .span = {},
+    });
+    s.attributes.push_back({
+        .name = cstc::symbol::Symbol::intern("bar"),
+        .value = cstc::symbol::Symbol::intern("baz"),
+        .span = {},
+    });
+    prog.items.push_back(std::move(s));
+
+    const std::string out = cstc::ast::format_program(prog);
+    assert(out.find("Attribute [[foo]]") != std::string::npos);
+    assert(out.find("Attribute [[bar = \"baz\"]]") != std::string::npos);
+    assert(out.find("StructDecl Tagged ;") != std::string::npos);
+}
+
+void test_struct_attribute_values_are_escaped() {
+    cstc::symbol::SymbolSession session;
+    cstc::ast::Program prog;
+    cstc::ast::StructDecl s;
+    s.name = cstc::symbol::Symbol::intern("Escaped");
+    s.is_zst = true;
+    s.attributes.push_back({
+        .name = cstc::symbol::Symbol::intern("value"),
+        .value = cstc::symbol::Symbol::intern("quote\" slash\\ line\nnext"),
+        .span = {},
+    });
+    prog.items.push_back(std::move(s));
+
+    const std::string out = cstc::ast::format_program(prog);
+    assert(
+        out.find("Attribute [[value = \"quote\\\" slash\\\\ line\\nnext\"]]") != std::string::npos);
+}
+
 void test_enum_plain_variants() {
     cstc::symbol::SymbolSession session;
     cstc::ast::Program prog;
@@ -218,6 +260,29 @@ void test_fn_decl_with_params_and_return() {
     prog.items.push_back(std::move(fn));
     const std::string out = cstc::ast::format_program(prog);
     assert(out.find("FnDecl add(a: num, b: num) -> num") != std::string::npos);
+}
+
+void test_extern_fn_attributes_rendered() {
+    cstc::symbol::SymbolSession session;
+    cstc::ast::Program prog;
+    cstc::ast::ExternFnDecl fn;
+    fn.abi = cstc::symbol::Symbol::intern("c");
+    fn.name = cstc::symbol::Symbol::intern("puts");
+    fn.params.push_back({
+        .name = cstc::symbol::Symbol::intern("s"),
+        .type = {cstc::ast::TypeKind::Str, cstc::symbol::Symbol::intern("str")},
+        .span = {},
+    });
+    fn.attributes.push_back({
+        .name = cstc::symbol::Symbol::intern("link"),
+        .value = cstc::symbol::Symbol::intern("puts"),
+        .span = {},
+    });
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = cstc::ast::format_program(prog);
+    assert(out.find("Attribute [[link = \"puts\"]]") != std::string::npos);
+    assert(out.find("ExternFnDecl \"c\" puts(s: str)") != std::string::npos);
 }
 
 void test_literals_rendered() {
@@ -566,10 +631,13 @@ int main() {
     test_program_header();
     test_zst_struct();
     test_struct_with_various_field_types();
+    test_struct_attributes_rendered();
+    test_struct_attribute_values_are_escaped();
     test_enum_plain_variants();
     test_enum_with_discriminants();
     test_fn_decl_no_params_no_return();
     test_fn_decl_with_params_and_return();
+    test_extern_fn_attributes_rendered();
     test_literals_rendered();
     test_path_expr_rendered();
     test_unary_ops_rendered();

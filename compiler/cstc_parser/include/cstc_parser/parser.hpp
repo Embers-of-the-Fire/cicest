@@ -74,6 +74,11 @@ using cstc::lexer::TokenKind;
         || kind == TokenKind::RBrace || kind == TokenKind::EndOfFile;
 }
 
+[[nodiscard]] cstc::symbol::Symbol string_contents_symbol(const Token& token) {
+    const std::string_view raw = token.symbol.as_str();
+    return cstc::symbol::Symbol::intern(raw.substr(1, raw.size() - 2));
+}
+
 class Parser {
 public:
     explicit Parser(std::span<const Token> input_tokens)
@@ -126,6 +131,10 @@ private:
 
     [[nodiscard]] bool check(TokenKind kind) const { return peek().kind == kind; }
 
+    [[nodiscard]] bool check_attribute_start() const {
+        return check(TokenKind::LBracket) && peek(1).kind == TokenKind::LBracket;
+    }
+
     [[nodiscard]] bool match(TokenKind kind) {
         if (!check(kind))
             return false;
@@ -151,6 +160,13 @@ private:
             .span = token.span,
             .message = std::move(message),
         };
+    }
+
+    [[nodiscard]] cstc::span::SourceSpan
+        item_lead_span(const std::vector<ast::Attribute>& attributes, const Token& fallback) const {
+        if (!attributes.empty())
+            return attributes.front().span;
+        return fallback.span;
     }
 
     [[nodiscard]] bool looks_like_struct_initializer() const {
@@ -197,46 +213,58 @@ private:
     }
 
     [[nodiscard]] std::expected<ast::Item, ParseError> parse_item() {
+        auto parsed_attributes = parse_attributes();
+        if (!parsed_attributes.has_value())
+            return std::unexpected(parsed_attributes.error());
+        std::vector<ast::Attribute> attributes = std::move(*parsed_attributes);
+
         if (match(TokenKind::KwStruct)) {
-            auto decl = parse_struct_decl(previous());
+            auto decl = parse_struct_decl(previous(), std::move(attributes));
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
         }
 
         if (match(TokenKind::KwEnum)) {
-            auto decl = parse_enum_decl(previous());
+            auto decl = parse_enum_decl(previous(), std::move(attributes));
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
         }
 
         if (match(TokenKind::KwFn)) {
-            auto decl = parse_fn_decl(previous());
+            auto decl = parse_fn_decl(previous(), std::move(attributes));
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
         }
 
         if (check(TokenKind::KwExtern)) {
-            return parse_extern_decl();
+            return parse_extern_decl(std::move(attributes));
+        }
+
+        if (!attributes.empty()) {
+            return std::unexpected(make_error_here(
+                "expected item after attributes (`struct`, `enum`, `fn`, `extern`)"));
         }
 
         return std::unexpected(make_error_here("expected item (`struct`, `enum`, `fn`, `extern`)"));
     }
 
     [[nodiscard]] std::expected<ast::StructDecl, ParseError>
-        parse_struct_decl(const Token& struct_keyword) {
+        parse_struct_decl(const Token& struct_keyword, std::vector<ast::Attribute> attributes) {
         auto name_token = consume_identifier("expected struct name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
 
         ast::StructDecl decl;
         decl.name = name_token->symbol;
+        decl.attributes = std::move(attributes);
 
         if (match(TokenKind::Semicolon)) {
             decl.is_zst = true;
-            decl.span = merge_spans(struct_keyword.span, previous().span);
+            decl.span =
+                merge_spans(item_lead_span(decl.attributes, struct_keyword), previous().span);
             return decl;
         }
 
@@ -286,12 +314,12 @@ private:
         if (!close_brace.has_value())
             return std::unexpected(close_brace.error());
 
-        decl.span = merge_spans(struct_keyword.span, close_brace->span);
+        decl.span = merge_spans(item_lead_span(decl.attributes, struct_keyword), close_brace->span);
         return decl;
     }
 
     [[nodiscard]] std::expected<ast::EnumDecl, ParseError>
-        parse_enum_decl(const Token& enum_keyword) {
+        parse_enum_decl(const Token& enum_keyword, std::vector<ast::Attribute> attributes) {
         auto name_token = consume_identifier("expected enum name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -302,6 +330,7 @@ private:
 
         ast::EnumDecl decl;
         decl.name = name_token->symbol;
+        decl.attributes = std::move(attributes);
 
         std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> seen_variants;
 
@@ -345,11 +374,12 @@ private:
         if (!close_brace.has_value())
             return std::unexpected(close_brace.error());
 
-        decl.span = merge_spans(enum_keyword.span, close_brace->span);
+        decl.span = merge_spans(item_lead_span(decl.attributes, enum_keyword), close_brace->span);
         return decl;
     }
 
-    [[nodiscard]] std::expected<ast::FnDecl, ParseError> parse_fn_decl(const Token& fn_keyword) {
+    [[nodiscard]] std::expected<ast::FnDecl, ParseError>
+        parse_fn_decl(const Token& fn_keyword, std::vector<ast::Attribute> attributes) {
         auto name_token = consume_identifier("expected function name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -418,12 +448,14 @@ private:
         decl.params = std::move(params);
         decl.return_type = std::move(return_type);
         decl.body = *body;
-        decl.span = merge_spans(fn_keyword.span, (*body)->span);
+        decl.attributes = std::move(attributes);
+        decl.span = merge_spans(item_lead_span(decl.attributes, fn_keyword), (*body)->span);
 
         return decl;
     }
 
-    [[nodiscard]] std::expected<ast::Item, ParseError> parse_extern_decl() {
+    [[nodiscard]] std::expected<ast::Item, ParseError>
+        parse_extern_decl(std::vector<ast::Attribute> attributes) {
         const Token extern_kw = advance(); // consume `extern`
 
         if (!check(TokenKind::String)) {
@@ -431,20 +463,17 @@ private:
                 make_error_here("expected ABI string after `extern` (e.g. `\"lang\"`)"));
         }
         const Token abi_token = advance();
-        // Strip surrounding quotes from the ABI string.
-        const std::string_view raw_abi = abi_token.symbol.as_str();
-        const cstc::symbol::Symbol abi =
-            cstc::symbol::Symbol::intern(raw_abi.substr(1, raw_abi.size() - 2));
+        const cstc::symbol::Symbol abi = string_contents_symbol(abi_token);
 
         if (match(TokenKind::KwFn)) {
-            auto decl = parse_extern_fn_decl(extern_kw, abi);
+            auto decl = parse_extern_fn_decl(extern_kw, abi, std::move(attributes));
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
         }
 
         if (match(TokenKind::KwStruct)) {
-            auto decl = parse_extern_struct_decl(extern_kw, abi);
+            auto decl = parse_extern_struct_decl(extern_kw, abi, std::move(attributes));
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
@@ -454,8 +483,8 @@ private:
             make_error_here("expected `fn` or `struct` after extern ABI string"));
     }
 
-    [[nodiscard]] std::expected<ast::ExternFnDecl, ParseError>
-        parse_extern_fn_decl(const Token& extern_kw, cstc::symbol::Symbol abi) {
+    [[nodiscard]] std::expected<ast::ExternFnDecl, ParseError> parse_extern_fn_decl(
+        const Token& extern_kw, cstc::symbol::Symbol abi, std::vector<ast::Attribute> attributes) {
         auto name_token = consume_identifier("expected function name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -524,13 +553,14 @@ private:
         decl.name = name_token->symbol;
         decl.params = std::move(params);
         decl.return_type = std::move(return_type);
-        decl.span = merge_spans(extern_kw.span, semi->span);
+        decl.attributes = std::move(attributes);
+        decl.span = merge_spans(item_lead_span(decl.attributes, extern_kw), semi->span);
 
         return decl;
     }
 
-    [[nodiscard]] std::expected<ast::ExternStructDecl, ParseError>
-        parse_extern_struct_decl(const Token& extern_kw, cstc::symbol::Symbol abi) {
+    [[nodiscard]] std::expected<ast::ExternStructDecl, ParseError> parse_extern_struct_decl(
+        const Token& extern_kw, cstc::symbol::Symbol abi, std::vector<ast::Attribute> attributes) {
         auto name_token = consume_identifier("expected struct name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -542,9 +572,61 @@ private:
         ast::ExternStructDecl decl;
         decl.abi = abi;
         decl.name = name_token->symbol;
-        decl.span = merge_spans(extern_kw.span, semi->span);
+        decl.attributes = std::move(attributes);
+        decl.span = merge_spans(item_lead_span(decl.attributes, extern_kw), semi->span);
 
         return decl;
+    }
+
+    [[nodiscard]] std::expected<std::vector<ast::Attribute>, ParseError> parse_attributes() {
+        std::vector<ast::Attribute> attributes;
+        while (check(TokenKind::LBracket)) {
+            if (!check_attribute_start()) {
+                return std::unexpected(make_error_here("expected second `[` to start attribute"));
+            }
+            auto attribute = parse_attribute();
+            if (!attribute.has_value())
+                return std::unexpected(attribute.error());
+            attributes.push_back(std::move(*attribute));
+        }
+        return attributes;
+    }
+
+    [[nodiscard]] std::expected<ast::Attribute, ParseError> parse_attribute() {
+        auto open_0 = consume(TokenKind::LBracket, "expected `[[` to start attribute");
+        if (!open_0.has_value())
+            return std::unexpected(open_0.error());
+
+        auto open_1 = consume(TokenKind::LBracket, "expected `[[` to start attribute");
+        if (!open_1.has_value())
+            return std::unexpected(open_1.error());
+
+        auto name_token = consume_identifier("expected attribute name");
+        if (!name_token.has_value())
+            return std::unexpected(name_token.error());
+
+        std::optional<cstc::symbol::Symbol> value;
+        if (match(TokenKind::Assign)) {
+            auto value_token =
+                consume(TokenKind::String, "expected string literal after `=` in attribute");
+            if (!value_token.has_value())
+                return std::unexpected(value_token.error());
+            value = string_contents_symbol(*value_token);
+        }
+
+        auto close_0 = consume(TokenKind::RBracket, "expected `]]` to close attribute");
+        if (!close_0.has_value())
+            return std::unexpected(close_0.error());
+
+        auto close_1 = consume(TokenKind::RBracket, "expected `]]` to close attribute");
+        if (!close_1.has_value())
+            return std::unexpected(close_1.error());
+
+        return ast::Attribute{
+            .name = name_token->symbol,
+            .value = std::move(value),
+            .span = merge_spans(open_0->span, close_1->span),
+        };
     }
 
     [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() {
