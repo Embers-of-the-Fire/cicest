@@ -25,12 +25,15 @@ and linked at build time.
 All standard library functions are declared using the `extern "lang"` syntax:
 
 ```cicest
+[[lang = "cstc_std_print"]]
 extern "lang" fn print(value: str);
 ```
 
 The `"lang"` ABI string indicates these functions are provided by the cicest
-language runtime. The compiler emits LLVM `declare` instructions for these
-functions, and the actual implementations are supplied at link time.
+language runtime. The optional `[[lang = "..."]]` attribute overrides the
+linked symbol name while keeping the Cicest function name unchanged. The
+compiler emits LLVM `declare` instructions for the overridden symbol, and the
+actual implementations are supplied at link time.
 
 ## Runtime
 
@@ -41,12 +44,12 @@ linked into every executable produced by the compiler.
 
 | Cicest declaration | C signature |
 |--------------------|-------------|
-| `fn print(value: str)` | `void print(const char*)` |
-| `fn println(value: str)` | `void println(const char*)` |
-| `fn to_str(value: num) -> str` | `char* to_str(double)` |
-| `fn str_concat(a: str, b: str) -> str` | `char* str_concat(const char*, const char*)` |
-| `fn str_len(value: str) -> num` | `double str_len(const char*)` |
-| `fn str_free(value: str)` | `void str_free(const char*)` |
+| `fn print(value: str)` | `void cstc_std_print(const char*)` |
+| `fn println(value: str)` | `void cstc_std_println(const char*)` |
+| `fn to_str(value: num) -> str` | `char* cstc_std_to_str(double)` |
+| `fn str_concat(a: str, b: str) -> str` | `char* cstc_std_str_concat(const char*, const char*)` |
+| `fn str_len(value: str) -> num` | `double cstc_std_str_len(const char*)` |
+| `fn str_free(value: str)` | `void cstc_std_str_free(const char*)` |
 
 ### String Ownership
 

@@ -57,7 +57,9 @@ prelude automatically. The injection process is:
 All standard library functions use the `extern` declaration syntax:
 
 ```cicest
+[[lang = "cstc_std_print"]]
 extern "lang" fn print(value: str);
+[[lang = "cstc_std_println"]]
 extern "lang" fn println(value: str);
 extern "lang" struct Handle;
 ```
@@ -68,6 +70,7 @@ extern "lang" struct Handle;
 | `"lang"` | ABI string literal — `"lang"` denotes the cicest language runtime |
 | `fn` / `struct` | Declares a function signature or opaque struct type |
 | `;` | Terminator — extern declarations have no body |
+| `[[lang = "..."]]` | Optional attribute overriding the linked runtime symbol name |
 
 The ABI string is stored as a `Symbol` and carried through the full pipeline
 (AST → TyIR → LIR). The codegen layer currently ignores the ABI value and
@@ -84,8 +87,8 @@ to extern functions just as it does for user-defined functions.
 In LLVM IR, extern functions are emitted as `declare` (no body):
 
 ```llvm
-declare void @println(ptr)
-declare ptr @to_str(double)
+declare void @cstc_std_println(ptr)
+declare ptr @cstc_std_to_str(double)
 ```
 
 ### Extern structs
@@ -127,12 +130,12 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 
 | Cicest declaration | LLVM IR | C signature |
 |--------------------|---------|-------------|
-| `fn print(value: str)` | `declare void @print(ptr)` | `void print(const char*)` |
-| `fn println(value: str)` | `declare void @println(ptr)` | `void println(const char*)` |
-| `fn to_str(value: num) -> str` | `declare ptr @to_str(double)` | `char* to_str(double)` |
-| `fn str_concat(a: str, b: str) -> str` | `declare ptr @str_concat(ptr, ptr)` | `char* str_concat(const char*, const char*)` |
-| `fn str_len(value: str) -> num` | `declare double @str_len(ptr)` | `double str_len(const char*)` |
-| `fn str_free(value: str)` | `declare void @str_free(ptr)` | `void str_free(const char*)` |
+| `fn print(value: str)` | `declare void @cstc_std_print(ptr)` | `void cstc_std_print(const char*)` |
+| `fn println(value: str)` | `declare void @cstc_std_println(ptr)` | `void cstc_std_println(const char*)` |
+| `fn to_str(value: num) -> str` | `declare ptr @cstc_std_to_str(double)` | `char* cstc_std_to_str(double)` |
+| `fn str_concat(a: str, b: str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)` | `char* cstc_std_str_concat(const char*, const char*)` |
+| `fn str_len(value: str) -> num` | `declare double @cstc_std_str_len(ptr)` | `double cstc_std_str_len(const char*)` |
+| `fn str_free(value: str)` | `declare void @cstc_std_str_free(ptr)` | `void cstc_std_str_free(const char*)` |
 
 > **Note:** Functions returning `str` (`to_str`, `str_concat`) allocate memory
 > with `malloc`. The caller owns the returned string and should release it with
@@ -178,11 +181,11 @@ fn main() {
 Compiles to LLVM IR containing:
 
 ```llvm
-declare void @println(ptr)
+declare void @cstc_std_println(ptr)
 
 define i32 @main() {
 bb0:
-  call void @println(ptr @0)
+  call void @cstc_std_println(ptr @0)
   ret i32 0
 }
 ```
