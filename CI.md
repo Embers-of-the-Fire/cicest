@@ -27,6 +27,8 @@ Behavior by platform:
   - **MinGW path**
     - Sets up MSYS2 + MinGW64 toolchain and dependencies
     - Runs `.github/scripts/run-platform-tests.sh windows`
+    - Configures CMake with `-DCICEST_BUILD_E2E_TESTS=OFF`, so the MinGW leg builds the
+      project and runs non-e2e tests only
   - **MSVC path**
     - Sets up the Visual Studio developer command environment
     - Installs LLVM (`choco install llvm`)
@@ -76,3 +78,6 @@ bash .github/scripts/run-platform-tests.sh macos
 bash .github/scripts/run-platform-tests.sh windows
 pwsh -File .github/scripts/run-msvc-tests.ps1
 ```
+
+The Windows MinGW script invocation above skips the end-to-end suite by passing
+`-DCICEST_BUILD_E2E_TESTS=OFF`.

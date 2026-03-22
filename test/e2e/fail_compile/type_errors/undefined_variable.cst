@@ -1,0 +1,4 @@
+fn main() {
+    let x = undefined_variable;
+    println("This should not compile");
+}

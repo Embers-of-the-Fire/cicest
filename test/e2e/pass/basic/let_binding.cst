@@ -1,0 +1,11 @@
+fn main() {
+    let x = 42.0;
+    let y = x;
+    let z = y + 8.0;
+
+    assert_eq(x, 42.0);
+    assert_eq(y, 42.0);
+    assert_eq(z, 50.0);
+
+    println("Variable bindings work correctly!");
+}

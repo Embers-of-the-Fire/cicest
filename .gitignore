@@ -1,4 +1,5 @@
 /build
+/build-no-e2e
 /target
 /temp
 /tmp

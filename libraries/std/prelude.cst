@@ -4,3 +4,5 @@ extern "lang" fn to_str(value: num) -> str;
 extern "lang" fn str_concat(a: str, b: str) -> str;
 extern "lang" fn str_len(value: str) -> num;
 extern "lang" fn str_free(value: str);
+extern "lang" fn assert(condition: bool);
+extern "lang" fn assert_eq(a: num, b: num);

@@ -1,0 +1,11 @@
+fn main() {
+    let x = 10.0;
+    let y = 5.0;
+
+    assert_eq(x + y, 15.0);
+    assert_eq(x - y, 5.0);
+    assert_eq(x * y, 50.0);
+    assert_eq(x / y, 2.0);
+
+    println("All arithmetic tests passed!");
+}

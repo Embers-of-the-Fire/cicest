@@ -99,6 +99,9 @@ Notes:
 
 - The project requires C++23 (`cmake_minimum_required(VERSION 3.21)`).
 - `cstc_codegen` links against LLVM and supporting libraries (`zlib`, `libxml2`, `libffi`).
+- Windows MinGW currently skips the end-to-end suite. Use `-DCICEST_BUILD_E2E_TESTS=OFF`
+  when configuring tests in that environment, or run `.github/scripts/run-platform-tests.sh windows`
+  which applies that setting automatically.
 
 ## CI
 
