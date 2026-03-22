@@ -77,6 +77,10 @@ enum class TokenKind {
     LParen,
     /// `)`
     RParen,
+    /// `[`
+    LBracket,
+    /// `]`
+    RBracket,
     /// `,`
     Comma,
     /// `;`
@@ -172,6 +176,8 @@ struct Token {
     case TokenKind::RBrace: return "RBrace";
     case TokenKind::LParen: return "LParen";
     case TokenKind::RParen: return "RParen";
+    case TokenKind::LBracket: return "LBracket";
+    case TokenKind::RBracket: return "RBracket";
     case TokenKind::Comma: return "Comma";
     case TokenKind::Semicolon: return "Semicolon";
     case TokenKind::Colon: return "Colon";
