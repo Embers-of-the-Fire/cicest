@@ -68,6 +68,14 @@ enum class TokenKind {
     KwBool,
     /// `extern` keyword.
     KwExtern,
+    /// `pub` keyword.
+    KwPub,
+    /// `import` keyword.
+    KwImport,
+    /// `from` keyword.
+    KwFrom,
+    /// `as` keyword.
+    KwAs,
 
     /// `{`
     LBrace,
@@ -172,6 +180,10 @@ struct Token {
     case TokenKind::KwStr: return "KwStr";
     case TokenKind::KwBool: return "KwBool";
     case TokenKind::KwExtern: return "KwExtern";
+    case TokenKind::KwPub: return "KwPub";
+    case TokenKind::KwImport: return "KwImport";
+    case TokenKind::KwFrom: return "KwFrom";
+    case TokenKind::KwAs: return "KwAs";
     case TokenKind::LBrace: return "LBrace";
     case TokenKind::RBrace: return "RBrace";
     case TokenKind::LParen: return "LParen";

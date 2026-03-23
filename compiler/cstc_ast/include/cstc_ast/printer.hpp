@@ -319,6 +319,8 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             if constexpr (std::is_same_v<ItemType, StructDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
+                if (node.is_public)
+                    output << "Pub ";
                 if (node.is_zst) {
                     output << "StructDecl " << node.name.as_str() << " ;\n";
                 } else {
@@ -331,6 +333,8 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             } else if constexpr (std::is_same_v<ItemType, EnumDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
+                if (node.is_public)
+                    output << "Pub ";
                 output << "EnumDecl " << node.name.as_str() << "\n";
                 for (const EnumVariant& variant : node.variants) {
                     indent(output, level + 1);
@@ -342,6 +346,8 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             } else if constexpr (std::is_same_v<ItemType, FnDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
+                if (node.is_public)
+                    output << "Pub ";
                 output << "FnDecl " << node.name.as_str() << "(";
                 for (std::size_t index = 0; index < node.params.size(); ++index) {
                     if (index > 0)
@@ -357,6 +363,8 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             } else if constexpr (std::is_same_v<ItemType, ExternFnDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
+                if (node.is_public)
+                    output << "Pub ";
                 output << "ExternFnDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
                        << "(";
                 for (std::size_t index = 0; index < node.params.size(); ++index) {
@@ -372,8 +380,22 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             } else if constexpr (std::is_same_v<ItemType, ExternStructDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
+                if (node.is_public)
+                    output << "Pub ";
                 output << "ExternStructDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
                        << "\n";
+            } else if constexpr (std::is_same_v<ItemType, ImportDecl>) {
+                indent(output, level);
+                if (node.is_public)
+                    output << "Pub ";
+                output << "ImportDecl from " << quote_string_literal(node.path.as_str()) << "\n";
+                for (const ImportItem& item : node.items) {
+                    indent(output, level + 1);
+                    output << item.name.as_str();
+                    if (item.alias.has_value())
+                        output << " as " << item.alias->as_str();
+                    output << "\n";
+                }
             }
         },
         item);

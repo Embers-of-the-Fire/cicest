@@ -69,6 +69,8 @@ struct FieldDecl {
 
 /// Struct item declaration.
 struct StructDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Declared named fields.
@@ -93,6 +95,8 @@ struct EnumVariant {
 
 /// Enum item declaration.
 struct EnumDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// Enum type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Declared variant list.
@@ -353,6 +357,8 @@ struct Expr {
 
 /// Function item declaration.
 struct FnDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Function parameter list.
@@ -369,6 +375,8 @@ struct FnDecl {
 
 /// Extern function declaration (no body).
 struct ExternFnDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// ABI string (e.g. "lang", "c").
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Function name.
@@ -385,6 +393,8 @@ struct ExternFnDecl {
 
 /// Extern struct declaration (opaque, no fields).
 struct ExternStructDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// ABI string (e.g. "lang", "c").
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Struct type name.
@@ -395,8 +405,30 @@ struct ExternStructDecl {
     std::vector<Attribute> attributes;
 };
 
+/// One imported binding inside an import declaration.
+struct ImportItem {
+    /// Exported name in the source module.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Optional local alias introduced by `as`.
+    std::optional<cstc::symbol::Symbol> alias;
+    /// Source location for the import item.
+    cstc::span::SourceSpan span;
+};
+
+/// Import declaration.
+struct ImportDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
+    /// Imported item list.
+    std::vector<ImportItem> items;
+    /// Module path literal contents, without surrounding quotes.
+    cstc::symbol::Symbol path = cstc::symbol::kInvalidSymbol;
+    /// Source location for the full item.
+    cstc::span::SourceSpan span;
+};
+
 /// Any top-level declaration item.
-using Item = std::variant<StructDecl, EnumDecl, FnDecl, ExternFnDecl, ExternStructDecl>;
+using Item = std::variant<StructDecl, EnumDecl, FnDecl, ExternFnDecl, ExternStructDecl, ImportDecl>;
 
 /// Full parsed source file.
 struct Program {

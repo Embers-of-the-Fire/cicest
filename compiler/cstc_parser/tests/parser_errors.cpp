@@ -42,9 +42,20 @@ void test_error_attribute_without_item() {
     expect_error("[[foo]]", "expected item after attributes");
 }
 
+void test_error_pub_without_item() {
+    cstc::symbol::SymbolSession session;
+    expect_error("pub", "expected item after `pub`");
+}
+
 void test_error_single_bracket_between_attributes_and_item() {
     cstc::symbol::SymbolSession session;
     expect_error("[[a]] [b] fn f() { }", "expected second `[` to start attribute");
+}
+
+void test_error_attributes_on_import() {
+    cstc::symbol::SymbolSession session;
+    expect_error(
+        "[[a]] import { foo } from \"mod.cst\";", "attributes are not supported on import");
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +140,31 @@ void test_error_fn_missing_body() {
     expect_error("fn f()", "expected `{` to start block");
 }
 
+void test_error_import_missing_brace() {
+    cstc::symbol::SymbolSession session;
+    expect_error("import foo from \"mod.cst\";", "expected `{` after `import`");
+}
+
+void test_error_import_star_not_supported() {
+    cstc::symbol::SymbolSession session;
+    expect_error("import { * } from \"mod.cst\";", "`import *` is not supported");
+}
+
+void test_error_import_missing_from() {
+    cstc::symbol::SymbolSession session;
+    expect_error("import { foo } \"mod.cst\";", "expected `from` after import item list");
+}
+
+void test_error_import_missing_path() {
+    cstc::symbol::SymbolSession session;
+    expect_error("import { foo } from bar;", "expected import path string after `from`");
+}
+
+void test_error_import_missing_semicolon() {
+    cstc::symbol::SymbolSession session;
+    expect_error("import { foo } from \"mod.cst\"", "expected `;` after import declaration");
+}
+
 // ---------------------------------------------------------------------------
 // Block / statement errors
 // ---------------------------------------------------------------------------
@@ -198,7 +234,9 @@ int main() {
     test_error_attribute_missing_name();
     test_error_attribute_non_string_value();
     test_error_attribute_without_item();
+    test_error_pub_without_item();
     test_error_single_bracket_between_attributes_and_item();
+    test_error_attributes_on_import();
     test_error_struct_missing_name();
     test_error_struct_missing_brace_or_semi();
     test_error_struct_missing_close_brace();
@@ -213,6 +251,11 @@ int main() {
     test_error_fn_missing_close_paren();
     test_error_fn_duplicate_param();
     test_error_fn_missing_body();
+    test_error_import_missing_brace();
+    test_error_import_star_not_supported();
+    test_error_import_missing_from();
+    test_error_import_missing_path();
+    test_error_import_missing_semicolon();
     test_error_block_missing_close_brace();
     test_error_let_missing_assign();
     test_error_let_missing_semicolon();

@@ -84,6 +84,14 @@ namespace detail {
         return TokenKind::KwBool;
     if (text == "extern")
         return TokenKind::KwExtern;
+    if (text == "pub")
+        return TokenKind::KwPub;
+    if (text == "import")
+        return TokenKind::KwImport;
+    if (text == "from")
+        return TokenKind::KwFrom;
+    if (text == "as")
+        return TokenKind::KwAs;
 
     return TokenKind::Identifier;
 }
