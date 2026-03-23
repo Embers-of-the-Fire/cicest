@@ -178,7 +178,7 @@ The prelude currently provides the following functions:
 |----------|-----------|-------------|
 | `to_str` | `fn to_str(value: num) -> str` | Converts a number to its string representation. |
 
-### String operations example
+### String operations
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -186,7 +186,7 @@ The prelude currently provides the following functions:
 | `str_len` | `fn str_len(value: str) -> num` | Returns the length of a string as a number. |
 | `str_free` | `fn str_free(value: str)` | Frees a heap-allocated string returned by `to_str` or `str_concat`. |
 
-### Assertions example
+### Assertions
 
 | Function | Signature | Description |
 |----------|-----------|-------------|
@@ -215,7 +215,7 @@ bb0:
 }
 ```
 
-### String operations
+### String operations example
 
 ```cicest
 fn main() {
@@ -239,7 +239,7 @@ fn main() {
 }
 ```
 
-### Assertions
+### Assertions example
 
 ```cicest
 fn main() {
