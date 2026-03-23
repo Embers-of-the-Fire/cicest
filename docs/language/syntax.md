@@ -1,6 +1,8 @@
 # Cicest Language Syntax
 
 This document defines the complete surface syntax for the Cicest language.
+Module loading, visibility, and import resolution semantics are specified in
+[Module System](modules.md).
 
 Design goals:
 
@@ -134,6 +136,8 @@ Notes:
 - `pub` marks a top-level item or import as exportable from its module.
 - `import *` is intentionally unavailable in source code. The compiler uses an
   internal equivalent only for the std prelude.
+- Relative import paths resolve from the importing module's directory; `@std/`
+  paths resolve from the configured standard-library root.
 
 ### 3.2 Types
 
