@@ -131,6 +131,19 @@ fn main() { print("hello"); }
     assert(!ir_contains(ir, "declare void @print(ptr)"));
 }
 
+static void test_extern_link_name_reuses_matching_function_definition() {
+    SymbolSession session;
+    const auto ir = must_codegen(R"(
+[[lang = "foo"]]
+extern "lang" fn bar();
+fn foo() { }
+fn main() { bar(); }
+)");
+    assert(ir_contains(ir, "define void @foo()"));
+    assert(ir_contains(ir, "call void @foo()"));
+    assert(!ir_contains(ir, "declare void @foo()"));
+}
+
 // ─── Multiple extern declarations ───────────────────────────────────────────
 
 static void test_multiple_extern_declarations() {
@@ -172,6 +185,7 @@ int main() {
     test_call_extern_fn_with_return();
     test_call_chain_through_extern();
     test_extern_fn_custom_lang_link_name();
+    test_extern_link_name_reuses_matching_function_definition();
     test_multiple_extern_declarations();
     test_extern_struct_as_fn_return();
     return 0;

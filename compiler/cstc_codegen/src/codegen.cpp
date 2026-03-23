@@ -383,12 +383,17 @@ private:
             }
             auto* fn_ty = llvm::FunctionType::get(ret_ty, param_types, false);
             const std::string symbol_name(fn.name.as_str());
-            if (module_.getFunction(symbol_name) != nullptr) {
-                throw std::runtime_error(
-                    "function symbol '" + symbol_name + "' conflicts with an existing declaration");
+            llvm::Function* llvm_fn = module_.getFunction(symbol_name);
+            if (llvm_fn != nullptr) {
+                if (llvm_fn->getFunctionType() != fn_ty) {
+                    throw std::runtime_error(
+                        "function symbol '" + symbol_name
+                        + "' conflicts with an existing declaration");
+                }
+            } else {
+                llvm_fn = llvm::Function::Create(
+                    fn_ty, llvm::Function::ExternalLinkage, symbol_name, &module_);
             }
-            auto* llvm_fn = llvm::Function::Create(
-                fn_ty, llvm::Function::ExternalLinkage, symbol_name, &module_);
 
             functions_[std::string(fn.name.as_str())] = llvm_fn;
         }
