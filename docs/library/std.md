@@ -4,8 +4,8 @@
 
 The cicest standard library provides a set of built-in functions that are
 automatically available in every cicest program. These functions are declared
-in the **prelude** (`libraries/std/prelude.cst`) and injected into every
-compilation before user source code is parsed.
+in the **prelude** (`libraries/std/prelude.cst`), which is compiled as a normal
+module and then implicitly imported into every module.
 
 ## Position in the pipeline
 
@@ -15,18 +15,17 @@ libraries/std/prelude.cst
         ▼
 ┌───────────────────────────────┐
 │  SourceMap.add_file(prelude)  │   ← separate SourceFileId
-│  SourceMap.add_file(user)     │   ← separate SourceFileId
+│  SourceMap.add_file(root)     │   ← separate SourceFileId
 └───────────────────────────────┘
         │
         ▼
 ┌───────────────────────────────┐
-│  Parser: parse prelude        │
-│  Parser: parse user source    │
+│  Parser: parse module files   │
 └───────────────────────────────┘
         │
         ▼
 ┌───────────────────────────────┐
-│  Merge: prelude AST + user    │   ← single ast::Program
+│  Resolver: imports + prelude  │   ← single ast::Program
 └───────────────────────────────┘
         │
         ▼
@@ -37,18 +36,17 @@ The prelude is parsed as a separate source file with its own `SourceFileId`.
 Error messages for prelude declarations resolve to `prelude.cst:line:col`,
 while user errors resolve to the user's file path.
 
-## Prelude injection
+## Prelude import
 
 Both the compiler (`cstc`) and the inspector (`cstc_inspect`) inject the
-prelude automatically. The injection process is:
+prelude automatically. The process is:
 
 1. Read `prelude.cst` from the path defined by `CICEST_STD_PATH` (set at
    compile time via CMake).
-1. Add it to the `SourceMap` as a separate file.
-1. Parse the prelude source independently.
-1. Parse the user source independently.
-1. Merge the two `ast::Program` item lists (prelude items first).
-1. Continue the pipeline with the merged program.
+1. Resolve the root module and all explicit `import { ... } from "..."` edges.
+1. Treat the prelude as an internal `import * from "@std/prelude.cst"` for
+   every non-prelude module.
+1. Continue the pipeline with the resolved crate-wide program.
 
 > **Note:** The `tokens` and `ast` output modes of `cstc_inspect` do not
 > inject the prelude, since they display only the user's source-level
@@ -60,10 +58,10 @@ All standard library functions use the `extern` declaration syntax:
 
 ```cicest
 [[lang = "cstc_std_print"]]
-extern "lang" fn print(value: str);
+pub extern "lang" fn print(value: str);
 [[lang = "cstc_std_println"]]
-extern "lang" fn println(value: str);
-extern "lang" struct Handle;
+pub extern "lang" fn println(value: str);
+pub extern "lang" struct Handle;
 ```
 
 | Component | Description |
@@ -294,7 +292,7 @@ name inside Cicest.
 
 To add a new function to the standard library:
 
-1. Add an `extern "lang" fn` declaration to `libraries/std/prelude.cst`.
+1. Add a `pub extern "lang" fn` declaration to `libraries/std/prelude.cst`.
    If the runtime symbol differs from the Cicest function name, add
    `[[lang = "..."]]` so the declaration gets the correct `link_name`.
 1. Implement the function in the language runtime (linked at build time).
@@ -308,8 +306,9 @@ To add a new function to the standard library:
   are semantically distinguished yet.
 - Extern structs are zero-sized and cannot carry data. They serve only as
   opaque type handles.
-- The prelude is always injected — there is no mechanism to suppress it.
-- No module or import system exists. All prelude declarations are global.
+- The prelude is always imported — there is no mechanism to suppress it.
+- Source code cannot spell `import *`; that behavior is reserved for the
+  compiler's implicit prelude import.
 - Functions returning `str` allocate memory with `malloc`. Callers should use
   `str_free` to release the returned string when it is no longer needed, but
   the language does not yet define a settled lifetime/ownership model for

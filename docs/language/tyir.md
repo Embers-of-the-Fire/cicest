@@ -134,5 +134,4 @@ TyProgram
 - Break values are not propagated to loop types; all loops have type `Unit`.
 - No support for recursive types beyond single-level named references.
 - No generics (none in Cicest source language).
-- No module / import / visibility — single-file compilation only.
 - Functions are always top-level; no closures or first-class function values.

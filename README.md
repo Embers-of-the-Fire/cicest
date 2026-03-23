@@ -21,7 +21,6 @@ Implemented language surface (as of this repository state):
 Not implemented in the current scoped subset:
 
 - generics
-- modules/import/export/visibility syntax
 - mutable bindings and assignment expressions
 - async/await and closures
 

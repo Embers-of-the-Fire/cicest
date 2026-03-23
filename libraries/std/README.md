@@ -7,9 +7,9 @@ available in every cicest program through the **prelude**.
 
 ## Prelude
 
-The prelude (`prelude.cst`) is automatically injected at the beginning of every
-compilation. It declares extern functions that are implemented by the runtime
-and linked at build time.
+The prelude (`prelude.cst`) is compiled as a normal module whose `pub` items
+are implicitly imported into every module. Additional std modules can be loaded
+explicitly through `@std/...` import paths.
 
 ### Available Functions
 
@@ -30,7 +30,7 @@ All standard library functions are declared using the `extern "lang"` syntax:
 
 ```cicest
 [[lang = "cstc_std_print"]]
-extern "lang" fn print(value: str);
+pub extern "lang" fn print(value: str);
 ```
 
 The `"lang"` ABI string indicates these functions are provided by the cicest
@@ -42,7 +42,7 @@ resolved `link_name`.
 
 ```cicest
 [[lang = "cstc_std_print"]]
-extern "lang" fn print(value: str);
+pub extern "lang" fn print(value: str);
 ```
 
 This is called in Cicest as `print("hello")`, but codegen declares and calls
@@ -80,7 +80,7 @@ be passed to `str_free`.
 
 To add a new standard library function:
 
-1. Add the `extern "lang" fn` declaration to `prelude.cst`.
+1. Add the `pub extern "lang" fn` declaration to `prelude.cst`.
    Add `[[lang = "..."]]` when the runtime symbol name differs from the
    source-level Cicest function name.
 1. Implement the function in `runtime.c`.

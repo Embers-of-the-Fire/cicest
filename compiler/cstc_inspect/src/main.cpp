@@ -132,9 +132,9 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 }
 
 [[nodiscard]] std::string
-    render_tyir(cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
+    render_tyir(cstc::span::SourceMap& source_map, const std::filesystem::path& input_path) {
     const auto merged =
-        cstc::cli_support::parse_with_std_prelude(source_map, file_id, CICEST_STD_PATH);
+        cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value())
@@ -144,9 +144,9 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 }
 
 [[nodiscard]] std::string
-    render_lir(cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
+    render_lir(cstc::span::SourceMap& source_map, const std::filesystem::path& input_path) {
     const auto merged =
-        cstc::cli_support::parse_with_std_prelude(source_map, file_id, CICEST_STD_PATH);
+        cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value())
@@ -157,9 +157,9 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 }
 
 [[nodiscard]] std::string
-    render_llvm(cstc::span::SourceMap& source_map, cstc::span::SourceFileId file_id) {
+    render_llvm(cstc::span::SourceMap& source_map, const std::filesystem::path& input_path) {
     const auto merged =
-        cstc::cli_support::parse_with_std_prelude(source_map, file_id, CICEST_STD_PATH);
+        cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value())
@@ -188,23 +188,26 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 int main(int argc, char** argv) {
     try {
         const Options options = parse_options(argc, argv);
-        const std::string source = cstc::cli_support::read_source_file(options.input_path);
-
         cstc::symbol::SymbolSession session;
         cstc::span::SourceMap source_map;
-        const cstc::span::SourceFileId file_id = source_map.add_file(options.input_path, source);
 
         std::string output;
-        if (options.out_type == "tokens")
-            output = render_tokens(source_map, file_id, options.keep_trivia);
-        else if (options.out_type == "ast")
-            output = render_ast(source_map, file_id);
-        else if (options.out_type == "tyir")
-            output = render_tyir(source_map, file_id);
-        else if (options.out_type == "llvm")
-            output = render_llvm(source_map, file_id);
-        else
-            output = render_lir(source_map, file_id);
+        if (options.out_type == "tokens" || options.out_type == "ast") {
+            const std::string source = cstc::cli_support::read_source_file(options.input_path);
+            const cstc::span::SourceFileId file_id =
+                source_map.add_file(options.input_path, source);
+
+            if (options.out_type == "tokens")
+                output = render_tokens(source_map, file_id, options.keep_trivia);
+            else
+                output = render_ast(source_map, file_id);
+        } else if (options.out_type == "tyir") {
+            output = render_tyir(source_map, options.input_path);
+        } else if (options.out_type == "llvm") {
+            output = render_llvm(source_map, options.input_path);
+        } else {
+            output = render_lir(source_map, options.input_path);
+        }
 
         write_output(output, options.output_path);
     } catch (const std::exception& error) {

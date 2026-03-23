@@ -4,10 +4,10 @@ CLI package for native compilation artifacts.
 
 ## Purpose
 
-`cstc` compiles a Cicest source file through the existing frontend pipeline:
+`cstc` compiles a Cicest root module through the existing frontend pipeline:
 
 ```
-Source -> Parser -> AST -> TyIR -> LIR -> LLVM -> native artifacts
+Source/module graph -> Parser -> AST -> TyIR -> LIR -> LLVM -> native artifacts
 ```
 
 Unlike `cstc_inspect`, this tool does not print intermediate compiler data.
