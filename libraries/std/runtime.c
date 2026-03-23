@@ -5,25 +5,25 @@
 /// linked into every cicest executable. The signatures here must match the
 /// LLVM IR declarations emitted by the codegen:
 ///
-///   print(ptr)          → void
-///   println(ptr)        → void
-///   to_str(double)      → ptr
-///   str_concat(ptr,ptr) → ptr
-///   str_len(ptr)        → double
-///   str_free(ptr)       → void
-///   assert(i1)          → void
-///   assert_eq(double,double) → void
+///   cstc_std_print(ptr)          → void
+///   cstc_std_println(ptr)        → void
+///   cstc_std_to_str(double)      → ptr
+///   cstc_std_str_concat(ptr,ptr) → ptr
+///   cstc_std_str_len(ptr)        → double
+///   cstc_std_str_free(ptr)       → void
+///   cstc_std_assert(i1)          → void
+///   cstc_std_assert_eq(double,double) → void
 
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-void print(const char* value) { fputs(value, stdout); }
+void cstc_std_print(const char* value) { fputs(value, stdout); }
 
-void println(const char* value) { puts(value); }
+void cstc_std_println(const char* value) { puts(value); }
 
-char* to_str(double value) {
+char* cstc_std_to_str(double value) {
     // snprintf with NULL to measure, then allocate + format.
     int len = snprintf(NULL, 0, "%g", value);
     if (len < 0)
@@ -41,7 +41,7 @@ char* to_str(double value) {
     return buf;
 }
 
-char* str_concat(const char* a, const char* b) {
+char* cstc_std_str_concat(const char* a, const char* b) {
     size_t la = strlen(a);
     size_t lb = strlen(b);
     char* buf = (char*)malloc(la + lb + 1);
@@ -58,18 +58,18 @@ char* str_concat(const char* a, const char* b) {
     return buf;
 }
 
-double str_len(const char* value) { return (double)strlen(value); }
+double cstc_std_str_len(const char* value) { return (double)strlen(value); }
 
-void str_free(const char* value) { free((void*)value); }
+void cstc_std_str_free(const char* value) { free((void*)value); }
 
-void assert(int condition) {
+void cstc_std_assert(int condition) {
     if (!condition) {
         fputs("assertion failed\n", stderr);
         exit(1);
     }
 }
 
-void assert_eq(double a, double b) {
+void cstc_std_assert_eq(double a, double b) {
     const double epsilon = 1e-9;
     if (fabs(a - b) > epsilon) {
         fprintf(stderr, "assertion failed: %g != %g\n", a, b);

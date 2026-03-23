@@ -57,6 +57,7 @@ static void test_extern_fn_with_return() {
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
     assert(decl.name == Symbol::intern("to_str"));
+    assert(decl.link_name == Symbol::intern("to_str"));
     assert(decl.params.size() == 1);
     assert(decl.params[0].ty == ty::num());
     assert(decl.return_ty == ty::str());
@@ -67,10 +68,23 @@ static void test_extern_fn_multiple_params() {
     const auto prog = must_lower(R"(extern "lang" fn concat(a: str, b: str) -> str;)");
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
+    assert(decl.link_name == Symbol::intern("concat"));
     assert(decl.params.size() == 2);
     assert(decl.params[0].ty == ty::str());
     assert(decl.params[1].ty == ty::str());
     assert(decl.return_ty == ty::str());
+}
+
+static void test_extern_fn_lang_attribute_overrides_link_name() {
+    SymbolSession session;
+    const auto prog = must_lower(R"(
+[[lang = "cstc_std_print"]]
+extern "lang" fn print(value: str);
+)");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
+    assert(decl.name == Symbol::intern("print"));
+    assert(decl.link_name == Symbol::intern("cstc_std_print"));
 }
 
 // ─── Extern fn is callable ───────────────────────────────────────────────────
@@ -215,6 +229,38 @@ static void test_c_abi_accepted() {
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
     assert(decl.abi == Symbol::intern("c"));
+    assert(decl.link_name == Symbol::intern("puts"));
+}
+
+static void test_lang_attribute_requires_lang_abi() {
+    SymbolSession session;
+    must_fail_with_message(
+        R"(
+[[lang = "puts"]]
+extern "c" fn puts(s: str);
+)",
+        "attribute `lang` is only supported");
+}
+
+static void test_lang_attribute_requires_value() {
+    SymbolSession session;
+    must_fail_with_message(
+        R"(
+[[lang]]
+extern "lang" fn print(value: str);
+)",
+        "attribute `lang` requires a string value");
+}
+
+static void test_lang_attribute_rejects_duplicates() {
+    SymbolSession session;
+    must_fail_with_message(
+        R"(
+[[lang = "print"]]
+[[lang = "println"]]
+extern "lang" fn print(value: str);
+)",
+        "duplicate `lang` attribute");
 }
 
 // ─── Error: constructing opaque extern struct ───────────────────────────────
@@ -243,6 +289,7 @@ int main() {
     test_extern_fn_basic();
     test_extern_fn_with_return();
     test_extern_fn_multiple_params();
+    test_extern_fn_lang_attribute_overrides_link_name();
     test_extern_fn_callable();
     test_extern_fn_call_with_return();
     test_extern_struct_basic();
@@ -256,6 +303,9 @@ int main() {
     test_unsupported_abi_fn();
     test_unsupported_abi_struct();
     test_c_abi_accepted();
+    test_lang_attribute_requires_lang_abi();
+    test_lang_attribute_requires_value();
+    test_lang_attribute_rejects_duplicates();
     test_extern_struct_init_rejected();
     test_extern_struct_init_with_fields_rejected();
     return 0;

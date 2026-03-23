@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD013 MD060 -->
+
 # std — Standard Library
 
 The cicest standard library provides a set of built-in functions that are
@@ -7,7 +9,7 @@ compilation before user source code is parsed.
 
 ## Position in the pipeline
 
-```
+```text
 libraries/std/prelude.cst
         │
         ▼
@@ -42,11 +44,11 @@ prelude automatically. The injection process is:
 
 1. Read `prelude.cst` from the path defined by `CICEST_STD_PATH` (set at
    compile time via CMake).
-2. Add it to the `SourceMap` as a separate file.
-3. Parse the prelude source independently.
-4. Parse the user source independently.
-5. Merge the two `ast::Program` item lists (prelude items first).
-6. Continue the pipeline with the merged program.
+1. Add it to the `SourceMap` as a separate file.
+1. Parse the prelude source independently.
+1. Parse the user source independently.
+1. Merge the two `ast::Program` item lists (prelude items first).
+1. Continue the pipeline with the merged program.
 
 > **Note:** The `tokens` and `ast` output modes of `cstc_inspect` do not
 > inject the prelude, since they display only the user's source-level
@@ -57,7 +59,9 @@ prelude automatically. The injection process is:
 All standard library functions use the `extern` declaration syntax:
 
 ```cicest
+[[lang = "cstc_std_print"]]
 extern "lang" fn print(value: str);
+[[lang = "cstc_std_println"]]
 extern "lang" fn println(value: str);
 extern "lang" struct Handle;
 ```
@@ -68,11 +72,26 @@ extern "lang" struct Handle;
 | `"lang"` | ABI string literal — `"lang"` denotes the cicest language runtime |
 | `fn` / `struct` | Declares a function signature or opaque struct type |
 | `;` | Terminator — extern declarations have no body |
+| `[[lang = "..."]]` | Optional attribute setting the extern function's `link_name` used by codegen |
 
 The ABI string is stored as a `Symbol` and carried through the full pipeline
 (AST → TyIR → LIR). The codegen layer currently ignores the ABI value and
 emits all extern functions with LLVM `ExternalLinkage`. Future ABI strings
 (e.g., `"c"`) can alter calling conventions without grammar changes.
+
+For extern functions, the compiler now preserves both the source-level
+function name and the linked symbol name. Without the attribute, `link_name`
+defaults to the declared function name. With the attribute, the source name
+still remains available for calls and type checking, while codegen emits the
+resolved `link_name`.
+
+```cicest
+[[lang = "cstc_std_print"]]
+extern "lang" fn print(value: str);
+```
+
+This declaration is called in Cicest as `print("hello")`, but it lowers to an
+extern declaration for `@cstc_std_print` in LLVM IR.
 
 ### Extern functions
 
@@ -84,8 +103,8 @@ to extern functions just as it does for user-defined functions.
 In LLVM IR, extern functions are emitted as `declare` (no body):
 
 ```llvm
-declare void @println(ptr)
-declare ptr @to_str(double)
+declare void @cstc_std_println(ptr)
+declare ptr @cstc_std_to_str(double)
 ```
 
 ### Extern structs
@@ -116,7 +135,7 @@ CMake produces for the current toolchain. When the compiler invokes the linker,
 it passes the runtime archive as a positional argument alongside the user's
 object file:
 
-```
+```text
 c++  user.o  /path/to/libcicest_rt.a  -o  user       # GNU / MinGW
 cl   user.obj  /path/to/cicest_rt.lib  /Fe:user.exe   # MSVC
 ```
@@ -127,12 +146,14 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 
 | Cicest declaration | LLVM IR | C signature |
 |--------------------|---------|-------------|
-| `fn print(value: str)` | `declare void @print(ptr)` | `void print(const char*)` |
-| `fn println(value: str)` | `declare void @println(ptr)` | `void println(const char*)` |
-| `fn to_str(value: num) -> str` | `declare ptr @to_str(double)` | `char* to_str(double)` |
-| `fn str_concat(a: str, b: str) -> str` | `declare ptr @str_concat(ptr, ptr)` | `char* str_concat(const char*, const char*)` |
-| `fn str_len(value: str) -> num` | `declare double @str_len(ptr)` | `double str_len(const char*)` |
-| `fn str_free(value: str)` | `declare void @str_free(ptr)` | `void str_free(const char*)` |
+| `fn print(value: str)` | `declare void @cstc_std_print(ptr)` | `void cstc_std_print(const char*)` |
+| `fn println(value: str)` | `declare void @cstc_std_println(ptr)` | `void cstc_std_println(const char*)` |
+| `fn to_str(value: num) -> str` | `declare ptr @cstc_std_to_str(double)` | `char* cstc_std_to_str(double)` |
+| `fn str_concat(a: str, b: str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)` | `char* cstc_std_str_concat(const char*, const char*)` |
+| `fn str_len(value: str) -> num` | `declare double @cstc_std_str_len(ptr)` | `double cstc_std_str_len(const char*)` |
+| `fn str_free(value: str)` | `declare void @cstc_std_str_free(ptr)` | `void cstc_std_str_free(const char*)` |
+| `fn assert(condition: bool)` | `declare void @cstc_std_assert(i1)` | `void cstc_std_assert(int)` |
+| `fn assert_eq(a: num, b: num)` | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)` |
 
 > **Note:** Functions returning `str` (`to_str`, `str_concat`) allocate memory
 > with `malloc`. The caller owns the returned string and should release it with
@@ -165,6 +186,13 @@ The prelude currently provides the following functions:
 | `str_len` | `fn str_len(value: str) -> num` | Returns the length of a string as a number. |
 | `str_free` | `fn str_free(value: str)` | Frees a heap-allocated string returned by `to_str` or `str_concat`. |
 
+### Assertions
+
+| Function | Signature | Description |
+|----------|-----------|-------------|
+| `assert` | `fn assert(condition: bool)` | Terminates the program with `assertion failed` on standard error when `condition` is `false`. |
+| `assert_eq` | `fn assert_eq(a: num, b: num)` | Terminates the program when `a` and `b` differ by more than `1e-9`, reporting both values on standard error. |
+
 ## Usage examples
 
 ### Basic output
@@ -178,16 +206,16 @@ fn main() {
 Compiles to LLVM IR containing:
 
 ```llvm
-declare void @println(ptr)
+declare void @cstc_std_println(ptr)
 
 define i32 @main() {
 bb0:
-  call void @println(ptr @0)
+  call void @cstc_std_println(ptr @0)
   ret i32 0
 }
 ```
 
-### String operations
+### String operations example
 
 ```cicest
 fn main() {
@@ -211,6 +239,16 @@ fn main() {
 }
 ```
 
+### Assertions example
+
+```cicest
+fn main() {
+    let answer: num = 40 + 2;
+    assert(answer > 0);
+    assert_eq(answer, 42);
+}
+```
+
 ## Inspecting the prelude
 
 The `cstc_inspect` tool shows prelude declarations in its output when using
@@ -222,7 +260,7 @@ cstc_inspect my_file.cst --out-type tyir
 
 Example output (prelude items appear first):
 
-```
+```text
 TyProgram
   TyExternFnDecl "lang" print(value: str) -> Unit
   TyExternFnDecl "lang" println(value: str) -> Unit
@@ -248,15 +286,20 @@ Extern structs have their own dedicated node at every stage. At TyIR,
 `TyExternStructDecl` preserves the ABI and opaque nature so that later
 passes can distinguish an extern struct from a normal user-defined ZST.
 At LIR, `LirExternStructDecl` is stored in `LirProgram::extern_structs`.
+Extern functions preserve both `name` and `link_name` in TyIR and LIR, and
+LLVM codegen emits the `link_name` while still resolving calls by the source
+name inside Cicest.
 
 ## Adding new standard library functions
 
 To add a new function to the standard library:
 
 1. Add an `extern "lang" fn` declaration to `libraries/std/prelude.cst`.
-2. Implement the function in the language runtime (linked at build time).
-3. Update the function tables in this document.
-4. Add tests in `compiler/cstc_codegen/tests/codegen_integration.cpp` that
+   If the runtime symbol differs from the Cicest function name, add
+   `[[lang = "..."]]` so the declaration gets the correct `link_name`.
+1. Implement the function in the language runtime (linked at build time).
+1. Update the function tables in this document.
+1. Add tests in `compiler/cstc_codegen/tests/codegen_integration.cpp` that
    verify the new function is correctly declared and callable.
 
 ## Limitations (current version)

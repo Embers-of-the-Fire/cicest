@@ -344,8 +344,18 @@ private:
 
             llvm::Type* ret_ty = map_return_type(ext.return_ty);
             auto* fn_ty = llvm::FunctionType::get(ret_ty, param_types, false);
-            auto* llvm_fn = llvm::Function::Create(
-                fn_ty, llvm::Function::ExternalLinkage, std::string(ext.name.as_str()), &module_);
+            const Symbol link_name = ext.link_name.is_valid() ? ext.link_name : ext.name;
+            const std::string symbol_name(link_name.as_str());
+            llvm::Function* llvm_fn = module_.getFunction(symbol_name);
+            if (llvm_fn != nullptr) {
+                if (llvm_fn->getFunctionType() != fn_ty) {
+                    throw std::runtime_error(
+                        "conflicting extern declarations for symbol '" + symbol_name + "'");
+                }
+            } else {
+                llvm_fn = llvm::Function::Create(
+                    fn_ty, llvm::Function::ExternalLinkage, symbol_name, &module_);
+            }
 
             functions_[std::string(ext.name.as_str())] = llvm_fn;
         }
@@ -372,8 +382,18 @@ private:
                 ret_ty = map_return_type(fn.return_ty);
             }
             auto* fn_ty = llvm::FunctionType::get(ret_ty, param_types, false);
-            auto* llvm_fn = llvm::Function::Create(
-                fn_ty, llvm::Function::ExternalLinkage, std::string(fn.name.as_str()), &module_);
+            const std::string symbol_name(fn.name.as_str());
+            llvm::Function* llvm_fn = module_.getFunction(symbol_name);
+            if (llvm_fn != nullptr) {
+                if (llvm_fn->getFunctionType() != fn_ty) {
+                    throw std::runtime_error(
+                        "function symbol '" + symbol_name
+                        + "' conflicts with an existing declaration");
+                }
+            } else {
+                llvm_fn = llvm::Function::Create(
+                    fn_ty, llvm::Function::ExternalLinkage, symbol_name, &module_);
+            }
 
             functions_[std::string(fn.name.as_str())] = llvm_fn;
         }

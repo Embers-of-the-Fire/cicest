@@ -423,6 +423,8 @@ struct TyExternFnDecl {
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Linked symbol name used by codegen.
+    cstc::symbol::Symbol link_name = cstc::symbol::kInvalidSymbol;
     /// Typed parameter list.
     std::vector<TyParam> params;
     /// Resolved return type (defaults to `Unit` when absent in source).
