@@ -731,21 +731,45 @@ private:
 
     [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() {
         if (match(TokenKind::KwUnit))
-            return ast::TypeRef{.kind = ast::TypeKind::Unit, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Unit,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
         if (match(TokenKind::KwNum))
-            return ast::TypeRef{.kind = ast::TypeKind::Num, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Num,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
         if (match(TokenKind::KwStr))
-            return ast::TypeRef{.kind = ast::TypeKind::Str, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Str,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
         if (match(TokenKind::KwBool))
-            return ast::TypeRef{.kind = ast::TypeKind::Bool, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Bool,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
         if (match(TokenKind::Bang))
-            return ast::TypeRef{.kind = ast::TypeKind::Never, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Never,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
 
         auto identifier = consume_identifier("expected type name");
         if (!identifier.has_value())
             return std::unexpected(identifier.error());
 
-        return ast::TypeRef{.kind = ast::TypeKind::Named, .symbol = identifier->symbol};
+        return ast::TypeRef{
+            .kind = ast::TypeKind::Named,
+            .symbol = identifier->symbol,
+            .display_name = identifier->symbol,
+        };
     }
 
     [[nodiscard]] std::expected<ParsedPattern, ParseError> parse_let_pattern() {
@@ -1335,7 +1359,11 @@ private:
 
                 return ast::make_expr(
                     merge_spans(identifier.span, variant->span),
-                    ast::PathExpr{.head = identifier.symbol, .tail = variant->symbol});
+                    ast::PathExpr{
+                        .head = identifier.symbol,
+                        .tail = variant->symbol,
+                        .display_head = identifier.symbol,
+                    });
             }
 
             if (!restrict_struct_init_ && looks_like_struct_initializer()) {
@@ -1345,6 +1373,7 @@ private:
 
                 ast::StructInitExpr init_expr;
                 init_expr.type_name = identifier.symbol;
+                init_expr.display_name = identifier.symbol;
 
                 if (!check(TokenKind::RBrace)) {
                     while (true) {
@@ -1385,7 +1414,11 @@ private:
             }
 
             return ast::make_expr(
-                identifier.span, ast::PathExpr{.head = identifier.symbol, .tail = std::nullopt});
+                identifier.span, ast::PathExpr{
+                                     .head = identifier.symbol,
+                                     .tail = std::nullopt,
+                                     .display_head = identifier.symbol,
+                                 });
         }
 
         return std::unexpected(make_error_here("expected expression"));

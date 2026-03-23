@@ -90,6 +90,8 @@ inline void print_attributes(
 }
 
 [[nodiscard]] inline std::string_view type_name(const TypeRef& type) {
+    if (type.display_name.is_valid())
+        return type.display_name.as_str();
     if (type.symbol.is_valid())
         return type.symbol.as_str();
 
@@ -187,14 +189,19 @@ inline void print_expr(std::ostringstream& output, const ExprPtr& expr, std::siz
                 }
             } else if constexpr (std::is_same_v<ExprType, PathExpr>) {
                 indent(output, level);
+                const auto head =
+                    node.display_head.is_valid() ? node.display_head.as_str() : node.head.as_str();
                 if (node.tail.has_value()) {
-                    output << "Path(" << node.head.as_str() << "::" << node.tail->as_str() << ")\n";
+                    output << "Path(" << head << "::" << node.tail->as_str() << ")\n";
                 } else {
-                    output << "Path(" << node.head.as_str() << ")\n";
+                    output << "Path(" << head << ")\n";
                 }
             } else if constexpr (std::is_same_v<ExprType, StructInitExpr>) {
                 indent(output, level);
-                output << "StructInit(" << node.type_name.as_str() << ")\n";
+                output << "StructInit("
+                       << (node.display_name.is_valid() ? node.display_name.as_str()
+                                                        : node.type_name.as_str())
+                       << ")\n";
                 for (const StructInitField& field : node.fields) {
                     indent(output, level + 1);
                     output << field.name.as_str() << ":\n";

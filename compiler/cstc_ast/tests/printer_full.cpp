@@ -346,7 +346,7 @@ void test_binary_ops_rendered() {
     fn.name = cstc::symbol::Symbol::intern("f");
     fn.body = std::make_shared<cstc::ast::BlockExpr>();
 
-    const cstc::ast::BinaryOp ops[] = {
+    const std::array<cstc::ast::BinaryOp, 13> ops = {
         cstc::ast::BinaryOp::Add, cstc::ast::BinaryOp::Sub, cstc::ast::BinaryOp::Mul,
         cstc::ast::BinaryOp::Div, cstc::ast::BinaryOp::Mod, cstc::ast::BinaryOp::Eq,
         cstc::ast::BinaryOp::Ne,  cstc::ast::BinaryOp::Lt,  cstc::ast::BinaryOp::Le,

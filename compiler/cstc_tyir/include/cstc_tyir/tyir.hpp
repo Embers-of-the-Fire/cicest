@@ -74,12 +74,16 @@ struct Ty {
     TyKind kind = TyKind::Unit;
     /// Interned type name; valid only when `kind == TyKind::Named`.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing type name used in diagnostics.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
 
     [[nodiscard]] constexpr bool is_unit() const { return kind == TyKind::Unit; }
     [[nodiscard]] constexpr bool is_never() const { return kind == TyKind::Never; }
     [[nodiscard]] constexpr bool is_named() const { return kind == TyKind::Named; }
 
-    friend constexpr bool operator==(const Ty&, const Ty&) = default;
+    friend constexpr bool operator==(const Ty& lhs, const Ty& rhs) {
+        return lhs.kind == rhs.kind && lhs.name == rhs.name;
+    }
 
     /// Returns a human-readable display string (e.g. `"num"`, `"MyStruct"`, `"!"`).
     ///
@@ -91,7 +95,10 @@ struct Ty {
         case TyKind::Str: return "str";
         case TyKind::Bool: return "bool";
         case TyKind::Never: return "!";
-        case TyKind::Named: return name.is_valid() ? std::string(name.as_str()) : "<named>";
+        case TyKind::Named:
+            if (display_name.is_valid())
+                return std::string(display_name.as_str());
+            return name.is_valid() ? std::string(name.as_str()) : "<named>";
         }
         return "<unknown-type>";
     }
@@ -100,17 +107,30 @@ struct Ty {
 /// Factory helpers for the well-known primitive types.
 namespace ty {
 /// Unit type `()`.
-constexpr Ty unit() { return {TyKind::Unit, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty unit() {
+    return {TyKind::Unit, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+}
 /// Numeric type `num`.
-constexpr Ty num() { return {TyKind::Num, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty num() {
+    return {TyKind::Num, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+}
 /// String type `str`.
-constexpr Ty str() { return {TyKind::Str, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty str() {
+    return {TyKind::Str, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+}
 /// Boolean type `bool`.
-constexpr Ty bool_() { return {TyKind::Bool, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty bool_() {
+    return {TyKind::Bool, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+}
 /// Never / bottom type (diverging expression).
-constexpr Ty never() { return {TyKind::Never, cstc::symbol::kInvalidSymbol}; }
+constexpr Ty never() {
+    return {TyKind::Never, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+}
 /// User-defined named type (struct or enum).
-inline Ty named(cstc::symbol::Symbol sym) { return {TyKind::Named, sym}; }
+inline Ty named(
+    cstc::symbol::Symbol sym, cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol) {
+    return {TyKind::Named, sym, display_name};
+}
 } // namespace ty
 
 // ─── Expression sub-nodes ────────────────────────────────────────────────────

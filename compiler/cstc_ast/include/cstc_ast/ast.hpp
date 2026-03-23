@@ -45,6 +45,8 @@ struct TypeRef {
     TypeKind kind = TypeKind::Unit;
     /// Interned symbol for the source type token.
     cstc::symbol::Symbol symbol = cstc::symbol::kInvalidSymbol;
+    /// Human-facing name to preserve source diagnostics after resolution.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
 };
 
 /// Declaration attribute attached to an item.
@@ -180,6 +182,8 @@ struct PathExpr {
     cstc::symbol::Symbol head = cstc::symbol::kInvalidSymbol;
     /// Optional right segment (`Variant`).
     std::optional<cstc::symbol::Symbol> tail;
+    /// Human-facing head segment used in diagnostics.
+    cstc::symbol::Symbol display_head = cstc::symbol::kInvalidSymbol;
 };
 
 /// Single field initializer inside a struct construction.
@@ -196,6 +200,8 @@ struct StructInitField {
 struct StructInitExpr {
     /// Target type name.
     cstc::symbol::Symbol type_name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing type name used in diagnostics.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Field initializer list.
     std::vector<StructInitField> fields;
 };
