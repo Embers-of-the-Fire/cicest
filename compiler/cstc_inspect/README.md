@@ -8,6 +8,9 @@ Reads a source file and emits either:
 
 - lexer token stream (`tokens`)
 - parsed AST tree (`ast`)
+- typed IR (`tyir`)
+- low-level IR (`lir`)
+- LLVM IR (`llvm`)
 
 Output can be written to stdout or a file.
 
@@ -22,16 +25,24 @@ prelude before printing.
 ```bash
 cstc_inspect <input-file> --out-type tokens
 cstc_inspect <input-file> --out-type ast
+cstc_inspect <input-file> --out-type tyir
+cstc_inspect <input-file> --out-type lir
+cstc_inspect <input-file> --out-type llvm
 cstc_inspect <input-file> --out-type ast -o output.txt
 ```
 
 Flags:
 
-- `--out-type <tokens|ast>` (required)
+- `--out-type <tokens|ast|tyir|lir|llvm>` (required)
 - `-o, --output <path>`
 - `--keep-trivia` (tokens mode)
+
+`tokens` and `ast` operate on the root source file only. `tyir`, `lir`, and
+`llvm` first resolve the full module graph and inject the std prelude.
 
 ## CMake
 
 - Target: `cstc_inspect` (executable)
-- Links: `cstc_ast`, `cstc_lexer`, `cstc_parser`
+- Links: `cstc_ast`, `cstc_cli_support`, `cstc_codegen`, `cstc_lexer`,
+  `cstc_lir`, `cstc_lir_builder`, `cstc_parser`, `cstc_resource_path`,
+  `cstc_tyir`, `cstc_tyir_builder`
