@@ -761,6 +761,8 @@ private:
                 using S = std::decay_t<decltype(s)>;
                 if constexpr (std::is_same_v<S, tyir::TyLetStmt>) {
                     const lir::LirOperand val = lower_expr(builder, s.init);
+                    if (builder.is_terminated())
+                        return;
                     if (!s.discard) {
                         const lir::LirLocalId loc = builder.alloc_local(s.ty, s.name);
                         builder.emit_stmt(

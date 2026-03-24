@@ -398,6 +398,23 @@ static void test_return_from_nested_block() {
     assert(output_contains(prog, "return 42"));
 }
 
+static void test_never_let_initializer_skips_binding() {
+    const LirProgram prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn f() -> str {"
+        "  let x: str = return to_str(1);"
+        "}");
+    const LirFnDef& fn = first_fn(prog);
+
+    assert(find_named_local(fn, "x") == kInvalidLocal);
+    assert(std::holds_alternative<LirReturn>(fn.blocks[0].terminator.node));
+
+    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
+    assert(ret.value.has_value());
+    assert(ret.value->kind == LirOperand::Kind::Move);
+    assert(!output_contains(prog, " = ()"));
+}
+
 static void test_param_shadowing_in_fn_body() {
     const LirProgram prog = must_lower("fn f(x: num) -> num { let x = 2; x }");
     const LirFnDef& fn = first_fn(prog);
@@ -567,6 +584,7 @@ int main() {
     test_return_void();
     test_return_drops_owned_locals();
     test_return_from_nested_block();
+    test_never_let_initializer_skips_binding();
     test_param_shadowing_in_fn_body();
     test_nested_block_shadowing_prefers_inner_binding();
     test_terminated_block_skips_tail_expr();
