@@ -46,6 +46,34 @@ find_package(LLVM REQUIRED CONFIG)
 message(STATUS "Found LLVM ${LLVM_PACKAGE_VERSION}")
 
 set(LLVM_LIBS LLVM)
+set(CICEST_LLVM_COMPILE_DEFINITIONS)
+
+foreach(cicest_llvm_definition IN LISTS LLVM_DEFINITIONS)
+    if(cicest_llvm_definition STREQUAL "")
+        continue()
+    endif()
+
+    separate_arguments(
+        cicest_llvm_definition_tokens
+        NATIVE_COMMAND
+        "${cicest_llvm_definition}"
+    )
+
+    foreach(cicest_llvm_definition_token IN LISTS cicest_llvm_definition_tokens)
+        if(cicest_llvm_definition_token STREQUAL "")
+            continue()
+        endif()
+
+        string(
+            REGEX REPLACE
+            "^-D"
+            ""
+            cicest_llvm_compile_definition
+            "${cicest_llvm_definition_token}"
+        )
+        list(APPEND CICEST_LLVM_COMPILE_DEFINITIONS "${cicest_llvm_compile_definition}")
+    endforeach()
+endforeach()
 
 add_library(cstc_codegen STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src/codegen.cpp
@@ -64,7 +92,7 @@ target_include_directories(cstc_codegen
 
 target_compile_definitions(cstc_codegen
     PRIVATE
-        ${LLVM_DEFINITIONS}
+        ${CICEST_LLVM_COMPILE_DEFINITIONS}
 )
 
 target_link_libraries(cstc_codegen
