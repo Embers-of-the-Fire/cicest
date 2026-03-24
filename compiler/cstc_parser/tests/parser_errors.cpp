@@ -157,6 +157,16 @@ void test_error_import_star_not_supported() {
     expect_error("import { * } from \"mod.cst\";", "`import *` is not supported");
 }
 
+void test_error_import_duplicate_binding() {
+    cstc::symbol::SymbolSession session;
+    expect_error("import { foo, foo } from \"mod.cst\";", "duplicate import binding `foo`");
+}
+
+void test_error_import_duplicate_aliased_binding() {
+    cstc::symbol::SymbolSession session;
+    expect_error("import { foo, bar as foo } from \"mod.cst\";", "duplicate import binding `foo`");
+}
+
 void test_error_import_missing_from() {
     cstc::symbol::SymbolSession session;
     expect_error("import { foo } \"mod.cst\";", "expected `from` after import item list");
@@ -260,6 +270,8 @@ int main() {
     test_error_fn_missing_body();
     test_error_import_missing_brace();
     test_error_import_star_not_supported();
+    test_error_import_duplicate_binding();
+    test_error_import_duplicate_aliased_binding();
     test_error_import_missing_from();
     test_error_import_missing_path();
     test_error_import_missing_semicolon();
