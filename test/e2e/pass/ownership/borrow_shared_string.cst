@@ -1,0 +1,13 @@
+fn show_pair(left: &str, right: &str) {
+    println(left);
+    println(right);
+}
+
+fn main() {
+    let rendered: str = to_str(42);
+    let left: &str = &rendered;
+    let right: &str = &rendered;
+
+    show_pair(left, right);
+    println(&rendered);
+}

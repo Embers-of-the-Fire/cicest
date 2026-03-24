@@ -1,0 +1,3 @@
+fn main() {
+    println(&to_str(7));
+}
