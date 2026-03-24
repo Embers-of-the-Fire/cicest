@@ -154,6 +154,51 @@ static LirLocalId find_local_assigned_bool(const LirFnDef& fn, bool value) {
     return kInvalidLocal;
 }
 
+static std::size_t count_unit_const_assignments(const LirFnDef& fn) {
+    std::size_t count = 0;
+    for (const LirBasicBlock& block : fn.blocks) {
+        for (const LirStmt& stmt : block.stmts) {
+            const auto* assign = std::get_if<LirAssign>(&stmt.node);
+            if (assign == nullptr)
+                continue;
+            const auto* use = std::get_if<LirUse>(&assign->rhs.node);
+            if (use == nullptr)
+                continue;
+            if (use->operand.kind != LirOperand::Kind::Const)
+                continue;
+            if (use->operand.constant.kind == LirConst::Kind::Unit)
+                ++count;
+        }
+    }
+    return count;
+}
+
+static std::size_t count_num_literal_returns(const LirFnDef& fn, const char* literal_text) {
+    const Symbol literal = Symbol::intern(literal_text);
+    std::size_t count = 0;
+    for (const LirBasicBlock& block : fn.blocks) {
+        const auto* ret = std::get_if<LirReturn>(&block.terminator.node);
+        if (ret == nullptr || !ret->value.has_value())
+            continue;
+        if (ret->value->kind != LirOperand::Kind::Const)
+            continue;
+        if (ret->value->constant.kind != LirConst::Kind::Num)
+            continue;
+        if (ret->value->constant.symbol == literal)
+            ++count;
+    }
+    return count;
+}
+
+static std::size_t count_return_terminators(const LirFnDef& fn) {
+    std::size_t count = 0;
+    for (const LirBasicBlock& block : fn.blocks) {
+        if (std::holds_alternative<LirReturn>(block.terminator.node))
+            ++count;
+    }
+    return count;
+}
+
 // ─── If (no else) ─────────────────────────────────────────────────────────────
 
 static void test_if_no_else() {
@@ -398,6 +443,19 @@ static void test_return_from_nested_block() {
     assert(output_contains(prog, "return 42"));
 }
 
+static void test_return_never_payload_preserves_inner_returns() {
+    const LirProgram prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  return if b { return 1 } else { return 2 };"
+        "}");
+    const LirFnDef& fn = first_fn(prog);
+
+    assert(std::holds_alternative<LirSwitchBool>(fn.blocks[0].terminator.node));
+    assert(count_return_terminators(fn) == 2);
+    assert(count_num_literal_returns(fn, "1") == 1);
+    assert(count_num_literal_returns(fn, "2") == 1);
+}
+
 static void test_never_let_initializer_skips_binding() {
     const LirProgram prog = must_lower(
         "extern \"lang\" fn to_str(value: num) -> str;"
@@ -413,6 +471,20 @@ static void test_never_let_initializer_skips_binding() {
     assert(ret.value.has_value());
     assert(ret.value->kind == LirOperand::Kind::Move);
     assert(!output_contains(prog, " = ()"));
+}
+
+static void test_break_never_payload_skips_outer_break_lowering() {
+    const LirProgram prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  loop {"
+        "    break if b { break 1 } else { break 2 };"
+        "  }"
+        "}");
+    const LirFnDef& fn = first_fn(prog);
+
+    assert(count_unit_const_assignments(fn) == 0);
+    assert(find_local_assigned_num(fn, "1") != kInvalidLocal);
+    assert(find_local_assigned_num(fn, "2") != kInvalidLocal);
 }
 
 static void test_param_shadowing_in_fn_body() {
@@ -584,7 +656,9 @@ int main() {
     test_return_void();
     test_return_drops_owned_locals();
     test_return_from_nested_block();
+    test_return_never_payload_preserves_inner_returns();
     test_never_let_initializer_skips_binding();
+    test_break_never_payload_skips_outer_break_lowering();
     test_param_shadowing_in_fn_body();
     test_nested_block_shadowing_prefers_inner_binding();
     test_terminated_block_skips_tail_expr();

@@ -696,6 +696,8 @@ private:
                 const auto& loop_ctx = builder.current_loop();
                 if (node.value.has_value() && loop_ctx.break_value_local != lir::kInvalidLocal) {
                     const lir::LirOperand val = lower_expr(builder, *node.value);
+                    if (builder.is_terminated())
+                        return lir::LirOperand::from_const(lir::LirConst::unit());
                     builder.emit_stmt(
                         lir::LirAssign{
                             lir::LirPlace::local(loop_ctx.break_value_local),
@@ -721,6 +723,8 @@ private:
                 std::optional<lir::LirOperand> ret_val;
                 if (node.value.has_value()) {
                     const lir::LirOperand val = lower_expr(builder, *node.value);
+                    if (builder.is_terminated())
+                        return lir::LirOperand::from_const(lir::LirConst::unit());
                     if (builder.return_slot().has_value()) {
                         const lir::LirLocalId slot = *builder.return_slot();
                         builder.emit_stmt(
