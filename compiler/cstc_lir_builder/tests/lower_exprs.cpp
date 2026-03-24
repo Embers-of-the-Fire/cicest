@@ -36,30 +36,90 @@ static bool output_contains(const LirProgram& prog, const std::string& needle) {
     return format_program(prog).find(needle) != std::string::npos;
 }
 
-static bool has_borrow_stmt(const LirFnDef& fn) {
+static LirLocalId find_named_local(const LirFnDef& fn, const char* name) {
+    const Symbol symbol = Symbol::intern(name);
+    for (const LirLocalDecl& local : fn.locals) {
+        if (local.debug_name != symbol)
+            continue;
+        return local.id;
+    }
+    return kInvalidLocal;
+}
+
+static LirLocalId find_local_assigned_borrow_of_place(const LirFnDef& fn, const LirPlace& place) {
     for (const LirBasicBlock& block : fn.blocks) {
         for (const LirStmt& stmt : block.stmts) {
             const auto* assign = std::get_if<LirAssign>(&stmt.node);
             if (assign == nullptr)
                 continue;
-            if (std::holds_alternative<LirBorrow>(assign->rhs.node))
-                return true;
+            const auto* borrow = std::get_if<LirBorrow>(&assign->rhs.node);
+            if (borrow == nullptr)
+                continue;
+            if (borrow->place != place)
+                continue;
+            if (assign->dest.kind != LirPlace::Kind::Local)
+                continue;
+            return assign->dest.local_id;
         }
     }
-    return false;
+    return kInvalidLocal;
 }
 
-static bool has_drop_stmt(const LirFnDef& fn) {
+static bool has_local_assign_from_use_operand(
+    const LirFnDef& fn, LirLocalId dest_local, const LirOperand& operand) {
     for (const LirBasicBlock& block : fn.blocks) {
         for (const LirStmt& stmt : block.stmts) {
-            if (std::holds_alternative<LirDrop>(stmt.node))
+            const auto* assign = std::get_if<LirAssign>(&stmt.node);
+            if (assign == nullptr)
+                continue;
+            if (assign->dest != LirPlace::local(dest_local))
+                continue;
+            const auto* use = std::get_if<LirUse>(&assign->rhs.node);
+            if (use == nullptr)
+                continue;
+            if (use->operand == operand)
                 return true;
         }
     }
     return false;
 }
 
-static bool has_move_use_stmt(const LirFnDef& fn) {
+static LirLocalId
+    find_local_assigned_from_use_operand(const LirFnDef& fn, const LirOperand& operand) {
+    for (const LirBasicBlock& block : fn.blocks) {
+        for (const LirStmt& stmt : block.stmts) {
+            const auto* assign = std::get_if<LirAssign>(&stmt.node);
+            if (assign == nullptr)
+                continue;
+            if (assign->dest.kind != LirPlace::Kind::Local)
+                continue;
+            const auto* use = std::get_if<LirUse>(&assign->rhs.node);
+            if (use == nullptr)
+                continue;
+            if (use->operand == operand)
+                return assign->dest.local_id;
+        }
+    }
+    return kInvalidLocal;
+}
+
+static std::size_t count_drop_stmts_for_local(const LirFnDef& fn, LirLocalId local) {
+    std::size_t count = 0;
+    for (const LirBasicBlock& block : fn.blocks) {
+        for (const LirStmt& stmt : block.stmts) {
+            const auto* drop = std::get_if<LirDrop>(&stmt.node);
+            if (drop == nullptr)
+                continue;
+            if (drop->local != local)
+                continue;
+            ++count;
+        }
+    }
+    return count;
+}
+
+static std::size_t count_move_uses_of_local(const LirFnDef& fn, LirLocalId local) {
+    std::size_t count = 0;
     for (const LirBasicBlock& block : fn.blocks) {
         for (const LirStmt& stmt : block.stmts) {
             const auto* assign = std::get_if<LirAssign>(&stmt.node);
@@ -69,10 +129,11 @@ static bool has_move_use_stmt(const LirFnDef& fn) {
             if (use == nullptr)
                 continue;
             if (use->operand.kind == LirOperand::Kind::Move)
-                return true;
+                if (use->operand.place == LirPlace::local(local))
+                    ++count;
         }
     }
-    return false;
+    return count;
 }
 
 // ─── Numeric literal ──────────────────────────────────────────────────────────
@@ -302,14 +363,28 @@ static void test_borrow_lowers_to_explicit_borrow() {
     const LirProgram prog = must_lower(
         "extern \"lang\" fn to_str(value: num) -> str;"
         "fn f() { let s: str = to_str(1); let r: &str = &s; }");
-    assert(has_borrow_stmt(first_fn(prog)));
+    const LirFnDef& fn = first_fn(prog);
+    const LirLocalId s_local = find_named_local(fn, "s");
+    const LirLocalId r_local = find_named_local(fn, "r");
+    assert(s_local != kInvalidLocal);
+    assert(r_local != kInvalidLocal);
+
+    const LirLocalId borrow_local =
+        find_local_assigned_borrow_of_place(fn, LirPlace::local(s_local));
+    assert(borrow_local != kInvalidLocal);
+    assert(borrow_local != r_local);
+    assert(has_local_assign_from_use_operand(
+        fn, r_local, LirOperand::copy(LirPlace::local(borrow_local))));
 }
 
 static void test_scope_exit_inserts_drop_for_owned_local() {
     const LirProgram prog = must_lower(
         "extern \"lang\" fn to_str(value: num) -> str;"
         "fn f() { let s: str = to_str(1); }");
-    assert(has_drop_stmt(first_fn(prog)));
+    const LirFnDef& fn = first_fn(prog);
+    const LirLocalId s_local = find_named_local(fn, "s");
+    assert(s_local != kInvalidLocal);
+    assert(count_drop_stmts_for_local(fn, s_local) == 1);
 }
 
 static void test_move_only_flow_uses_move_operands() {
@@ -317,10 +392,22 @@ static void test_move_only_flow_uses_move_operands() {
         "extern \"lang\" fn to_str(value: num) -> str;"
         "fn f() -> str { let s: str = to_str(1); s }");
     const LirFnDef& fn = first_fn(prog);
-    assert(has_move_use_stmt(fn));
+    const LirLocalId s_local = find_named_local(fn, "s");
+    assert(s_local != kInvalidLocal);
+    assert(count_move_uses_of_local(fn, s_local) == 1);
+
     const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
     assert(ret.value.has_value());
     assert(ret.value->kind == LirOperand::Kind::Move);
+    assert(ret.value->place.kind == LirPlace::Kind::Local);
+    assert(ret.value->place.local_id != s_local);
+
+    const LirLocalId moved_from_s_local =
+        find_local_assigned_from_use_operand(fn, LirOperand::move(LirPlace::local(s_local)));
+    assert(moved_from_s_local != kInvalidLocal);
+    assert(moved_from_s_local != s_local);
+    assert(has_local_assign_from_use_operand(
+        fn, ret.value->place.local_id, LirOperand::move(LirPlace::local(moved_from_s_local))));
 }
 
 // ─── Nested binary expressions ────────────────────────────────────────────────
