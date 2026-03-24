@@ -1,6 +1,8 @@
 # Cicest Language Syntax
 
 This document defines the complete surface syntax for the Cicest language.
+Module loading, visibility, and import resolution semantics are specified in
+[Module System](modules.md).
 
 Design goals:
 
@@ -14,6 +16,7 @@ Design goals:
 
 Supported top-level items:
 
+- `import` declarations.
 - `struct` declarations.
 - `enum` declarations (scoped variants, similar in spirit to C++ `enum class`).
 - `fn` declarations.
@@ -24,7 +27,6 @@ Explicitly out of scope:
 - Generics.
 - Async/await.
 - Global `let`/`const`/`static`.
-- Module/import/export/visibility syntax.
 - Mutation (`mut`, reassignment, assignment expressions).
 - Tuple types and tuple literals.
 - Unnamed structs.
@@ -57,7 +59,7 @@ Reserved keywords:
 
 ```text
 struct enum fn let if else for while loop break continue return
-true false Unit num str bool extern
+true false Unit num str bool extern pub import from as
 ```
 
 ### 2.4 Literals
@@ -99,7 +101,11 @@ It is not an assignment expression operator.
 ```ebnf
 Program            = { Item } , EOF ;
 
-Item               = StructDecl | EnumDecl | FnDecl | ExternDecl ;
+Item               = [ "pub" ] , ( ImportDecl | StructDecl | EnumDecl | FnDecl | ExternDecl ) ;
+
+ImportDecl         = "import" , "{" , [ ImportItemList ] , "}" , "from" , STR_LIT , ";" ;
+ImportItemList     = ImportItem , { "," , ImportItem } , [ "," ] ;
+ImportItem         = IDENT , [ "as" , IDENT ] ;
 
 StructDecl         = "struct" , IDENT , ( StructFields | ";" ) ;
 StructFields       = "{" , [ FieldDeclList ] , "}" ;
@@ -127,6 +133,11 @@ Notes:
 - Enums are fieldless (C++ enum-class-like), i.e., no payload variants.
 - `extern` declarations use a string literal for the ABI (e.g., `"lang"`, `"c"`).
 - `extern` functions have no body; `extern` structs are opaque (no fields).
+- `pub` marks a top-level item or import as exportable from its module.
+- `import *` is intentionally unavailable in source code. The compiler uses an
+  internal equivalent only for the std prelude.
+- Relative import paths resolve from the importing module's directory; `@std/`
+  paths resolve from the configured standard-library root.
 
 ### 3.2 Types
 

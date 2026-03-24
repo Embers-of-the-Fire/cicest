@@ -45,6 +45,8 @@ struct TypeRef {
     TypeKind kind = TypeKind::Unit;
     /// Interned symbol for the source type token.
     cstc::symbol::Symbol symbol = cstc::symbol::kInvalidSymbol;
+    /// Human-facing name to preserve source diagnostics after resolution.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
 };
 
 /// Declaration attribute attached to an item.
@@ -69,8 +71,12 @@ struct FieldDecl {
 
 /// Struct item declaration.
 struct StructDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing type name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Declared named fields.
     std::vector<FieldDecl> fields;
     /// True when declared as `struct Name;`.
@@ -93,8 +99,12 @@ struct EnumVariant {
 
 /// Enum item declaration.
 struct EnumDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// Enum type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing type name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Declared variant list.
     std::vector<EnumVariant> variants;
     /// Source location for the full item.
@@ -176,6 +186,8 @@ struct PathExpr {
     cstc::symbol::Symbol head = cstc::symbol::kInvalidSymbol;
     /// Optional right segment (`Variant`).
     std::optional<cstc::symbol::Symbol> tail;
+    /// Human-facing head segment used in diagnostics.
+    cstc::symbol::Symbol display_head = cstc::symbol::kInvalidSymbol;
 };
 
 /// Single field initializer inside a struct construction.
@@ -192,6 +204,8 @@ struct StructInitField {
 struct StructInitExpr {
     /// Target type name.
     cstc::symbol::Symbol type_name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing type name used in diagnostics.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Field initializer list.
     std::vector<StructInitField> fields;
 };
@@ -353,8 +367,12 @@ struct Expr {
 
 /// Function item declaration.
 struct FnDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing function name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Function parameter list.
     std::vector<Param> params;
     /// Optional explicit return type.
@@ -369,10 +387,14 @@ struct FnDecl {
 
 /// Extern function declaration (no body).
 struct ExternFnDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// ABI string (e.g. "lang", "c").
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing function name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Function parameter list.
     std::vector<Param> params;
     /// Optional explicit return type.
@@ -385,18 +407,44 @@ struct ExternFnDecl {
 
 /// Extern struct declaration (opaque, no fields).
 struct ExternStructDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
     /// ABI string (e.g. "lang", "c").
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing type name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
     /// Attributes attached to the declaration.
     std::vector<Attribute> attributes;
 };
 
+/// One imported binding inside an import declaration.
+struct ImportItem {
+    /// Exported name in the source module.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Optional local alias introduced by `as`.
+    std::optional<cstc::symbol::Symbol> alias;
+    /// Source location for the import item.
+    cstc::span::SourceSpan span;
+};
+
+/// Import declaration.
+struct ImportDecl {
+    /// True when the item is declared with `pub`.
+    bool is_public = false;
+    /// Imported item list.
+    std::vector<ImportItem> items;
+    /// Module path literal contents, without surrounding quotes.
+    cstc::symbol::Symbol path = cstc::symbol::kInvalidSymbol;
+    /// Source location for the full item.
+    cstc::span::SourceSpan span;
+};
+
 /// Any top-level declaration item.
-using Item = std::variant<StructDecl, EnumDecl, FnDecl, ExternFnDecl, ExternStructDecl>;
+using Item = std::variant<StructDecl, EnumDecl, FnDecl, ExternFnDecl, ExternStructDecl, ImportDecl>;
 
 /// Full parsed source file.
 struct Program {

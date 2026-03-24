@@ -87,6 +87,14 @@ struct Tagged;
     assert(s.span.start == 1);
 }
 
+void test_pub_struct() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("pub struct Public;");
+    const auto& s = std::get<cstc::ast::StructDecl>(prog.items[0]);
+    assert(s.is_public);
+    assert(s.name.as_str() == "Public");
+}
+
 // ---------------------------------------------------------------------------
 // Enum declarations
 // ---------------------------------------------------------------------------
@@ -183,6 +191,46 @@ fn tagged() { }
     assert(fn.attributes[1].name.as_str() == "export");
     assert(fn.attributes[1].value.has_value());
     assert(fn.attributes[1].value->as_str() == "entry");
+}
+
+void test_pub_fn() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("pub fn exported() { }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.is_public);
+    assert(fn.name.as_str() == "exported");
+}
+
+void test_pub_extern_fn() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("pub extern \"c\" fn puts(value: str);");
+    const auto& fn = std::get<cstc::ast::ExternFnDecl>(prog.items[0]);
+    assert(fn.is_public);
+    assert(fn.name.as_str() == "puts");
+}
+
+void test_import_decl() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("import { Value, helper as alias } from \"path/to/foo.cst\";");
+    const auto& import = std::get<cstc::ast::ImportDecl>(prog.items[0]);
+    assert(!import.is_public);
+    assert(import.path.as_str() == "path/to/foo.cst");
+    assert(import.items.size() == 2);
+    assert(import.items[0].name.as_str() == "Value");
+    assert(!import.items[0].alias.has_value());
+    assert(import.items[1].name.as_str() == "helper");
+    assert(import.items[1].alias.has_value());
+    assert(import.items[1].alias->as_str() == "alias");
+}
+
+void test_pub_import_decl() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("pub import { println } from \"@std/prelude.cst\";");
+    const auto& import = std::get<cstc::ast::ImportDecl>(prog.items[0]);
+    assert(import.is_public);
+    assert(import.path.as_str() == "@std/prelude.cst");
+    assert(import.items.size() == 1);
+    assert(import.items[0].name.as_str() == "println");
 }
 
 // ---------------------------------------------------------------------------
@@ -287,6 +335,7 @@ int main() {
     test_struct_with_primitive_field_types();
     test_struct_empty_braces();
     test_struct_with_attributes();
+    test_pub_struct();
     test_enum_empty();
     test_enum_plain_variants();
     test_enum_with_discriminants();
@@ -296,6 +345,10 @@ int main() {
     test_fn_trailing_comma_params();
     test_fn_named_return_type();
     test_fn_with_attributes();
+    test_pub_fn();
+    test_pub_extern_fn();
+    test_import_decl();
+    test_pub_import_decl();
     test_fn_never_return_type();
     test_let_no_type_annotation();
     test_let_with_type_annotation();

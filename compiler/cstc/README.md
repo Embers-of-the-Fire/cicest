@@ -4,10 +4,10 @@ CLI package for native compilation artifacts.
 
 ## Purpose
 
-`cstc` compiles a Cicest source file through the existing frontend pipeline:
+`cstc` compiles a Cicest root module through the existing frontend pipeline:
 
 ```
-Source -> Parser -> AST -> TyIR -> LIR -> LLVM -> native artifacts
+Source/module graph -> Parser -> AST -> TyIR -> LIR -> LLVM -> native artifacts
 ```
 
 Unlike `cstc_inspect`, this tool does not print intermediate compiler data.
@@ -19,6 +19,15 @@ It emits build artifacts:
 
 Default output is the final executable (`<stem>`).
 Use `--emit` to explicitly request assembly/object/executable outputs.
+
+## Module loading
+
+`<input-file>` is treated as the root module. From there, the CLI:
+
+- resolves relative imports from the importing file's directory
+- resolves `@std/...` imports from the configured std root
+- implicitly loads `@std/prelude.cst` for every non-prelude module
+- passes the flattened crate-wide AST into TyIR/LIR/codegen
 
 ## CLI
 
@@ -55,4 +64,6 @@ Executable output requires an external linker toolchain.
 ## CMake
 
 - Target: `cstc` (executable)
-- Links: `cstc_parser`, `cstc_tyir_builder`, `cstc_lir_builder`, `cstc_codegen`
+- Links: `cstc_cli_support`, `cstc_codegen`, `cstc_lir_builder`,
+  `cstc_parser`, `cstc_resource_path`, `cstc_span`, `cstc_symbol`,
+  `cstc_tyir_builder`

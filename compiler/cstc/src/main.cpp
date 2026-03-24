@@ -372,13 +372,10 @@ void link_object_to_executable(
 }
 
 void compile_file(const Options& options) {
-    const std::string source = cstc::cli_support::read_source_file(options.input_path);
-
     cstc::symbol::SymbolSession session;
     cstc::span::SourceMap source_map;
-    const cstc::span::SourceFileId file_id = source_map.add_file(options.input_path, source);
     const cstc::ast::Program merged =
-        cstc::cli_support::parse_with_std_prelude(source_map, file_id, CICEST_STD_PATH);
+        cstc::cli_support::load_module_program(source_map, options.input_path, CICEST_STD_PATH);
 
     const auto lowered = cstc::tyir_builder::lower_program(merged);
     if (!lowered.has_value())

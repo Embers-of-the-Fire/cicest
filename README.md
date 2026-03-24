@@ -7,7 +7,7 @@ The current repository contains a working multi-stage compiler pipeline from sou
 
 Implemented language surface (as of this repository state):
 
-- Top-level items: `struct`, `enum`, `fn`
+- Top-level items: `import`, `struct`, `enum`, `fn`, `extern`
 - Types: `Unit`, `num`, `str`, `bool`, and named user types
 - Statements: immutable `let` and expression statements
 - Expressions:
@@ -21,18 +21,26 @@ Implemented language surface (as of this repository state):
 Not implemented in the current scoped subset:
 
 - generics
-- modules/import/export/visibility syntax
 - mutable bindings and assignment expressions
 - async/await and closures
 
 Current semantic/lowering stages include:
 
+- module loading from a root `.cst` file with recursive `import { ... } from
+  "..."` resolution
+- visibility checks for `pub` exports, `pub import` re-exports, implicit std
+  prelude bindings, and duplicate imported/local names
 - duplicate-name checks for struct fields, enum variants, and fn parameters
 - name resolution (locals, functions, enum variants)
 - type checking and typed IR lowering
 - lowering to control-flow based LIR
 - LLVM IR emission
 - native assembly/object artifact emission
+
+Compilation is rooted at a single input module file. The compiler loads that
+module graph, implicitly imports `@std/prelude.cst` into every non-prelude
+module, and then continues through the existing frontend/backend pipeline with a
+crate-wide resolved AST.
 
 For language, library, and unresolved design notes, see [docs/index.md](docs/index.md).
 
@@ -45,18 +53,20 @@ The implementation under `compiler/` currently includes:
 - `cstc_ast`: AST model and formatter
 - `cstc_lexer`: source lexer and token model
 - `cstc_parser`: recursive-descent parser (tokens/source → AST)
+- `cstc_module`: module graph loader and import resolver
 - `cstc_tyir`: typed IR model + formatter
 - `cstc_tyir_builder`: AST → TyIR lowering + type checking
 - `cstc_lir`: low-level IR model + formatter
 - `cstc_lir_builder`: TyIR → LIR lowering
 - `cstc_codegen`: LIR → LLVM IR/native artifact backend
+- `cstc_cli_support`: shared CLI helpers for module loading and diagnostics
 - `cstc`: compiler CLI that emits `.s` and `.o`
 - `cstc_inspect`: CLI inspector for each stage
 
 Pipeline overview:
 
 ```text
-Source -> Lexer -> Parser -> AST -> TyIR -> LIR -> LLVM IR -> native .s/.o
+Root module graph -> Lexer/Parser -> Module resolution -> AST -> TyIR -> LIR -> LLVM IR -> native .s/.o
 ```
 
 ## Build
@@ -127,6 +137,10 @@ Examples:
 ./build/compiler/cstc/cstc path/to/file.cst -o build/out/program --emit all
 ```
 
+`<input-file>` is the root module. Relative imports resolve from the importing
+file's directory, and `@std/...` imports resolve from the configured
+standard-library root.
+
 `cstc` supports these artifacts:
 
 - `<stem>.s`
@@ -156,6 +170,9 @@ Examples:
 ./build/compiler/cstc_inspect/cstc_inspect path/to/file.cst --out-type lir
 ./build/compiler/cstc_inspect/cstc_inspect path/to/file.cst --out-type llvm -o output.ll
 ```
+
+`tokens` and `ast` inspect only the root source file. `tyir`, `lir`, and
+`llvm` first resolve the full module graph and the implicit std prelude.
 
 ## License
 

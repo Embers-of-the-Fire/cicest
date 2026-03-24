@@ -218,29 +218,56 @@ private:
             return std::unexpected(parsed_attributes.error());
         std::vector<ast::Attribute> attributes = std::move(*parsed_attributes);
 
+        std::optional<Token> visibility_keyword;
+        const bool is_public = match(TokenKind::KwPub);
+        if (is_public)
+            visibility_keyword = previous();
+
         if (match(TokenKind::KwStruct)) {
-            auto decl = parse_struct_decl(previous(), std::move(attributes));
+            const Token struct_keyword = previous();
+            const Token& lead =
+                visibility_keyword.has_value() ? *visibility_keyword : struct_keyword;
+            auto decl = parse_struct_decl(lead, std::move(attributes), is_public);
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
         }
 
         if (match(TokenKind::KwEnum)) {
-            auto decl = parse_enum_decl(previous(), std::move(attributes));
+            const Token enum_keyword = previous();
+            const Token& lead = visibility_keyword.has_value() ? *visibility_keyword : enum_keyword;
+            auto decl = parse_enum_decl(lead, std::move(attributes), is_public);
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
         }
 
         if (match(TokenKind::KwFn)) {
-            auto decl = parse_fn_decl(previous(), std::move(attributes));
+            const Token fn_keyword = previous();
+            const Token& lead = visibility_keyword.has_value() ? *visibility_keyword : fn_keyword;
+            auto decl = parse_fn_decl(lead, std::move(attributes), is_public);
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
         }
 
         if (check(TokenKind::KwExtern)) {
-            return parse_extern_decl(std::move(attributes));
+            const Token& lead = visibility_keyword.has_value() ? *visibility_keyword : peek();
+            return parse_extern_decl(lead, std::move(attributes), is_public);
+        }
+
+        if (match(TokenKind::KwImport)) {
+            const Token import_keyword = previous();
+            if (!attributes.empty()) {
+                return std::unexpected(make_error_token(
+                    import_keyword, "attributes are not supported on import declarations"));
+            }
+            const Token& lead =
+                visibility_keyword.has_value() ? *visibility_keyword : import_keyword;
+            auto decl = parse_import_decl(lead, is_public);
+            if (!decl.has_value())
+                return std::unexpected(decl.error());
+            return ast::Item{std::move(*decl)};
         }
 
         if (!attributes.empty()) {
@@ -248,23 +275,29 @@ private:
                 "expected item after attributes (`struct`, `enum`, `fn`, `extern`)"));
         }
 
-        return std::unexpected(make_error_here("expected item (`struct`, `enum`, `fn`, `extern`)"));
+        if (is_public) {
+            return std::unexpected(make_error_here(
+                "expected item after `pub` (`struct`, `enum`, `fn`, `extern`, `import`)"));
+        }
+
+        return std::unexpected(
+            make_error_here("expected item (`struct`, `enum`, `fn`, `extern`, `import`)"));
     }
 
-    [[nodiscard]] std::expected<ast::StructDecl, ParseError>
-        parse_struct_decl(const Token& struct_keyword, std::vector<ast::Attribute> attributes) {
+    [[nodiscard]] std::expected<ast::StructDecl, ParseError> parse_struct_decl(
+        const Token& lead_token, std::vector<ast::Attribute> attributes, bool is_public) {
         auto name_token = consume_identifier("expected struct name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
 
         ast::StructDecl decl;
+        decl.is_public = is_public;
         decl.name = name_token->symbol;
         decl.attributes = std::move(attributes);
 
         if (match(TokenKind::Semicolon)) {
             decl.is_zst = true;
-            decl.span =
-                merge_spans(item_lead_span(decl.attributes, struct_keyword), previous().span);
+            decl.span = merge_spans(item_lead_span(decl.attributes, lead_token), previous().span);
             return decl;
         }
 
@@ -314,12 +347,12 @@ private:
         if (!close_brace.has_value())
             return std::unexpected(close_brace.error());
 
-        decl.span = merge_spans(item_lead_span(decl.attributes, struct_keyword), close_brace->span);
+        decl.span = merge_spans(item_lead_span(decl.attributes, lead_token), close_brace->span);
         return decl;
     }
 
-    [[nodiscard]] std::expected<ast::EnumDecl, ParseError>
-        parse_enum_decl(const Token& enum_keyword, std::vector<ast::Attribute> attributes) {
+    [[nodiscard]] std::expected<ast::EnumDecl, ParseError> parse_enum_decl(
+        const Token& lead_token, std::vector<ast::Attribute> attributes, bool is_public) {
         auto name_token = consume_identifier("expected enum name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -329,6 +362,7 @@ private:
             return std::unexpected(open_brace.error());
 
         ast::EnumDecl decl;
+        decl.is_public = is_public;
         decl.name = name_token->symbol;
         decl.attributes = std::move(attributes);
 
@@ -374,12 +408,12 @@ private:
         if (!close_brace.has_value())
             return std::unexpected(close_brace.error());
 
-        decl.span = merge_spans(item_lead_span(decl.attributes, enum_keyword), close_brace->span);
+        decl.span = merge_spans(item_lead_span(decl.attributes, lead_token), close_brace->span);
         return decl;
     }
 
-    [[nodiscard]] std::expected<ast::FnDecl, ParseError>
-        parse_fn_decl(const Token& fn_keyword, std::vector<ast::Attribute> attributes) {
+    [[nodiscard]] std::expected<ast::FnDecl, ParseError> parse_fn_decl(
+        const Token& lead_token, std::vector<ast::Attribute> attributes, bool is_public) {
         auto name_token = consume_identifier("expected function name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -444,19 +478,20 @@ private:
             return std::unexpected(body.error());
 
         ast::FnDecl decl;
+        decl.is_public = is_public;
         decl.name = name_token->symbol;
         decl.params = std::move(params);
         decl.return_type = std::move(return_type);
         decl.body = *body;
         decl.attributes = std::move(attributes);
-        decl.span = merge_spans(item_lead_span(decl.attributes, fn_keyword), (*body)->span);
+        decl.span = merge_spans(item_lead_span(decl.attributes, lead_token), (*body)->span);
 
         return decl;
     }
 
-    [[nodiscard]] std::expected<ast::Item, ParseError>
-        parse_extern_decl(std::vector<ast::Attribute> attributes) {
-        const Token extern_kw = advance(); // consume `extern`
+    [[nodiscard]] std::expected<ast::Item, ParseError> parse_extern_decl(
+        const Token& lead_token, std::vector<ast::Attribute> attributes, bool is_public) {
+        static_cast<void>(advance()); // consume `extern`
 
         if (!check(TokenKind::String)) {
             return std::unexpected(
@@ -466,14 +501,14 @@ private:
         const cstc::symbol::Symbol abi = string_contents_symbol(abi_token);
 
         if (match(TokenKind::KwFn)) {
-            auto decl = parse_extern_fn_decl(extern_kw, abi, std::move(attributes));
+            auto decl = parse_extern_fn_decl(lead_token, abi, std::move(attributes), is_public);
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
         }
 
         if (match(TokenKind::KwStruct)) {
-            auto decl = parse_extern_struct_decl(extern_kw, abi, std::move(attributes));
+            auto decl = parse_extern_struct_decl(lead_token, abi, std::move(attributes), is_public);
             if (!decl.has_value())
                 return std::unexpected(decl.error());
             return ast::Item{std::move(*decl)};
@@ -484,7 +519,8 @@ private:
     }
 
     [[nodiscard]] std::expected<ast::ExternFnDecl, ParseError> parse_extern_fn_decl(
-        const Token& extern_kw, cstc::symbol::Symbol abi, std::vector<ast::Attribute> attributes) {
+        const Token& lead_token, cstc::symbol::Symbol abi, std::vector<ast::Attribute> attributes,
+        bool is_public) {
         auto name_token = consume_identifier("expected function name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -549,18 +585,20 @@ private:
             return std::unexpected(semi.error());
 
         ast::ExternFnDecl decl;
+        decl.is_public = is_public;
         decl.abi = abi;
         decl.name = name_token->symbol;
         decl.params = std::move(params);
         decl.return_type = std::move(return_type);
         decl.attributes = std::move(attributes);
-        decl.span = merge_spans(item_lead_span(decl.attributes, extern_kw), semi->span);
+        decl.span = merge_spans(item_lead_span(decl.attributes, lead_token), semi->span);
 
         return decl;
     }
 
     [[nodiscard]] std::expected<ast::ExternStructDecl, ParseError> parse_extern_struct_decl(
-        const Token& extern_kw, cstc::symbol::Symbol abi, std::vector<ast::Attribute> attributes) {
+        const Token& lead_token, cstc::symbol::Symbol abi, std::vector<ast::Attribute> attributes,
+        bool is_public) {
         auto name_token = consume_identifier("expected struct name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
@@ -570,11 +608,74 @@ private:
             return std::unexpected(semi.error());
 
         ast::ExternStructDecl decl;
+        decl.is_public = is_public;
         decl.abi = abi;
         decl.name = name_token->symbol;
         decl.attributes = std::move(attributes);
-        decl.span = merge_spans(item_lead_span(decl.attributes, extern_kw), semi->span);
+        decl.span = merge_spans(item_lead_span(decl.attributes, lead_token), semi->span);
 
+        return decl;
+    }
+
+    [[nodiscard]] std::expected<ast::ImportDecl, ParseError>
+        parse_import_decl(const Token& lead_token, bool is_public) {
+        auto open_brace = consume(TokenKind::LBrace, "expected `{` after `import`");
+        if (!open_brace.has_value())
+            return std::unexpected(open_brace.error());
+
+        if (check(TokenKind::Star))
+            return std::unexpected(make_error_here("`import *` is not supported"));
+
+        ast::ImportDecl decl;
+        decl.is_public = is_public;
+
+        if (!check(TokenKind::RBrace)) {
+            while (true) {
+                auto item_name = consume_identifier("expected imported item name");
+                if (!item_name.has_value())
+                    return std::unexpected(item_name.error());
+
+                ast::ImportItem item;
+                item.name = item_name->symbol;
+                item.span = item_name->span;
+
+                if (match(TokenKind::KwAs)) {
+                    auto alias = consume_identifier("expected alias name after `as`");
+                    if (!alias.has_value())
+                        return std::unexpected(alias.error());
+                    item.alias = alias->symbol;
+                    item.span = merge_spans(item.span, alias->span);
+                }
+
+                decl.items.push_back(std::move(item));
+
+                if (match(TokenKind::Comma)) {
+                    if (check(TokenKind::RBrace))
+                        break;
+                    continue;
+                }
+                break;
+            }
+        }
+
+        auto close_brace = consume(TokenKind::RBrace, "expected `}` after import item list");
+        if (!close_brace.has_value())
+            return std::unexpected(close_brace.error());
+
+        auto from_kw = consume(TokenKind::KwFrom, "expected `from` after import item list");
+        if (!from_kw.has_value())
+            return std::unexpected(from_kw.error());
+
+        auto path_token = consume(TokenKind::String, "expected import path string after `from`");
+        if (!path_token.has_value())
+            return std::unexpected(path_token.error());
+
+        auto semi = consume(TokenKind::Semicolon, "expected `;` after import declaration");
+        if (!semi.has_value())
+            return std::unexpected(semi.error());
+
+        decl.path = string_contents_symbol(*path_token);
+        decl.span = merge_spans(item_lead_span({}, lead_token), semi->span);
         return decl;
     }
 
@@ -631,21 +732,45 @@ private:
 
     [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() {
         if (match(TokenKind::KwUnit))
-            return ast::TypeRef{.kind = ast::TypeKind::Unit, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Unit,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
         if (match(TokenKind::KwNum))
-            return ast::TypeRef{.kind = ast::TypeKind::Num, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Num,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
         if (match(TokenKind::KwStr))
-            return ast::TypeRef{.kind = ast::TypeKind::Str, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Str,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
         if (match(TokenKind::KwBool))
-            return ast::TypeRef{.kind = ast::TypeKind::Bool, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Bool,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
         if (match(TokenKind::Bang))
-            return ast::TypeRef{.kind = ast::TypeKind::Never, .symbol = previous().symbol};
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Never,
+                .symbol = previous().symbol,
+                .display_name = previous().symbol,
+            };
 
         auto identifier = consume_identifier("expected type name");
         if (!identifier.has_value())
             return std::unexpected(identifier.error());
 
-        return ast::TypeRef{.kind = ast::TypeKind::Named, .symbol = identifier->symbol};
+        return ast::TypeRef{
+            .kind = ast::TypeKind::Named,
+            .symbol = identifier->symbol,
+            .display_name = identifier->symbol,
+        };
     }
 
     [[nodiscard]] std::expected<ParsedPattern, ParseError> parse_let_pattern() {
@@ -1235,7 +1360,11 @@ private:
 
                 return ast::make_expr(
                     merge_spans(identifier.span, variant->span),
-                    ast::PathExpr{.head = identifier.symbol, .tail = variant->symbol});
+                    ast::PathExpr{
+                        .head = identifier.symbol,
+                        .tail = variant->symbol,
+                        .display_head = identifier.symbol,
+                    });
             }
 
             if (!restrict_struct_init_ && looks_like_struct_initializer()) {
@@ -1245,6 +1374,7 @@ private:
 
                 ast::StructInitExpr init_expr;
                 init_expr.type_name = identifier.symbol;
+                init_expr.display_name = identifier.symbol;
 
                 if (!check(TokenKind::RBrace)) {
                     while (true) {
@@ -1285,7 +1415,11 @@ private:
             }
 
             return ast::make_expr(
-                identifier.span, ast::PathExpr{.head = identifier.symbol, .tail = std::nullopt});
+                identifier.span, ast::PathExpr{
+                                     .head = identifier.symbol,
+                                     .tail = std::nullopt,
+                                     .display_head = identifier.symbol,
+                                 });
         }
 
         return std::unexpected(make_error_here("expected expression"));

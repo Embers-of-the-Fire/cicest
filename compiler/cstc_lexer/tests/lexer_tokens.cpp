@@ -42,6 +42,10 @@ void test_all_keywords() {
         {     "str",      cstc::lexer::TokenKind::KwStr},
         {    "bool",     cstc::lexer::TokenKind::KwBool},
         {  "extern",   cstc::lexer::TokenKind::KwExtern},
+        {     "pub",      cstc::lexer::TokenKind::KwPub},
+        {  "import",   cstc::lexer::TokenKind::KwImport},
+        {    "from",     cstc::lexer::TokenKind::KwFrom},
+        {      "as",       cstc::lexer::TokenKind::KwAs},
     };
 
     for (const auto& [text, expected_kind] : cases) {
@@ -180,6 +184,23 @@ void test_attribute_token_sequence() {
     assert(eof_tokens[5].kind == cstc::lexer::TokenKind::EndOfFile);
 }
 
+void test_import_token_sequence() {
+    cstc::symbol::SymbolSession session;
+
+    const auto tokens = lex(R"(pub import { value as alias } from "@std/prelude.cst";)");
+    assert(tokens.size() == 10);
+    assert(tokens[0].kind == cstc::lexer::TokenKind::KwPub);
+    assert(tokens[1].kind == cstc::lexer::TokenKind::KwImport);
+    assert(tokens[2].kind == cstc::lexer::TokenKind::LBrace);
+    assert(tokens[3].kind == cstc::lexer::TokenKind::Identifier);
+    assert(tokens[4].kind == cstc::lexer::TokenKind::KwAs);
+    assert(tokens[5].kind == cstc::lexer::TokenKind::Identifier);
+    assert(tokens[6].kind == cstc::lexer::TokenKind::RBrace);
+    assert(tokens[7].kind == cstc::lexer::TokenKind::KwFrom);
+    assert(tokens[8].kind == cstc::lexer::TokenKind::String);
+    assert(tokens[9].kind == cstc::lexer::TokenKind::Semicolon);
+}
+
 void test_eof_always_present() {
     cstc::symbol::SymbolSession session;
 
@@ -302,6 +323,7 @@ int main() {
     test_all_two_char_operators();
     test_colon_vs_colon_colon();
     test_attribute_token_sequence();
+    test_import_token_sequence();
     test_eof_always_present();
     test_spans_are_correct();
     test_span_base_position();

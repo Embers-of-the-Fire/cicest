@@ -253,6 +253,27 @@ struct LowerCtx {
     return std::unexpected(LowerError{span, std::move(msg)});
 }
 
+[[nodiscard]] inline std::string
+    display_symbol(cstc::symbol::Symbol display_name, cstc::symbol::Symbol fallback) {
+    if (display_name.is_valid())
+        return std::string(display_name.as_str());
+    if (fallback.is_valid())
+        return std::string(fallback.as_str());
+    return "<invalid-symbol>";
+}
+
+[[nodiscard]] inline cstc::symbol::Symbol
+    source_symbol(cstc::symbol::Symbol display_name, cstc::symbol::Symbol fallback) {
+    if (display_name.is_valid())
+        return display_name;
+    return fallback;
+}
+
+template <typename Decl>
+[[nodiscard]] inline std::string display_decl_name(const Decl& decl) {
+    return display_symbol(decl.display_name, decl.name);
+}
+
 /// Returns true if the ABI string is a recognised extern ABI.
 [[nodiscard]] inline bool is_supported_abi(cstc::symbol::Symbol abi) {
     const auto sv = abi.as_str();
@@ -299,7 +320,7 @@ struct LowerCtx {
         link_name = *attr.value;
     }
 
-    return link_name.value_or(decl.name);
+    return link_name.value_or(source_symbol(decl.display_name, decl.name));
 }
 
 // ─── Type resolution ─────────────────────────────────────────────────────────
@@ -318,8 +339,9 @@ struct LowerCtx {
         if (!ref.symbol.is_valid())
             return make_error(span, "invalid named type reference");
         if (!env.is_named_type(ref.symbol))
-            return make_error(span, "undefined type '" + std::string(ref.symbol.as_str()) + "'");
-        return tyir::ty::named(ref.symbol);
+            return make_error(
+                span, "undefined type '" + display_symbol(ref.display_name, ref.symbol) + "'");
+        return tyir::ty::named(ref.symbol, ref.display_name);
     }
     assert(false && "unhandled ast::TypeKind in lower_type");
     __builtin_unreachable();
@@ -562,22 +584,20 @@ struct LowerCtx {
 
             // ── Path ──────────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::PathExpr>) {
+                const std::string display_head = display_symbol(node.display_head, node.head);
                 if (node.tail.has_value()) {
                     // EnumName::Variant
                     const cstc::symbol::Symbol enum_name = node.head;
                     const cstc::symbol::Symbol variant_name = *node.tail;
                     if (!ctx.env.is_enum(enum_name))
-                        return make_error(
-                            expr->span,
-                            "'" + std::string(enum_name.as_str()) + "' is not an enum type");
+                        return make_error(expr->span, "'" + display_head + "' is not an enum type");
                     if (!ctx.env.has_variant(enum_name, variant_name))
                         return make_error(
                             expr->span, "no variant '" + std::string(variant_name.as_str())
-                                            + "' in enum '" + std::string(enum_name.as_str())
-                                            + "'");
+                                            + "' in enum '" + display_head + "'");
                     return tyir::make_ty_expr(
                         expr->span, tyir::EnumVariantRef{enum_name, variant_name},
-                        tyir::ty::named(enum_name));
+                        tyir::ty::named(enum_name, node.display_head));
                 }
 
                 // Local variable reference
@@ -585,22 +605,21 @@ struct LowerCtx {
                 if (local_ty.has_value())
                     return tyir::make_ty_expr(expr->span, tyir::LocalRef{node.head}, *local_ty);
 
-                return make_error(
-                    expr->span, "undefined variable '" + std::string(node.head.as_str()) + "'");
+                return make_error(expr->span, "undefined variable '" + display_head + "'");
             }
 
             // ── Struct init ───────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::StructInitExpr>) {
                 const cstc::symbol::Symbol type_name = node.type_name;
+                const std::string display_type_name =
+                    display_symbol(node.display_name, node.type_name);
                 if (ctx.env.is_extern_struct(type_name))
                     return make_error(
-                        expr->span, "cannot construct extern type '"
-                                        + std::string(type_name.as_str())
+                        expr->span, "cannot construct extern type '" + display_type_name
                                         + "'; extern structs are opaque");
                 if (!ctx.env.is_struct(type_name))
                     return make_error(
-                        expr->span,
-                        "'" + std::string(type_name.as_str()) + "' is not a struct type");
+                        expr->span, "'" + display_type_name + "' is not a struct type");
 
                 const auto& expected_fields = ctx.env.struct_fields.at(type_name);
 
@@ -617,15 +636,14 @@ struct LowerCtx {
                     if (!expected_ty)
                         return make_error(
                             field.span, "no field '" + std::string(field.name.as_str())
-                                            + "' in struct '" + std::string(type_name.as_str())
-                                            + "'");
+                                            + "' in struct '" + display_type_name + "'");
 
                     const auto [_, inserted] = seen_fields.emplace(field.name, field.span);
                     if (!inserted)
                         return make_error(
                             field.span, "duplicate field '" + std::string(field.name.as_str())
-                                            + "' in struct initializer for '"
-                                            + std::string(type_name.as_str()) + "'");
+                                            + "' in struct initializer for '" + display_type_name
+                                            + "'");
 
                     auto val = lower_expr(field.value, ctx);
                     if (!val)
@@ -645,15 +663,14 @@ struct LowerCtx {
                 for (const tyir::TyFieldDecl& expected_field : expected_fields) {
                     if (seen_fields.count(expected_field.name) == 0)
                         return make_error(
-                            expr->span, "missing field '"
-                                            + std::string(expected_field.name.as_str())
-                                            + "' in struct initializer for '"
-                                            + std::string(type_name.as_str()) + "'");
+                            expr->span,
+                            "missing field '" + std::string(expected_field.name.as_str())
+                                + "' in struct initializer for '" + display_type_name + "'");
                 }
 
                 return tyir::make_ty_expr(
                     expr->span, tyir::TyStructInit{type_name, std::move(lowered_fields)},
-                    tyir::ty::named(type_name));
+                    tyir::ty::named(type_name, node.display_name));
             }
 
             // ── Unary ─────────────────────────────────────────────────────
@@ -778,8 +795,7 @@ struct LowerCtx {
                 if (!field_ty)
                     return make_error(
                         expr->span, "no field '" + std::string(node.field.as_str())
-                                        + "' in struct '" + std::string((*base)->ty.name.as_str())
-                                        + "'");
+                                        + "' in struct '" + (*base)->ty.display() + "'");
 
                 return tyir::make_ty_expr(
                     expr->span, tyir::TyFieldAccess{std::move(*base), node.field}, *field_ty);
@@ -794,15 +810,16 @@ struct LowerCtx {
                     return make_error(expr->span, "call callee must be a function name");
 
                 const cstc::symbol::Symbol fn_name = callee_path->head;
+                const std::string display_fn_name =
+                    display_symbol(callee_path->display_head, callee_path->head);
                 if (!ctx.env.is_fn(fn_name))
-                    return make_error(
-                        expr->span, "undefined function '" + std::string(fn_name.as_str()) + "'");
+                    return make_error(expr->span, "undefined function '" + display_fn_name + "'");
 
                 const FnSignature& sig = ctx.env.fn_signatures.at(fn_name);
 
                 if (node.args.size() != sig.param_types.size())
                     return make_error(
-                        expr->span, "function '" + std::string(fn_name.as_str()) + "' expects "
+                        expr->span, "function '" + display_fn_name + "' expects "
                                         + std::to_string(sig.param_types.size()) + " argument(s), "
                                         + std::to_string(node.args.size()) + " provided");
 
@@ -816,9 +833,9 @@ struct LowerCtx {
                     if (!compatible((*arg)->ty, sig.param_types[i]))
                         return make_error(
                             node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
-                                                    + std::string(fn_name.as_str())
-                                                    + "': expected '" + sig.param_types[i].display()
-                                                    + "', found '" + (*arg)->ty.display() + "'");
+                                                    + display_fn_name + "': expected '"
+                                                    + sig.param_types[i].display() + "', found '"
+                                                    + (*arg)->ty.display() + "'");
                     lowered_args.push_back(std::move(*arg));
                 }
 
@@ -1169,7 +1186,7 @@ struct LowerCtx {
     // Check that body type matches declared return type (when a tail is present)
     if (body->tail.has_value() && !compatible(body->ty, sig.return_ty))
         return make_error(
-            fn.body->span, "function '" + std::string(fn.name.as_str()) + "' body has type '"
+            fn.body->span, "function '" + display_decl_name(fn) + "' body has type '"
                                + body->ty.display() + "' but return type is '"
                                + sig.return_ty.display() + "'");
 
@@ -1178,7 +1195,7 @@ struct LowerCtx {
     if (!body->tail.has_value() && block_can_fallthrough(*body)
         && !compatible(tyir::ty::unit(), sig.return_ty))
         return make_error(
-            fn.body->span, "function '" + std::string(fn.name.as_str())
+            fn.body->span, "function '" + display_decl_name(fn)
                                + "' may fall through without returning a value of type '"
                                + sig.return_ty.display() + "'");
 
@@ -1202,27 +1219,27 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 || env.extern_struct_names.count(struct_decl->name) > 0)
                 return detail::make_error(
                     struct_decl->span,
-                    "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
+                    "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
 
             const auto insert_result =
                 env.struct_fields.emplace(struct_decl->name, std::vector<tyir::TyFieldDecl>{});
             if (!insert_result.second)
                 return detail::make_error(
                     struct_decl->span,
-                    "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
+                    "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
         } else if (const auto* enum_decl = std::get_if<ast::EnumDecl>(&item)) {
             if (env.struct_fields.count(enum_decl->name) > 0
                 || env.extern_struct_names.count(enum_decl->name) > 0)
                 return detail::make_error(
                     enum_decl->span,
-                    "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
+                    "duplicate enum name '" + detail::display_decl_name(*enum_decl) + "'");
 
             const auto insert_result =
                 env.enum_variants.emplace(enum_decl->name, std::vector<tyir::TyEnumVariant>{});
             if (!insert_result.second)
                 return detail::make_error(
                     enum_decl->span,
-                    "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
+                    "duplicate enum name '" + detail::display_decl_name(*enum_decl) + "'");
         } else if (const auto* extern_struct = std::get_if<ast::ExternStructDecl>(&item)) {
             // Validate the ABI string.
             if (auto err = detail::validate_abi(extern_struct->abi, extern_struct->span))
@@ -1232,7 +1249,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 || env.extern_struct_names.count(extern_struct->name) > 0)
                 return detail::make_error(
                     extern_struct->span,
-                    "duplicate type name '" + std::string(extern_struct->name.as_str()) + "'");
+                    "duplicate type name '" + detail::display_decl_name(*extern_struct) + "'");
 
             env.extern_struct_names.insert(extern_struct->name);
         }
@@ -1264,7 +1281,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
             if (!insert_result.second)
                 return detail::make_error(
-                    fn->span, "duplicate function name '" + std::string(fn->name.as_str()) + "'");
+                    fn->span, "duplicate function name '" + detail::display_decl_name(*fn) + "'");
         } else if (const auto* ext_fn = std::get_if<ast::ExternFnDecl>(&item)) {
             // Validate the ABI string.
             if (auto err = detail::validate_abi(ext_fn->abi, ext_fn->span))
@@ -1281,7 +1298,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             if (!insert_result.second)
                 return detail::make_error(
                     ext_fn->span,
-                    "duplicate function name '" + std::string(ext_fn->name.as_str()) + "'");
+                    "duplicate function name '" + detail::display_decl_name(*ext_fn) + "'");
         }
     }
 

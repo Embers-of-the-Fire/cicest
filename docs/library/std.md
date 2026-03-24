@@ -4,8 +4,8 @@
 
 The cicest standard library provides a set of built-in functions that are
 automatically available in every cicest program. These functions are declared
-in the **prelude** (`libraries/std/prelude.cst`) and injected into every
-compilation before user source code is parsed.
+in the **prelude** (`libraries/std/prelude.cst`), which is compiled as a normal
+module and then implicitly imported into every module.
 
 ## Position in the pipeline
 
@@ -15,18 +15,17 @@ libraries/std/prelude.cst
         ▼
 ┌───────────────────────────────┐
 │  SourceMap.add_file(prelude)  │   ← separate SourceFileId
-│  SourceMap.add_file(user)     │   ← separate SourceFileId
+│  SourceMap.add_file(root)     │   ← separate SourceFileId
 └───────────────────────────────┘
         │
         ▼
 ┌───────────────────────────────┐
-│  Parser: parse prelude        │
-│  Parser: parse user source    │
+│  Parser: parse module files   │
 └───────────────────────────────┘
         │
         ▼
 ┌───────────────────────────────┐
-│  Merge: prelude AST + user    │   ← single ast::Program
+│  Resolver: imports + prelude  │   ← single ast::Program
 └───────────────────────────────┘
         │
         ▼
@@ -37,18 +36,17 @@ The prelude is parsed as a separate source file with its own `SourceFileId`.
 Error messages for prelude declarations resolve to `prelude.cst:line:col`,
 while user errors resolve to the user's file path.
 
-## Prelude injection
+## Prelude import
 
 Both the compiler (`cstc`) and the inspector (`cstc_inspect`) inject the
-prelude automatically. The injection process is:
+prelude automatically. The process is:
 
 1. Read `prelude.cst` from the path defined by `CICEST_STD_PATH` (set at
    compile time via CMake).
-1. Add it to the `SourceMap` as a separate file.
-1. Parse the prelude source independently.
-1. Parse the user source independently.
-1. Merge the two `ast::Program` item lists (prelude items first).
-1. Continue the pipeline with the merged program.
+1. Resolve the root module and all explicit `import { ... } from "..."` edges.
+1. Treat the prelude as an internal `import * from "@std/prelude.cst"` for
+   every non-prelude module.
+1. Continue the pipeline with the resolved crate-wide program.
 
 > **Note:** The `tokens` and `ast` output modes of `cstc_inspect` do not
 > inject the prelude, since they display only the user's source-level
@@ -60,18 +58,18 @@ All standard library functions use the `extern` declaration syntax:
 
 ```cicest
 [[lang = "cstc_std_print"]]
-extern "lang" fn print(value: str);
+pub extern "lang" fn print(value: str);
 [[lang = "cstc_std_println"]]
-extern "lang" fn println(value: str);
-extern "lang" struct Handle;
+pub extern "lang" fn println(value: str);
+pub extern "lang" struct Handle;
 ```
 
-| Component | Description |
-|-----------|-------------|
-| `extern` | Keyword introducing an external declaration |
-| `"lang"` | ABI string literal — `"lang"` denotes the cicest language runtime |
-| `fn` / `struct` | Declares a function signature or opaque struct type |
-| `;` | Terminator — extern declarations have no body |
+| Component          | Description                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `extern`           | Keyword introducing an external declaration                                  |
+| `"lang"`           | ABI string literal — `"lang"` denotes the cicest language runtime            |
+| `fn` / `struct`    | Declares a function signature or opaque struct type                          |
+| `;`                | Terminator — extern declarations have no body                                |
 | `[[lang = "..."]]` | Optional attribute setting the extern function's `link_name` used by codegen |
 
 The ABI string is stored as a `Symbol` and carried through the full pipeline
@@ -87,11 +85,14 @@ resolved `link_name`.
 
 ```cicest
 [[lang = "cstc_std_print"]]
-extern "lang" fn print(value: str);
+pub extern "lang" fn print(value: str);
 ```
 
-This declaration is called in Cicest as `print("hello")`, but it lowers to an
-extern declaration for `@cstc_std_print` in LLVM IR.
+Declarations that should flow through explicit imports or the implicit prelude
+import must be marked `pub extern`, not bare `extern`.
+
+This declaration is called in Cicest as `print("hello")`, but it lowers to a
+public extern declaration for `@cstc_std_print` in LLVM IR.
 
 ### Extern functions
 
@@ -144,16 +145,16 @@ cl   user.obj  /path/to/cicest_rt.lib  /Fe:user.exe   # MSVC
 
 The C implementations must match the LLVM IR signatures emitted by codegen:
 
-| Cicest declaration | LLVM IR | C signature |
-|--------------------|---------|-------------|
-| `fn print(value: str)` | `declare void @cstc_std_print(ptr)` | `void cstc_std_print(const char*)` |
-| `fn println(value: str)` | `declare void @cstc_std_println(ptr)` | `void cstc_std_println(const char*)` |
-| `fn to_str(value: num) -> str` | `declare ptr @cstc_std_to_str(double)` | `char* cstc_std_to_str(double)` |
-| `fn str_concat(a: str, b: str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)` | `char* cstc_std_str_concat(const char*, const char*)` |
-| `fn str_len(value: str) -> num` | `declare double @cstc_std_str_len(ptr)` | `double cstc_std_str_len(const char*)` |
-| `fn str_free(value: str)` | `declare void @cstc_std_str_free(ptr)` | `void cstc_std_str_free(const char*)` |
-| `fn assert(condition: bool)` | `declare void @cstc_std_assert(i1)` | `void cstc_std_assert(int)` |
-| `fn assert_eq(a: num, b: num)` | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)` |
+| Cicest declaration                     | LLVM IR                                            | C signature                                           |
+| -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
+| `fn print(value: str)`                 | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const char*)`                    |
+| `fn println(value: str)`               | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const char*)`                  |
+| `fn to_str(value: num) -> str`         | `declare ptr @cstc_std_to_str(double)`             | `char* cstc_std_to_str(double)`                       |
+| `fn str_concat(a: str, b: str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)`       | `char* cstc_std_str_concat(const char*, const char*)` |
+| `fn str_len(value: str) -> num`        | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const char*)`                |
+| `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr)`             | `void cstc_std_str_free(const char*)`                 |
+| `fn assert(condition: bool)`           | `declare void @cstc_std_assert(i1)`                | `void cstc_std_assert(int)`                           |
+| `fn assert_eq(a: num, b: num)`         | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)`             |
 
 > **Note:** Functions returning `str` (`to_str`, `str_concat`) allocate memory
 > with `malloc`. The caller owns the returned string and should release it with
@@ -167,30 +168,30 @@ The prelude currently provides the following functions:
 
 ### I/O
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `print` | `fn print(value: str)` | Prints a string to standard output without a trailing newline. |
-| `println` | `fn println(value: str)` | Prints a string to standard output followed by a newline. |
+| Function  | Signature                | Description                                                    |
+| --------- | ------------------------ | -------------------------------------------------------------- |
+| `print`   | `fn print(value: str)`   | Prints a string to standard output without a trailing newline. |
+| `println` | `fn println(value: str)` | Prints a string to standard output followed by a newline.      |
 
 ### Conversion
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
+| Function | Signature                      | Description                                     |
+| -------- | ------------------------------ | ----------------------------------------------- |
 | `to_str` | `fn to_str(value: num) -> str` | Converts a number to its string representation. |
 
 ### String operations
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `str_concat` | `fn str_concat(a: str, b: str) -> str` | Concatenates two strings and returns the result. |
-| `str_len` | `fn str_len(value: str) -> num` | Returns the length of a string as a number. |
-| `str_free` | `fn str_free(value: str)` | Frees a heap-allocated string returned by `to_str` or `str_concat`. |
+| Function     | Signature                              | Description                                                         |
+| ------------ | -------------------------------------- | ------------------------------------------------------------------- |
+| `str_concat` | `fn str_concat(a: str, b: str) -> str` | Concatenates two strings and returns the result.                    |
+| `str_len`    | `fn str_len(value: str) -> num`        | Returns the length of a string as a number.                         |
+| `str_free`   | `fn str_free(value: str)`              | Frees a heap-allocated string returned by `to_str` or `str_concat`. |
 
 ### Assertions
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `assert` | `fn assert(condition: bool)` | Terminates the program with `assertion failed` on standard error when `condition` is `false`. |
+| Function    | Signature                      | Description                                                                                                  |
+| ----------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `assert`    | `fn assert(condition: bool)`   | Terminates the program with `assertion failed` on standard error when `condition` is `false`.                |
 | `assert_eq` | `fn assert_eq(a: num, b: num)` | Terminates the program when `a` and `b` differ by more than `1e-9`, reporting both values on standard error. |
 
 ## Usage examples
@@ -275,12 +276,12 @@ TyProgram
 
 Each pipeline stage has a corresponding node type for extern declarations:
 
-| Stage | Node | Container |
-|-------|------|-----------|
-| AST | `ExternFnDecl`, `ExternStructDecl` | `Item` variant |
-| TyIR | `TyExternFnDecl`, `TyExternStructDecl` | `TyItem` variant |
-| LIR | `LirExternFnDecl`, `LirExternStructDecl` | `LirProgram::extern_fns`, `LirProgram::extern_structs` |
-| LLVM IR | `declare` instruction | Module-level |
+| Stage   | Node                                     | Container                                              |
+| ------- | ---------------------------------------- | ------------------------------------------------------ |
+| AST     | `ExternFnDecl`, `ExternStructDecl`       | `Item` variant                                         |
+| TyIR    | `TyExternFnDecl`, `TyExternStructDecl`   | `TyItem` variant                                       |
+| LIR     | `LirExternFnDecl`, `LirExternStructDecl` | `LirProgram::extern_fns`, `LirProgram::extern_structs` |
+| LLVM IR | `declare` instruction                    | Module-level                                           |
 
 Extern structs have their own dedicated node at every stage. At TyIR,
 `TyExternStructDecl` preserves the ABI and opaque nature so that later
@@ -294,7 +295,7 @@ name inside Cicest.
 
 To add a new function to the standard library:
 
-1. Add an `extern "lang" fn` declaration to `libraries/std/prelude.cst`.
+1. Add a `pub extern "lang" fn` declaration to `libraries/std/prelude.cst`.
    If the runtime symbol differs from the Cicest function name, add
    `[[lang = "..."]]` so the declaration gets the correct `link_name`.
 1. Implement the function in the language runtime (linked at build time).
@@ -308,8 +309,9 @@ To add a new function to the standard library:
   are semantically distinguished yet.
 - Extern structs are zero-sized and cannot carry data. They serve only as
   opaque type handles.
-- The prelude is always injected — there is no mechanism to suppress it.
-- No module or import system exists. All prelude declarations are global.
+- The prelude is always imported — there is no mechanism to suppress it.
+- Source code cannot spell `import *`; that behavior is reserved for the
+  compiler's implicit prelude import.
 - Functions returning `str` allocate memory with `malloc`. Callers should use
   `str_free` to release the returned string when it is no longer needed, but
   the language does not yet define a settled lifetime/ownership model for

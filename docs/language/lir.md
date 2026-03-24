@@ -354,5 +354,4 @@ LIR is designed for straightforward translation to LLVM IR:
   field access is represented.
 - No first-class functions or closures — all calls are direct.
 - No generics (none in Cicest source language).
-- No module / import / visibility — single-file compilation only.
 - Enum variants are fieldless (no data-carrying variants).

@@ -90,6 +90,8 @@ inline void print_attributes(
 }
 
 [[nodiscard]] inline std::string_view type_name(const TypeRef& type) {
+    if (type.display_name.is_valid())
+        return type.display_name.as_str();
     if (type.symbol.is_valid())
         return type.symbol.as_str();
 
@@ -102,6 +104,15 @@ inline void print_attributes(
     case TypeKind::Never: return "!";
     }
     return "<unknown-type>";
+}
+
+[[nodiscard]] inline std::string_view
+    render_name(cstc::symbol::Symbol display_symbol, cstc::symbol::Symbol fallback) {
+    if (display_symbol.is_valid())
+        return display_symbol.as_str();
+    if (fallback.is_valid())
+        return fallback.as_str();
+    return "<invalid-symbol>";
 }
 
 [[nodiscard]] inline std::string_view unary_name(UnaryOp op) {
@@ -187,14 +198,19 @@ inline void print_expr(std::ostringstream& output, const ExprPtr& expr, std::siz
                 }
             } else if constexpr (std::is_same_v<ExprType, PathExpr>) {
                 indent(output, level);
+                const auto head =
+                    node.display_head.is_valid() ? node.display_head.as_str() : node.head.as_str();
                 if (node.tail.has_value()) {
-                    output << "Path(" << node.head.as_str() << "::" << node.tail->as_str() << ")\n";
+                    output << "Path(" << head << "::" << node.tail->as_str() << ")\n";
                 } else {
-                    output << "Path(" << node.head.as_str() << ")\n";
+                    output << "Path(" << head << ")\n";
                 }
             } else if constexpr (std::is_same_v<ExprType, StructInitExpr>) {
                 indent(output, level);
-                output << "StructInit(" << node.type_name.as_str() << ")\n";
+                output << "StructInit("
+                       << (node.display_name.is_valid() ? node.display_name.as_str()
+                                                        : node.type_name.as_str())
+                       << ")\n";
                 for (const StructInitField& field : node.fields) {
                     indent(output, level + 1);
                     output << field.name.as_str() << ":\n";
@@ -319,10 +335,12 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             if constexpr (std::is_same_v<ItemType, StructDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
+                if (node.is_public)
+                    output << "Pub ";
                 if (node.is_zst) {
-                    output << "StructDecl " << node.name.as_str() << " ;\n";
+                    output << "StructDecl " << render_name(node.display_name, node.name) << " ;\n";
                 } else {
-                    output << "StructDecl " << node.name.as_str() << "\n";
+                    output << "StructDecl " << render_name(node.display_name, node.name) << "\n";
                     for (const FieldDecl& field : node.fields) {
                         indent(output, level + 1);
                         output << field.name.as_str() << ": " << type_name(field.type) << "\n";
@@ -331,7 +349,9 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             } else if constexpr (std::is_same_v<ItemType, EnumDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
-                output << "EnumDecl " << node.name.as_str() << "\n";
+                if (node.is_public)
+                    output << "Pub ";
+                output << "EnumDecl " << render_name(node.display_name, node.name) << "\n";
                 for (const EnumVariant& variant : node.variants) {
                     indent(output, level + 1);
                     output << variant.name.as_str();
@@ -342,7 +362,9 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             } else if constexpr (std::is_same_v<ItemType, FnDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
-                output << "FnDecl " << node.name.as_str() << "(";
+                if (node.is_public)
+                    output << "Pub ";
+                output << "FnDecl " << render_name(node.display_name, node.name) << "(";
                 for (std::size_t index = 0; index < node.params.size(); ++index) {
                     if (index > 0)
                         output << ", ";
@@ -357,8 +379,10 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             } else if constexpr (std::is_same_v<ItemType, ExternFnDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
-                output << "ExternFnDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
-                       << "(";
+                if (node.is_public)
+                    output << "Pub ";
+                output << "ExternFnDecl \"" << node.abi.as_str() << "\" "
+                       << render_name(node.display_name, node.name) << "(";
                 for (std::size_t index = 0; index < node.params.size(); ++index) {
                     if (index > 0)
                         output << ", ";
@@ -372,8 +396,22 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
             } else if constexpr (std::is_same_v<ItemType, ExternStructDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
-                output << "ExternStructDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
-                       << "\n";
+                if (node.is_public)
+                    output << "Pub ";
+                output << "ExternStructDecl \"" << node.abi.as_str() << "\" "
+                       << render_name(node.display_name, node.name) << "\n";
+            } else if constexpr (std::is_same_v<ItemType, ImportDecl>) {
+                indent(output, level);
+                if (node.is_public)
+                    output << "Pub ";
+                output << "ImportDecl from " << quote_string_literal(node.path.as_str()) << "\n";
+                for (const ImportItem& item : node.items) {
+                    indent(output, level + 1);
+                    output << item.name.as_str();
+                    if (item.alias.has_value())
+                        output << " as " << item.alias->as_str();
+                    output << "\n";
+                }
             }
         },
         item);
