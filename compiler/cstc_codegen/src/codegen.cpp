@@ -221,6 +221,7 @@ private:
     /// Unknown names conservatively fall back to an empty struct type.
     llvm::Type* map_type(const Ty& ty) {
         switch (ty.kind) {
+        case tyir::TyKind::Ref: return llvm::PointerType::getUnqual(context_);
         case tyir::TyKind::Num: return llvm::Type::getDoubleTy(context_);
         case tyir::TyKind::Bool: return llvm::Type::getInt1Ty(context_);
         case tyir::TyKind::Str: return llvm::PointerType::getUnqual(context_);
@@ -419,6 +420,7 @@ private:
         llvm::Function* llvm_fn = functions_[std::string(fn.name.as_str())];
         current_fn_ = llvm_fn;
         local_allocas_.clear();
+        local_drop_flags_.clear();
         basic_blocks_.clear();
 
         // Create all basic blocks upfront
@@ -431,6 +433,7 @@ private:
         // Create allocas in the entry block for each local
         builder_.SetInsertPoint(basic_blocks_[0]);
         local_allocas_.resize(fn.locals.size(), nullptr);
+        local_drop_flags_.resize(fn.locals.size(), nullptr);
         for (const LirLocalDecl& local : fn.locals) {
             llvm::Type* local_ty = map_type(local.ty);
             std::string alloca_name;
@@ -441,13 +444,21 @@ private:
 
             auto* alloca = builder_.CreateAlloca(local_ty, nullptr, alloca_name);
             local_allocas_[local.id] = alloca;
+            if (local.ty.is_move_only()) {
+                auto* drop_flag = builder_.CreateAlloca(
+                    llvm::Type::getInt1Ty(context_), nullptr, alloca_name + ".drop");
+                builder_.CreateStore(llvm::ConstantInt::getFalse(context_), drop_flag);
+                local_drop_flags_[local.id] = drop_flag;
+            }
         }
 
         // Store function args into param allocas
         unsigned arg_idx = 0;
         for (auto& arg : llvm_fn->args()) {
             if (arg_idx < fn.params.size()) {
-                builder_.CreateStore(&arg, local_allocas_[fn.params[arg_idx].local]);
+                const LirLocalId local = fn.params[arg_idx].local;
+                builder_.CreateStore(&arg, local_allocas_[local]);
+                set_drop_flag(local, true);
             }
             ++arg_idx;
         }
@@ -470,46 +481,123 @@ private:
 
     // ─── Statement lowering ─────────────────────────────────────────────────
 
+    void lower_stmt(const LirFnDef& fn, const LirStmt& stmt) {
+        std::visit([&](const auto& node) { lower_stmt_node(fn, node); }, stmt.node);
+    }
+
     /// Lowers an assignment statement (`dest = rvalue`).
     ///
     /// Calls returning `void` are represented as `nullptr` from rvalue lowering
     /// and intentionally skip a destination store.
-    void lower_stmt(const LirFnDef& fn, const LirStmt& stmt) {
+    void lower_stmt_node(const LirFnDef& fn, const LirAssign& stmt) {
         llvm::Value* rhs = lower_rvalue(fn, stmt.rhs);
         if (rhs == nullptr)
             return; // void call result — nothing to store
 
         llvm::Value* dest = lower_place_addr(stmt.dest);
         builder_.CreateStore(rhs, dest);
+        if (stmt.dest.kind == LirPlace::Kind::Local)
+            set_drop_flag(stmt.dest.local_id, true);
+    }
+
+    /// Lowers an explicit drop statement.
+    void lower_stmt_node(const LirFnDef& fn, const LirDrop& stmt) {
+        if (stmt.local >= fn.locals.size() || !fn.locals[stmt.local].ty.is_move_only())
+            return;
+
+        llvm::AllocaInst* drop_flag = local_drop_flags_[stmt.local];
+        if (drop_flag == nullptr)
+            return;
+
+        llvm::BasicBlock* drop_bb =
+            llvm::BasicBlock::Create(context_, "drop.then", builder_.GetInsertBlock()->getParent());
+        llvm::BasicBlock* cont_bb =
+            llvm::BasicBlock::Create(context_, "drop.cont", builder_.GetInsertBlock()->getParent());
+
+        llvm::Value* should_drop =
+            builder_.CreateLoad(llvm::Type::getInt1Ty(context_), drop_flag, "drop.flag");
+        builder_.CreateCondBr(should_drop, drop_bb, cont_bb);
+
+        builder_.SetInsertPoint(drop_bb);
+        llvm::AllocaInst* local = local_allocas_[stmt.local];
+        llvm::Value* value = builder_.CreateLoad(local->getAllocatedType(), local, "drop.value");
+        emit_drop_value(fn.locals[stmt.local].ty, value);
+        builder_.CreateStore(llvm::ConstantInt::getFalse(context_), drop_flag);
+        builder_.CreateBr(cont_bb);
+
+        builder_.SetInsertPoint(cont_bb);
     }
 
     // ─── Place lowering ─────────────────────────────────────────────────────
 
+    void set_drop_flag(LirLocalId local, bool value) {
+        if (local >= local_drop_flags_.size() || local_drop_flags_[local] == nullptr)
+            return;
+
+        builder_.CreateStore(
+            value ? llvm::ConstantInt::getTrue(context_) : llvm::ConstantInt::getFalse(context_),
+            local_drop_flags_[local]);
+    }
+
+    struct LoweredPlaceAddr {
+        llvm::Value* addr = nullptr;
+        llvm::Type* value_ty = nullptr;
+    };
+
+    /// Returns an address suitable for storing into `place`, plus the value
+    /// type currently referenced by that address.
+    LoweredPlaceAddr lower_place_addr_info(const LirPlace& place) {
+        llvm::AllocaInst* base = local_allocas_[place.local_id];
+        llvm::Value* addr = base;
+        llvm::Type* current_ty = base->getAllocatedType();
+
+        for (const Symbol field_name : place.field_path) {
+            auto* struct_ty = llvm::dyn_cast<llvm::StructType>(current_ty);
+            assert(struct_ty != nullptr && "field projection on non-struct type");
+            const unsigned field_idx = find_struct_field_index(struct_ty, field_name);
+            addr = builder_.CreateStructGEP(
+                struct_ty, addr, field_idx, std::string(field_name.as_str()));
+            current_ty = struct_ty->getElementType(field_idx);
+        }
+
+        return {addr, current_ty};
+    }
+
     /// Returns an address suitable for storing into `place`.
     llvm::Value* lower_place_addr(const LirPlace& place) {
-        llvm::AllocaInst* base = local_allocas_[place.local_id];
-        if (place.kind == LirPlace::Kind::Local)
-            return base;
-
-        // Field access: GEP into the struct
-        llvm::Type* struct_ty = base->getAllocatedType();
-        unsigned field_idx = find_struct_field_index(struct_ty, place.field_name);
-        return builder_.CreateStructGEP(
-            struct_ty, base, field_idx, std::string(place.field_name.as_str()));
+        return lower_place_addr_info(place).addr;
     }
 
     /// Loads the runtime value currently held by `place`.
     llvm::Value* lower_place_load(const LirPlace& place) {
-        if (place.kind == LirPlace::Kind::Local) {
-            llvm::AllocaInst* alloca = local_allocas_[place.local_id];
-            return builder_.CreateLoad(alloca->getAllocatedType(), alloca);
-        }
+        const LoweredPlaceAddr lowered = lower_place_addr_info(place);
+        return builder_.CreateLoad(lowered.value_ty, lowered.addr);
+    }
 
-        // Field: load the struct, then extractvalue
-        llvm::AllocaInst* base = local_allocas_[place.local_id];
-        llvm::Value* struct_val = builder_.CreateLoad(base->getAllocatedType(), base);
-        unsigned field_idx = find_struct_field_index(base->getAllocatedType(), place.field_name);
-        return builder_.CreateExtractValue(struct_val, field_idx);
+    /// Resolves the type currently referenced by `place`.
+    const Ty& place_ty(const LirFnDef& fn, const LirPlace& place) {
+        const Ty* current_ty = &fn.locals[place.local_id].ty;
+        for (const Symbol field_name : place.field_path) {
+            if (!current_ty->is_named())
+                return *current_ty;
+
+            const auto it = struct_decls_.find(std::string(current_ty->name.as_str()));
+            if (it == struct_decls_.end())
+                return *current_ty;
+
+            const LirStructDecl* decl = it->second;
+            const LirStructField* matched_field = nullptr;
+            for (const LirStructField& field : decl->fields) {
+                if (field.name == field_name) {
+                    matched_field = &field;
+                    break;
+                }
+            }
+            if (matched_field == nullptr)
+                return *current_ty;
+            current_ty = &matched_field->ty;
+        }
+        return *current_ty;
     }
 
     /// Resolves a struct field symbol to its positional field index.
@@ -534,9 +622,19 @@ private:
     // ─── Operand lowering ───────────────────────────────────────────────────
 
     /// Lowers an operand into an LLVM SSA value.
-    llvm::Value* lower_operand(const LirOperand& op) {
+    llvm::Value* lower_operand(const LirFnDef& fn, const LirOperand& op) {
+        (void)fn;
         if (op.kind == LirOperand::Kind::Copy)
             return lower_place_load(op.place);
+        if (op.kind == LirOperand::Kind::Move) {
+            if (op.place.kind != LirPlace::Kind::Local) {
+                assert(false && "moves from projected LIR places are not supported");
+                std::abort();
+            }
+            llvm::Value* value = lower_place_load(op.place);
+            set_drop_flag(op.place.local_id, false);
+            return value;
+        }
 
         return lower_const(op.constant);
     }
@@ -578,14 +676,22 @@ private:
     }
 
     /// `Use` is just operand materialization.
-    llvm::Value* lower_rvalue_node(const LirFnDef& /*fn*/, const LirUse& use) {
-        return lower_operand(use.operand);
+    llvm::Value* lower_rvalue_node(const LirFnDef& fn, const LirUse& use) {
+        return lower_operand(fn, use.operand);
+    }
+
+    /// Lowers a shared borrow.
+    llvm::Value* lower_rvalue_node(const LirFnDef& fn, const LirBorrow& borrow) {
+        const Ty& borrowed_ty = place_ty(fn, borrow.place);
+        if (borrowed_ty.kind == tyir::TyKind::Str || borrowed_ty.kind == tyir::TyKind::Ref)
+            return lower_place_load(borrow.place);
+        return lower_place_addr(borrow.place);
     }
 
     /// Lowers binary arithmetic/comparison/logical operators.
-    llvm::Value* lower_rvalue_node(const LirFnDef& /*fn*/, const LirBinaryOp& binop) {
-        llvm::Value* lhs = lower_operand(binop.lhs);
-        llvm::Value* rhs = lower_operand(binop.rhs);
+    llvm::Value* lower_rvalue_node(const LirFnDef& fn, const LirBinaryOp& binop) {
+        llvm::Value* lhs = lower_operand(fn, binop.lhs);
+        llvm::Value* rhs = lower_operand(fn, binop.rhs);
 
         using BO = cstc::ast::BinaryOp;
         switch (binop.op) {
@@ -607,11 +713,12 @@ private:
     }
 
     /// Lowers unary numeric and boolean operators.
-    llvm::Value* lower_rvalue_node(const LirFnDef& /*fn*/, const LirUnaryOp& unop) {
-        llvm::Value* operand = lower_operand(unop.operand);
+    llvm::Value* lower_rvalue_node(const LirFnDef& fn, const LirUnaryOp& unop) {
+        llvm::Value* operand = lower_operand(fn, unop.operand);
 
         using UO = cstc::ast::UnaryOp;
         switch (unop.op) {
+        case UO::Borrow: return nullptr;
         case UO::Negate: return builder_.CreateFNeg(operand, "neg");
         case UO::Not:
             return builder_.CreateXor(operand, llvm::ConstantInt::getTrue(context_), "not");
@@ -623,12 +730,12 @@ private:
     ///
     /// Returns `nullptr` when the callee returns `void`, allowing statement
     /// lowering to skip destination storage.
-    llvm::Value* lower_rvalue_node(const LirFnDef& /*fn*/, const LirCall& call) {
+    llvm::Value* lower_rvalue_node(const LirFnDef& fn, const LirCall& call) {
         llvm::Function* callee = functions_[std::string(call.fn_name.as_str())];
         std::vector<llvm::Value*> args;
         args.reserve(call.args.size());
         for (const LirOperand& arg : call.args)
-            args.push_back(lower_operand(arg));
+            args.push_back(lower_operand(fn, arg));
 
         llvm::Value* result = builder_.CreateCall(callee, args);
 
@@ -642,7 +749,7 @@ private:
     /// Lowers struct literal construction.
     ///
     /// Starts from `undef` and incrementally inserts each named field.
-    llvm::Value* lower_rvalue_node(const LirFnDef& /*fn*/, const LirStructInit& init) {
+    llvm::Value* lower_rvalue_node(const LirFnDef& fn, const LirStructInit& init) {
         std::string type_name(init.type_name.as_str());
         auto it = struct_types_.find(type_name);
 
@@ -657,7 +764,7 @@ private:
         // Start with undef and insertvalue for each field
         llvm::Value* agg = llvm::UndefValue::get(st);
         for (const LirStructInitField& field : init.fields) {
-            llvm::Value* val = lower_operand(field.value);
+            llvm::Value* val = lower_operand(fn, field.value);
             unsigned idx = 0;
             for (std::size_t i = 0; i < decl->fields.size(); ++i) {
                 if (decl->fields[i].name == field.name) {
@@ -687,6 +794,50 @@ private:
         return builder_.CreateInsertValue(agg, disc_val, 0);
     }
 
+    llvm::Function* ensure_runtime_str_free() {
+        if (runtime_str_free_ != nullptr)
+            return runtime_str_free_;
+
+        if (llvm::Function* existing = module_.getFunction("cstc_std_str_free")) {
+            runtime_str_free_ = existing;
+            return runtime_str_free_;
+        }
+
+        auto* fn_ty = llvm::FunctionType::get(
+            llvm::Type::getVoidTy(context_), {llvm::PointerType::getUnqual(context_)}, false);
+        runtime_str_free_ = llvm::Function::Create(
+            fn_ty, llvm::Function::ExternalLinkage, "cstc_std_str_free", &module_);
+        return runtime_str_free_;
+    }
+
+    void emit_drop_value(const Ty& ty, llvm::Value* value) {
+        if (!ty.is_move_only())
+            return;
+
+        if (ty.kind == tyir::TyKind::Str) {
+            builder_.CreateCall(ensure_runtime_str_free(), {value});
+            return;
+        }
+
+        if (ty.kind != tyir::TyKind::Named)
+            return;
+
+        const auto it = struct_decls_.find(std::string(ty.name.as_str()));
+        if (it == struct_decls_.end())
+            return;
+
+        const LirStructDecl* decl = it->second;
+        for (std::size_t i = decl->fields.size(); i > 0; --i) {
+            const LirStructField& field = decl->fields[i - 1];
+            if (!field.ty.is_move_only())
+                continue;
+
+            llvm::Value* field_value =
+                builder_.CreateExtractValue(value, static_cast<unsigned>(i - 1), "drop.field");
+            emit_drop_value(field.ty, field_value);
+        }
+    }
+
     // ─── Terminator lowering ────────────────────────────────────────────────
 
     /// Lowers a block terminator into control-flow instructions.
@@ -703,7 +854,7 @@ private:
                 // (values outside [-2^31, 2^31-1] produce poison per LLVM
                 // semantics). This mirrors C's (int) cast behaviour and is the
                 // expected semantic for process exit codes.
-                llvm::Value* double_val = lower_operand(*ret.value);
+                llvm::Value* double_val = lower_operand(fn, *ret.value);
                 llvm::Value* int_val = builder_.CreateFPToSI(
                     double_val, llvm::Type::getInt32Ty(context_), "exit_code");
                 builder_.CreateRet(int_val);
@@ -718,7 +869,7 @@ private:
         if (!ret.value.has_value() || is_void_return(fn.return_ty)) {
             builder_.CreateRetVoid();
         } else {
-            llvm::Value* val = lower_operand(*ret.value);
+            llvm::Value* val = lower_operand(fn, *ret.value);
             builder_.CreateRet(val);
         }
     }
@@ -729,8 +880,8 @@ private:
     }
 
     /// Lowers boolean conditional branches.
-    void lower_terminator_node(const LirFnDef& /*fn*/, const LirSwitchBool& sw) {
-        llvm::Value* cond = lower_operand(sw.condition);
+    void lower_terminator_node(const LirFnDef& fn, const LirSwitchBool& sw) {
+        llvm::Value* cond = lower_operand(fn, sw.condition);
         builder_.CreateCondBr(cond, basic_blocks_[sw.true_target], basic_blocks_[sw.false_target]);
     }
 
@@ -797,7 +948,9 @@ private:
     // Per-function state
     llvm::Function* current_fn_ = nullptr;
     std::vector<llvm::AllocaInst*> local_allocas_;
+    std::vector<llvm::AllocaInst*> local_drop_flags_;
     std::vector<llvm::BasicBlock*> basic_blocks_;
+    llvm::Function* runtime_str_free_ = nullptr;
     bool is_built_ = false;
 };
 

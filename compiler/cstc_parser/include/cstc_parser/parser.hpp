@@ -731,35 +731,53 @@ private:
     }
 
     [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() {
+        if (match(TokenKind::Amp)) {
+            auto inner = parse_type();
+            if (!inner.has_value())
+                return std::unexpected(inner.error());
+
+            return ast::TypeRef{
+                .kind = ast::TypeKind::Ref,
+                .symbol = cstc::symbol::kInvalidSymbol,
+                .display_name = cstc::symbol::kInvalidSymbol,
+                .pointee = std::make_shared<ast::TypeRef>(std::move(*inner)),
+            };
+        }
+
         if (match(TokenKind::KwUnit))
             return ast::TypeRef{
                 .kind = ast::TypeKind::Unit,
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
+                .pointee = nullptr,
             };
         if (match(TokenKind::KwNum))
             return ast::TypeRef{
                 .kind = ast::TypeKind::Num,
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
+                .pointee = nullptr,
             };
         if (match(TokenKind::KwStr))
             return ast::TypeRef{
                 .kind = ast::TypeKind::Str,
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
+                .pointee = nullptr,
             };
         if (match(TokenKind::KwBool))
             return ast::TypeRef{
                 .kind = ast::TypeKind::Bool,
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
+                .pointee = nullptr,
             };
         if (match(TokenKind::Bang))
             return ast::TypeRef{
                 .kind = ast::TypeKind::Never,
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
+                .pointee = nullptr,
             };
 
         auto identifier = consume_identifier("expected type name");
@@ -770,6 +788,7 @@ private:
             .kind = ast::TypeKind::Named,
             .symbol = identifier->symbol,
             .display_name = identifier->symbol,
+            .pointee = nullptr,
         };
     }
 
@@ -1035,6 +1054,17 @@ private:
     }
 
     [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_unary() {
+        if (match(TokenKind::Amp)) {
+            const Token op = previous();
+            auto rhs = parse_unary();
+            if (!rhs.has_value())
+                return std::unexpected(rhs.error());
+
+            return ast::make_expr(
+                merge_spans(op.span, (*rhs)->span),
+                ast::UnaryExpr{.op = ast::UnaryOp::Borrow, .rhs = *rhs});
+        }
+
         if (match(TokenKind::Bang)) {
             const Token op = previous();
             auto rhs = parse_unary();

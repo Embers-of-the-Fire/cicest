@@ -70,6 +70,16 @@ void test_struct_empty_braces() {
     assert(s.fields.empty());
 }
 
+void test_struct_with_ref_field_type() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("struct View { name: &str }");
+    const auto& s = std::get<cstc::ast::StructDecl>(prog.items[0]);
+    assert(s.fields.size() == 1);
+    assert(s.fields[0].type.kind == cstc::ast::TypeKind::Ref);
+    assert(s.fields[0].type.pointee);
+    assert(s.fields[0].type.pointee->kind == cstc::ast::TypeKind::Str);
+}
+
 void test_struct_with_attributes() {
     cstc::symbol::SymbolSession session;
     const auto prog = must_parse(R"(
@@ -177,6 +187,20 @@ void test_fn_named_return_type() {
     assert(fn.return_type->symbol.as_str() == "MyType");
 }
 
+void test_fn_ref_param_and_return_type() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("fn view(value: &str) -> &str { value }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.params.size() == 1);
+    assert(fn.params[0].type.kind == cstc::ast::TypeKind::Ref);
+    assert(fn.params[0].type.pointee);
+    assert(fn.params[0].type.pointee->kind == cstc::ast::TypeKind::Str);
+    assert(fn.return_type.has_value());
+    assert(fn.return_type->kind == cstc::ast::TypeKind::Ref);
+    assert(fn.return_type->pointee);
+    assert(fn.return_type->pointee->kind == cstc::ast::TypeKind::Str);
+}
+
 void test_fn_with_attributes() {
     cstc::symbol::SymbolSession session;
     const auto prog = must_parse(R"(
@@ -259,6 +283,17 @@ void test_let_no_type_annotation() {
     assert(!let.discard);
 }
 
+void test_let_ref_type_annotation() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("fn f(value: &str) { let view: &str = value; }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    const auto& let = std::get<cstc::ast::LetStmt>(fn.body->statements[0]);
+    assert(let.type_annotation.has_value());
+    assert(let.type_annotation->kind == cstc::ast::TypeKind::Ref);
+    assert(let.type_annotation->pointee);
+    assert(let.type_annotation->pointee->kind == cstc::ast::TypeKind::Str);
+}
+
 void test_let_with_type_annotation() {
     cstc::symbol::SymbolSession session;
     const auto prog = must_parse("fn f() { let y: bool = true; y }");
@@ -334,6 +369,7 @@ int main() {
     test_zst_struct();
     test_struct_with_primitive_field_types();
     test_struct_empty_braces();
+    test_struct_with_ref_field_type();
     test_struct_with_attributes();
     test_pub_struct();
     test_enum_empty();
@@ -344,6 +380,7 @@ int main() {
     test_fn_no_params_with_return();
     test_fn_trailing_comma_params();
     test_fn_named_return_type();
+    test_fn_ref_param_and_return_type();
     test_fn_with_attributes();
     test_pub_fn();
     test_pub_extern_fn();
@@ -351,6 +388,7 @@ int main() {
     test_pub_import_decl();
     test_fn_never_return_type();
     test_let_no_type_annotation();
+    test_let_ref_type_annotation();
     test_let_with_type_annotation();
     test_let_discard();
     test_expr_stmt_semicolon();

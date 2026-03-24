@@ -89,13 +89,20 @@ inline void print_attributes(
     }
 }
 
-[[nodiscard]] inline std::string_view type_name(const TypeRef& type) {
+[[nodiscard]] inline std::string type_name(const TypeRef& type) {
+    if (type.kind == TypeKind::Ref) {
+        if (!type.pointee)
+            return "&<invalid-type>";
+        return "&" + type_name(*type.pointee);
+    }
+
     if (type.display_name.is_valid())
-        return type.display_name.as_str();
+        return std::string(type.display_name.as_str());
     if (type.symbol.is_valid())
-        return type.symbol.as_str();
+        return std::string(type.symbol.as_str());
 
     switch (type.kind) {
+    case TypeKind::Ref: return "&<invalid-type>";
     case TypeKind::Unit: return "Unit";
     case TypeKind::Num: return "num";
     case TypeKind::Str: return "str";
@@ -117,6 +124,7 @@ inline void print_attributes(
 
 [[nodiscard]] inline std::string_view unary_name(UnaryOp op) {
     switch (op) {
+    case UnaryOp::Borrow: return "&";
     case UnaryOp::Negate: return "-";
     case UnaryOp::Not: return "!";
     }

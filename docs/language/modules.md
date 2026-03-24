@@ -21,7 +21,7 @@ Any top-level item can be exported from its module by prefixing it with `pub`:
 pub struct File;
 pub enum Mode { Read, Write }
 pub fn open() -> File { File { } }
-pub extern "lang" fn println(value: str);
+pub extern "lang" fn println(value: &str);
 ```
 
 `pub` can also prefix an import. A public import re-exports the selected item
@@ -133,7 +133,8 @@ pub import { inc } from "math.cst";
 import { inc } from "api.cst";
 
 fn main() {
-    println(to_str(inc(41)));
+    let rendered: str = to_str(inc(41));
+    println(&rendered);
 }
 ```
 

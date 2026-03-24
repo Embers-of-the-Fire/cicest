@@ -54,6 +54,17 @@ void test_extern_fn_with_params() {
     assert(fn.params[0].type.kind == cstc::ast::TypeKind::Str);
 }
 
+void test_extern_fn_with_ref_param() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse(R"(extern "lang" fn print(value: &str);)");
+    assert(prog.items.size() == 1);
+    const auto& fn = std::get<cstc::ast::ExternFnDecl>(prog.items[0]);
+    assert(fn.params.size() == 1);
+    assert(fn.params[0].type.kind == cstc::ast::TypeKind::Ref);
+    assert(fn.params[0].type.pointee);
+    assert(fn.params[0].type.pointee->kind == cstc::ast::TypeKind::Str);
+}
+
 void test_extern_fn_with_return_type() {
     cstc::symbol::SymbolSession session;
     const auto prog = must_parse(R"(extern "lang" fn to_str(value: num) -> str;)");
@@ -223,6 +234,7 @@ void test_error_extern_fn_duplicate_params() {
 int main() {
     test_extern_fn_no_params_no_return();
     test_extern_fn_with_params();
+    test_extern_fn_with_ref_param();
     test_extern_fn_with_return_type();
     test_extern_fn_multiple_params();
     test_extern_fn_trailing_comma();

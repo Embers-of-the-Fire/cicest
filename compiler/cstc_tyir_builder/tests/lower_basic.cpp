@@ -77,6 +77,10 @@ static void test_struct_with_named_field() {
 
 static void test_struct_undefined_type_error() { must_fail("struct Foo { x: Unknown }"); }
 
+static void test_struct_ref_field_error() {
+    must_fail_with_message("struct Foo { value: &num }", "reference fields are not supported");
+}
+
 static void test_duplicate_struct_name_error() {
     must_fail_with_message(
         "struct Point { x: num }"
@@ -155,9 +159,15 @@ static void test_fn_bool_return() {
 }
 
 static void test_fn_str_return() {
-    const auto prog = must_lower("fn greeting() -> str { \"hello\" }");
-    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn greeting() -> str { to_str(0) }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
     assert(fn.return_ty == ty::str());
+}
+
+static void test_fn_ref_return_rejected() {
+    must_fail_with_message("fn greeting() -> &str { \"hello\" }", "reference return types");
 }
 
 static void test_duplicate_function_name_error() {
@@ -248,7 +258,7 @@ static void test_main_returns_never() {
 
 static void test_main_returns_str_error() {
     must_fail_with_message(
-        "fn main() -> str { \"hi\" }",
+        "extern \"lang\" fn to_str(value: num) -> str; fn main() -> str { to_str(1) }",
         "'main' function must return 'Unit', 'num', or '!' (never), found 'str'");
 }
 
@@ -288,6 +298,7 @@ int main() {
     test_zst_struct();
     test_struct_with_named_field();
     test_struct_undefined_type_error();
+    test_struct_ref_field_error();
     test_duplicate_struct_name_error();
     test_enum_decl();
     test_duplicate_enum_name_error();
@@ -297,6 +308,7 @@ int main() {
     test_fn_with_params_and_return();
     test_fn_bool_return();
     test_fn_str_return();
+    test_fn_ref_return_rejected();
     test_duplicate_function_name_error();
     test_item_order();
     test_return_type_mismatch();

@@ -320,6 +320,10 @@ inline std::vector<Token>
             detail::append_token(
                 tokens, TokenKind::Dot, base_pos, start, index, source, keep_trivia);
             break;
+        case '&':
+            detail::append_token(
+                tokens, TokenKind::Amp, base_pos, start, index, source, keep_trivia);
+            break;
         case '+':
             detail::append_token(
                 tokens, TokenKind::Plus, base_pos, start, index, source, keep_trivia);

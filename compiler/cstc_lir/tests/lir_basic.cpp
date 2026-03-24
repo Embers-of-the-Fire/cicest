@@ -33,7 +33,7 @@ static void test_const_str() {
     const LirConst c = LirConst::str(s);
     assert(c.kind == LirConst::Kind::Str);
     assert(c.symbol == s);
-    assert(c.ty() == ty::str());
+    assert(c.ty() == ty::ref(ty::str()));
     assert(c.display() == "\"hello\"");
 }
 
@@ -79,7 +79,7 @@ static void test_place_local() {
     const LirPlace p = LirPlace::local(3);
     assert(p.kind == LirPlace::Kind::Local);
     assert(p.local_id == 3);
-    assert(!p.field_name.is_valid());
+    assert(p.field_path.empty());
 }
 
 static void test_place_field() {
@@ -88,15 +88,30 @@ static void test_place_field() {
     const LirPlace p = LirPlace::field(0, x);
     assert(p.kind == LirPlace::Kind::Field);
     assert(p.local_id == 0);
-    assert(p.field_name == x);
+    assert(p.field_path.size() == 1);
+    assert(p.field_path[0] == x);
+}
+
+static void test_place_nested_field() {
+    SymbolSession session;
+    const Symbol inner = Symbol::intern("inner");
+    const Symbol value = Symbol::intern("value");
+    const LirPlace p = LirPlace::field(0, inner).project(value);
+    assert(p.kind == LirPlace::Kind::Field);
+    assert(p.local_id == 0);
+    assert(p.field_path.size() == 2);
+    assert(p.field_path[0] == inner);
+    assert(p.field_path[1] == value);
 }
 
 static void test_place_equality() {
     SymbolSession session;
     const Symbol f = Symbol::intern("foo");
+    const Symbol g = Symbol::intern("bar");
     assert(LirPlace::local(1) == LirPlace::local(1));
     assert(!(LirPlace::local(1) == LirPlace::local(2)));
     assert(LirPlace::field(0, f) == LirPlace::field(0, f));
+    assert(LirPlace::field(0, f).project(g) == LirPlace::field(0, f).project(g));
     assert(!(LirPlace::field(0, f) == LirPlace::local(0)));
 }
 
@@ -107,6 +122,14 @@ static void test_operand_copy() {
     const LirPlace p = LirPlace::local(5);
     const LirOperand op = LirOperand::copy(p);
     assert(op.kind == LirOperand::Kind::Copy);
+    assert(op.place == p);
+}
+
+static void test_operand_move() {
+    SymbolSession session;
+    const LirPlace p = LirPlace::local(7);
+    const LirOperand op = LirOperand::move(p);
+    assert(op.kind == LirOperand::Kind::Move);
     assert(op.place == p);
 }
 
@@ -133,6 +156,13 @@ static void test_rvalue_use() {
     SymbolSession session;
     const LirRvalue rv{LirUse{LirOperand::from_const(LirConst::unit())}};
     assert(std::holds_alternative<LirUse>(rv.node));
+}
+
+static void test_rvalue_borrow() {
+    SymbolSession session;
+    const LirRvalue rv{LirBorrow{LirPlace::local(1)}};
+    assert(std::holds_alternative<LirBorrow>(rv.node));
+    assert(std::get<LirBorrow>(rv.node).place == LirPlace::local(1));
 }
 
 static void test_rvalue_binary_op() {
@@ -235,13 +265,16 @@ int main() {
 
     test_place_local();
     test_place_field();
+    test_place_nested_field();
     test_place_equality();
 
     test_operand_copy();
+    test_operand_move();
     test_operand_const();
     test_operand_equality();
 
     test_rvalue_use();
+    test_rvalue_borrow();
     test_rvalue_binary_op();
     test_rvalue_unary_op();
     test_rvalue_call();

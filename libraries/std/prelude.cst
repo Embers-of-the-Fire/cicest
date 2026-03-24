@@ -1,13 +1,13 @@
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: str);
+pub extern "lang" fn print(value: &str);
 [[lang = "cstc_std_println"]]
-pub extern "lang" fn println(value: str);
+pub extern "lang" fn println(value: &str);
 [[lang = "cstc_std_to_str"]]
 pub extern "lang" fn to_str(value: num) -> str;
 [[lang = "cstc_std_str_concat"]]
-pub extern "lang" fn str_concat(a: str, b: str) -> str;
+pub extern "lang" fn str_concat(a: &str, b: &str) -> str;
 [[lang = "cstc_std_str_len"]]
-pub extern "lang" fn str_len(value: str) -> num;
+pub extern "lang" fn str_len(value: &str) -> num;
 [[lang = "cstc_std_str_free"]]
 pub extern "lang" fn str_free(value: str);
 [[lang = "cstc_std_assert"]]

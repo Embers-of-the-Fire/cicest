@@ -20,6 +20,8 @@ int main() {
                 cstc::ast::TypeRef{
                                    .kind = cstc::ast::TypeKind::Num,
                                    .symbol = cstc::symbol::Symbol::intern("num"),
+                                   .display_name = cstc::symbol::kInvalidSymbol,
+                                   .pointee = nullptr,
                                    },
             .span = {.start = 0, .end = 0},
     });

@@ -110,27 +110,27 @@ void test_struct_with_various_field_types() {
     s.name = cstc::symbol::Symbol::intern("Foo");
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("a"),
-        .type = {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num")},
+        .type = {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
         .span = {}
     });
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("b"),
-        .type = {cstc::ast::TypeKind::Str, cstc::symbol::Symbol::intern("str")},
+        .type = {cstc::ast::TypeKind::Str, cstc::symbol::Symbol::intern("str"), {}, nullptr},
         .span = {}
     });
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("c"),
-        .type = {cstc::ast::TypeKind::Bool, cstc::symbol::Symbol::intern("bool")},
+        .type = {cstc::ast::TypeKind::Bool, cstc::symbol::Symbol::intern("bool"), {}, nullptr},
         .span = {}
     });
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("d"),
-        .type = {cstc::ast::TypeKind::Unit, cstc::symbol::Symbol::intern("Unit")},
+        .type = {cstc::ast::TypeKind::Unit, cstc::symbol::Symbol::intern("Unit"), {}, nullptr},
         .span = {}
     });
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("e"),
-        .type = {cstc::ast::TypeKind::Named, cstc::symbol::Symbol::intern("Bar")},
+        .type = {cstc::ast::TypeKind::Named, cstc::symbol::Symbol::intern("Bar"), {}, nullptr},
         .span = {}
     });
     prog.items.push_back(std::move(s));
@@ -140,6 +140,32 @@ void test_struct_with_various_field_types() {
     assert(out.find("c: bool") != std::string::npos);
     assert(out.find("d: Unit") != std::string::npos);
     assert(out.find("e: Bar") != std::string::npos);
+}
+
+void test_struct_with_ref_field_type() {
+    cstc::symbol::SymbolSession session;
+    cstc::ast::Program prog;
+    cstc::ast::StructDecl s;
+    s.name = cstc::symbol::Symbol::intern("View");
+    s.fields.push_back({
+        .name = cstc::symbol::Symbol::intern("name"),
+        .type =
+            cstc::ast::TypeRef{
+                               .kind = cstc::ast::TypeKind::Ref,
+                               .symbol = cstc::symbol::kInvalidSymbol,
+                               .display_name = cstc::symbol::kInvalidSymbol,
+                               .pointee = std::make_shared<cstc::ast::TypeRef>(cstc::ast::TypeRef{
+                    .kind = cstc::ast::TypeKind::Str,
+                    .symbol = cstc::symbol::Symbol::intern("str"),
+                    .display_name = cstc::symbol::kInvalidSymbol,
+                    .pointee = nullptr,
+                }),
+                               },
+        .span = {},
+    });
+    prog.items.push_back(std::move(s));
+    const std::string out = cstc::ast::format_program(prog);
+    assert(out.find("name: &str") != std::string::npos);
 }
 
 void test_struct_attributes_rendered() {
@@ -246,16 +272,16 @@ void test_fn_decl_with_params_and_return() {
     fn.name = cstc::symbol::Symbol::intern("add");
     fn.params.push_back({
         .name = cstc::symbol::Symbol::intern("a"),
-        .type = {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num")},
+        .type = {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
         .span = {},
     });
     fn.params.push_back({
         .name = cstc::symbol::Symbol::intern("b"),
-        .type = {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num")},
+        .type = {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
         .span = {},
     });
-    fn.return_type =
-        cstc::ast::TypeRef{cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num")};
+    fn.return_type = cstc::ast::TypeRef{
+        cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr};
     fn.body = empty_block();
     prog.items.push_back(std::move(fn));
     const std::string out = cstc::ast::format_program(prog);
@@ -270,7 +296,7 @@ void test_extern_fn_attributes_rendered() {
     fn.name = cstc::symbol::Symbol::intern("puts");
     fn.params.push_back({
         .name = cstc::symbol::Symbol::intern("s"),
-        .type = {cstc::ast::TypeKind::Str, cstc::symbol::Symbol::intern("str")},
+        .type = {cstc::ast::TypeKind::Str, cstc::symbol::Symbol::intern("str"), {}, nullptr},
         .span = {},
     });
     fn.attributes.push_back({
@@ -337,6 +363,19 @@ void test_unary_ops_rendered() {
     const std::string out = cstc::ast::format_program(prog);
     assert(out.find("Unary(-)") != std::string::npos);
     assert(out.find("Unary(!)") != std::string::npos);
+}
+
+void test_borrow_expr_rendered() {
+    cstc::symbol::SymbolSession session;
+    cstc::ast::Program prog;
+    cstc::ast::FnDecl fn;
+    fn.name = cstc::symbol::Symbol::intern("borrow");
+    fn.body = std::make_shared<cstc::ast::BlockExpr>();
+    fn.body->tail = unary(cstc::ast::UnaryOp::Borrow, path("value"));
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = cstc::ast::format_program(prog);
+    assert(out.find("Unary(&)") != std::string::npos);
 }
 
 void test_binary_ops_rendered() {
@@ -510,7 +549,8 @@ void test_for_rendered() {
         .discard = false,
         .name = cstc::symbol::Symbol::intern("i"),
         .type_annotation =
-            cstc::ast::TypeRef{cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num")},
+            cstc::ast::TypeRef{
+                               cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
         .initializer = num("0"),
         .span = {},
     };
@@ -566,7 +606,8 @@ void test_let_stmt_rendered() {
             .discard = false,
             .name = cstc::symbol::Symbol::intern("x"),
             .type_annotation =
-                cstc::ast::TypeRef{cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num")},
+                cstc::ast::TypeRef{
+                                   cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
             .initializer = num("5"),
             .span = {},
     });
@@ -631,6 +672,7 @@ int main() {
     test_program_header();
     test_zst_struct();
     test_struct_with_various_field_types();
+    test_struct_with_ref_field_type();
     test_struct_attributes_rendered();
     test_struct_attribute_values_are_escaped();
     test_enum_plain_variants();
@@ -641,6 +683,7 @@ int main() {
     test_literals_rendered();
     test_path_expr_rendered();
     test_unary_ops_rendered();
+    test_borrow_expr_rendered();
     test_binary_ops_rendered();
     test_field_access_rendered();
     test_call_rendered();

@@ -45,6 +45,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -138,16 +139,14 @@ struct LirConst {
 ///
 /// LIR supports two place forms:
 ///  - `Local(id)` — the entire local variable.
-///  - `Field(base_local, field_name)` — a named field projection on a struct local.
-///
-/// More complex projections (slice indexing, nested fields) are not yet needed
-/// and can be added when required.
+///  - `Field(base_local, field_path...)` — one or more named field projections
+///    rooted at a struct local (for example `local.inner.value`).
 struct LirPlace {
     /// Category of place.
     enum class Kind {
         /// The whole local variable.
         Local,
-        /// A named field of a struct-typed local (`base.field`).
+        /// One or more named fields projected from a struct-typed local.
         Field,
     };
 
@@ -155,8 +154,8 @@ struct LirPlace {
     Kind kind = Kind::Local;
     /// The local variable that forms the root of this place.
     LirLocalId local_id = kInvalidLocal;
-    /// Field name; valid only when `kind == Field`.
-    cstc::symbol::Symbol field_name = cstc::symbol::kInvalidSymbol;
+    /// Field projection path; non-empty only when `kind == Field`.
+    std::vector<cstc::symbol::Symbol> field_path;
 
     // ─── Factories ───────────────────────────────────────────────────────────
 
@@ -164,13 +163,15 @@ struct LirPlace {
     [[nodiscard]] static LirPlace local(LirLocalId id);
     /// Constructs a field-projection place (`local_id.field_name`).
     [[nodiscard]] static LirPlace field(LirLocalId id, cstc::symbol::Symbol name);
+    /// Appends a field projection to an existing place.
+    [[nodiscard]] LirPlace project(cstc::symbol::Symbol name) const;
 
     friend bool operator==(const LirPlace&, const LirPlace&) = default;
 };
 
 // ─── Operands ───────────────────────────────────────────────────────────────
 
-/// An SSA-style value: either a copy of a place's current value, or a
+/// An SSA-style value: either a copy/move of a place's current value, or a
 /// compile-time constant.
 ///
 /// Operands are the "leaves" of every rvalue computation: every input to a
@@ -180,13 +181,15 @@ struct LirOperand {
     enum class Kind {
         /// A copy of the value currently held by `place`.
         Copy,
+        /// A move out of the value currently held by `place`.
+        Move,
         /// A compile-time constant embedded directly.
         Const,
     };
 
     /// Operand category.
     Kind kind = Kind::Const;
-    /// Source place; valid when `kind == Copy`.
+    /// Source place; valid when `kind == Copy` or `kind == Move`.
     LirPlace place = LirPlace{};
     /// Constant payload; valid when `kind == Const`.
     LirConst constant = LirConst{};
@@ -195,6 +198,8 @@ struct LirOperand {
 
     /// Operand that copies the value at `place`.
     [[nodiscard]] static LirOperand copy(LirPlace place);
+    /// Operand that moves the value out of `place`.
+    [[nodiscard]] static LirOperand move(LirPlace place);
     /// Operand that embeds a compile-time constant.
     [[nodiscard]] static LirOperand from_const(LirConst constant);
 
@@ -209,6 +214,11 @@ struct LirOperand {
 /// Trivial rvalue: just move/copy an operand into the destination.
 struct LirUse {
     LirOperand operand;
+};
+
+/// Shared borrow of a place.
+struct LirBorrow {
+    LirPlace place;
 };
 
 /// Arithmetic or logical binary operation.
@@ -252,8 +262,8 @@ struct LirEnumVariantRef {
 
 /// The right-hand side of an `LirAssign` statement.
 struct LirRvalue {
-    using Node =
-        std::variant<LirUse, LirBinaryOp, LirUnaryOp, LirCall, LirStructInit, LirEnumVariantRef>;
+    using Node = std::variant<
+        LirUse, LirBorrow, LirBinaryOp, LirUnaryOp, LirCall, LirStructInit, LirEnumVariantRef>;
 
     Node node;
 };
@@ -274,8 +284,28 @@ struct LirAssign {
     cstc::span::SourceSpan span;
 };
 
-/// Any statement within a basic block (currently only `LirAssign`).
-using LirStmt = LirAssign;
+/// Explicit drop of an owned local.
+struct LirDrop {
+    /// Local whose destructor logic should run if it still owns a value.
+    LirLocalId local = kInvalidLocal;
+    /// Source location for diagnostics / debug info.
+    cstc::span::SourceSpan span;
+};
+
+/// Any statement within a basic block.
+struct LirStmt {
+    using Node = std::variant<LirAssign, LirDrop>;
+
+    Node node;
+
+    LirStmt() = default;
+    LirStmt(LirAssign assign)
+        : node(std::move(assign)) {}
+    LirStmt(LirDrop drop)
+        : node(std::move(drop)) {}
+    LirStmt(LirPlace dest, LirRvalue rhs, cstc::span::SourceSpan span)
+        : node(LirAssign{std::move(dest), std::move(rhs), span}) {}
+};
 
 // ─── Terminators ────────────────────────────────────────────────────────────
 
@@ -478,7 +508,7 @@ inline LirConst LirConst::unit() {
 inline Ty LirConst::ty() const {
     switch (kind) {
     case Kind::Num: return tyir::ty::num();
-    case Kind::Str: return tyir::ty::str();
+    case Kind::Str: return tyir::ty::ref(tyir::ty::str());
     case Kind::Bool: return tyir::ty::bool_();
     case Kind::Unit: return tyir::ty::unit();
     }
@@ -502,12 +532,17 @@ inline std::string LirConst::display() const {
 
 // ─── LirPlace ────────────────────────────────────────────────────────────────
 
-inline LirPlace LirPlace::local(LirLocalId id) {
-    return LirPlace{Kind::Local, id, cstc::symbol::kInvalidSymbol};
-}
+inline LirPlace LirPlace::local(LirLocalId id) { return LirPlace{Kind::Local, id, {}}; }
 
 inline LirPlace LirPlace::field(LirLocalId id, cstc::symbol::Symbol name) {
-    return LirPlace{Kind::Field, id, name};
+    return LirPlace{Kind::Field, id, {name}};
+}
+
+inline LirPlace LirPlace::project(cstc::symbol::Symbol name) const {
+    LirPlace projected = *this;
+    projected.kind = Kind::Field;
+    projected.field_path.push_back(name);
+    return projected;
 }
 
 // ─── LirOperand ──────────────────────────────────────────────────────────────
@@ -515,7 +550,14 @@ inline LirPlace LirPlace::field(LirLocalId id, cstc::symbol::Symbol name) {
 inline LirOperand LirOperand::copy(LirPlace place) {
     LirOperand op;
     op.kind = Kind::Copy;
-    op.place = place;
+    op.place = std::move(place);
+    return op;
+}
+
+inline LirOperand LirOperand::move(LirPlace place) {
+    LirOperand op;
+    op.kind = Kind::Move;
+    op.place = std::move(place);
     return op;
 }
 

@@ -70,6 +70,7 @@ struct LowerError {
 
 } // namespace cstc::tyir_builder
 
+#include <algorithm>
 #include <cassert>
 #include <optional>
 #include <string>
@@ -111,6 +112,13 @@ struct TypeEnv {
     /// Names of extern (opaque) struct types. These are valid as type
     /// annotations but cannot be constructed via struct-init expressions.
     std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> extern_struct_names;
+
+    /// Cached ownership classification for named types after field resolution.
+    mutable std::unordered_map<cstc::symbol::Symbol, tyir::ValueSemantics, cstc::symbol::SymbolHash>
+        named_semantics_cache;
+    /// Recursion guard used while classifying aggregate types.
+    mutable std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash>
+        named_semantics_in_progress;
 
     [[nodiscard]] bool is_struct(cstc::symbol::Symbol name) const {
         return struct_fields.count(name) > 0;
@@ -164,29 +172,77 @@ struct TypeEnv {
 /// popped on exit.
 class Scope {
 public:
-    void push() { frames_.push_back({}); }
+    struct LocalState {
+        tyir::Ty ty;
+        bool moved = false;
+        std::size_t active_borrows = 0;
+        std::optional<std::size_t> borrowed_local;
+    };
+
+    void push() { frames_.push_back(Frame{{}, locals_.size()}); }
     void pop() {
         assert(!frames_.empty());
+        while (locals_.size() > frames_.back().start_local_count) {
+            LocalState& local = locals_.back();
+            if (local.borrowed_local.has_value()) {
+                LocalState& owner = locals_.at(*local.borrowed_local);
+                assert(owner.active_borrows > 0);
+                owner.active_borrows -= 1;
+            }
+            locals_.pop_back();
+        }
         frames_.pop_back();
     }
 
-    void insert(cstc::symbol::Symbol name, tyir::Ty ty) {
+    void insert(
+        cstc::symbol::Symbol name, tyir::Ty ty,
+        std::optional<std::size_t> borrowed_local = std::nullopt) {
         assert(!frames_.empty());
-        frames_.back().emplace(name, std::move(ty));
+        if (borrowed_local.has_value())
+            locals_.at(*borrowed_local).active_borrows += 1;
+
+        const std::size_t index = locals_.size();
+        locals_.push_back(LocalState{std::move(ty), false, 0, borrowed_local});
+        frames_.back().bindings.emplace(name, index);
     }
 
-    [[nodiscard]] std::optional<tyir::Ty> lookup(cstc::symbol::Symbol name) const {
+    [[nodiscard]] std::optional<std::size_t> lookup_local(cstc::symbol::Symbol name) const {
         for (auto it = frames_.rbegin(); it != frames_.rend(); ++it) {
-            const auto found = it->find(name);
-            if (found != it->end())
+            const auto found = it->bindings.find(name);
+            if (found != it->bindings.end())
                 return found->second;
         }
         return std::nullopt;
     }
 
+    [[nodiscard]] LocalState& local(std::size_t index) { return locals_.at(index); }
+    [[nodiscard]] const LocalState& local(std::size_t index) const { return locals_.at(index); }
+    [[nodiscard]] std::size_t locals_size() const { return locals_.size(); }
+
+    void add_ephemeral_borrow(std::size_t index) { locals_.at(index).active_borrows += 1; }
+    void release_ephemeral_borrow(std::size_t index) {
+        LocalState& local = locals_.at(index);
+        assert(local.active_borrows > 0);
+        local.active_borrows -= 1;
+    }
+
+    void merge_from(const Scope& other) {
+        assert(locals_.size() == other.locals_.size());
+        for (std::size_t i = 0; i < locals_.size(); ++i) {
+            locals_[i].moved = locals_[i].moved || other.locals_[i].moved;
+            locals_[i].active_borrows =
+                std::max(locals_[i].active_borrows, other.locals_[i].active_borrows);
+        }
+    }
+
 private:
-    std::vector<std::unordered_map<cstc::symbol::Symbol, tyir::Ty, cstc::symbol::SymbolHash>>
-        frames_;
+    struct Frame {
+        std::unordered_map<cstc::symbol::Symbol, std::size_t, cstc::symbol::SymbolHash> bindings;
+        std::size_t start_local_count = 0;
+    };
+
+    std::vector<Frame> frames_;
+    std::vector<LocalState> locals_;
 };
 
 // ─── Loop context ───────────────────────────────────────────────────────────
@@ -274,6 +330,78 @@ template <typename Decl>
     return display_symbol(decl.display_name, decl.name);
 }
 
+[[nodiscard]] inline tyir::ValueSemantics primitive_semantics(tyir::TyKind kind) {
+    switch (kind) {
+    case tyir::TyKind::Ref: return tyir::ValueSemantics::Ref;
+    case tyir::TyKind::Str: return tyir::ValueSemantics::Move;
+    case tyir::TyKind::Unit:
+    case tyir::TyKind::Num:
+    case tyir::TyKind::Bool:
+    case tyir::TyKind::Never: return tyir::ValueSemantics::Copy;
+    case tyir::TyKind::Named: return tyir::ValueSemantics::Move;
+    }
+    return tyir::ValueSemantics::Move;
+}
+
+[[nodiscard]] inline tyir::ValueSemantics
+    named_semantics(cstc::symbol::Symbol name, const TypeEnv& env) {
+    const auto cached = env.named_semantics_cache.find(name);
+    if (cached != env.named_semantics_cache.end())
+        return cached->second;
+
+    if (env.is_enum(name)) {
+        env.named_semantics_cache.emplace(name, tyir::ValueSemantics::Copy);
+        return tyir::ValueSemantics::Copy;
+    }
+    if (env.is_extern_struct(name)) {
+        env.named_semantics_cache.emplace(name, tyir::ValueSemantics::Move);
+        return tyir::ValueSemantics::Move;
+    }
+
+    if (!env.named_semantics_in_progress.insert(name).second)
+        return tyir::ValueSemantics::Move;
+
+    tyir::ValueSemantics semantics = tyir::ValueSemantics::Copy;
+    const auto it = env.struct_fields.find(name);
+    if (it != env.struct_fields.end()) {
+        for (const tyir::TyFieldDecl& field : it->second) {
+            tyir::Ty field_ty = field.ty;
+            if (field_ty.kind == tyir::TyKind::Named)
+                field_ty.semantics = named_semantics(field_ty.name, env);
+            else if (field_ty.kind == tyir::TyKind::Ref)
+                field_ty.semantics = tyir::ValueSemantics::Ref;
+            else
+                field_ty.semantics = primitive_semantics(field_ty.kind);
+
+            if (field_ty.is_move_only()) {
+                semantics = tyir::ValueSemantics::Move;
+                break;
+            }
+        }
+    }
+
+    env.named_semantics_in_progress.erase(name);
+    env.named_semantics_cache[name] = semantics;
+    return semantics;
+}
+
+[[nodiscard]] inline tyir::Ty annotate_type_semantics(tyir::Ty ty, const TypeEnv& env) {
+    switch (ty.kind) {
+    case tyir::TyKind::Ref:
+        if (ty.pointee != nullptr)
+            ty.pointee = std::make_shared<tyir::Ty>(annotate_type_semantics(*ty.pointee, env));
+        ty.semantics = tyir::ValueSemantics::Ref;
+        return ty;
+    case tyir::TyKind::Named: ty.semantics = named_semantics(ty.name, env); return ty;
+    case tyir::TyKind::Unit:
+    case tyir::TyKind::Num:
+    case tyir::TyKind::Str:
+    case tyir::TyKind::Bool:
+    case tyir::TyKind::Never: ty.semantics = primitive_semantics(ty.kind); return ty;
+    }
+    return ty;
+}
+
 /// Returns true if the ABI string is a recognised extern ABI.
 [[nodiscard]] inline bool is_supported_abi(cstc::symbol::Symbol abi) {
     const auto sv = abi.as_str();
@@ -325,11 +453,20 @@ template <typename Decl>
 
 // ─── Type resolution ─────────────────────────────────────────────────────────
 
-/// Converts an AST `TypeRef` to a `tyir::Ty`, validating named types against
-/// the type environment.
+/// Converts an AST `TypeRef` to a `tyir::Ty` shape, validating named types
+/// against the type environment.
 [[nodiscard]] inline std::expected<tyir::Ty, LowerError>
-    lower_type(const ast::TypeRef& ref, const TypeEnv& env, cstc::span::SourceSpan span) {
+    lower_type_shape(const ast::TypeRef& ref, const TypeEnv& env, cstc::span::SourceSpan span) {
     switch (ref.kind) {
+    case ast::TypeKind::Ref:
+        if (ref.pointee == nullptr)
+            return make_error(span, "invalid reference type");
+        {
+            auto pointee = lower_type_shape(*ref.pointee, env, span);
+            if (!pointee)
+                return std::unexpected(std::move(pointee.error()));
+            return tyir::ty::ref(*pointee);
+        }
     case ast::TypeKind::Unit: return tyir::ty::unit();
     case ast::TypeKind::Num: return tyir::ty::num();
     case ast::TypeKind::Str: return tyir::ty::str();
@@ -343,14 +480,45 @@ template <typename Decl>
                 span, "undefined type '" + display_symbol(ref.display_name, ref.symbol) + "'");
         return tyir::ty::named(ref.symbol, ref.display_name);
     }
-    assert(false && "unhandled ast::TypeKind in lower_type");
+    assert(false && "unhandled ast::TypeKind in lower_type_shape");
     __builtin_unreachable();
+}
+
+[[nodiscard]] inline std::expected<tyir::Ty, LowerError>
+    lower_type(const ast::TypeRef& ref, const TypeEnv& env, cstc::span::SourceSpan span) {
+    auto ty = lower_type_shape(ref, env, span);
+    if (!ty)
+        return std::unexpected(std::move(ty.error()));
+    return annotate_type_semantics(std::move(*ty), env);
+}
+
+inline void finalize_env_type_semantics(TypeEnv& env) {
+    env.named_semantics_cache.clear();
+    env.named_semantics_in_progress.clear();
+    for (auto& [_, fields] : env.struct_fields) {
+        for (tyir::TyFieldDecl& field : fields)
+            field.ty = annotate_type_semantics(field.ty, env);
+    }
 }
 
 // ─── Forward declarations ────────────────────────────────────────────────────
 
-[[nodiscard]] inline std::expected<tyir::TyExprPtr, LowerError>
+struct LoweredExpr {
+    tyir::TyExprPtr expr;
+    std::vector<std::size_t> temp_borrows;
+    std::optional<std::size_t> persistent_borrow_owner;
+};
+
+struct LoweredPlace {
+    tyir::TyExprPtr expr;
+    std::optional<std::size_t> owner_local;
+};
+
+[[nodiscard]] inline std::expected<LoweredExpr, LowerError>
     lower_expr(const ast::ExprPtr& expr, LowerCtx& ctx);
+
+[[nodiscard]] inline std::expected<LoweredPlace, LowerError>
+    lower_place_expr(const ast::ExprPtr& expr, LowerCtx& ctx);
 
 [[nodiscard]] inline std::expected<tyir::TyBlock, LowerError>
     lower_block(const ast::BlockExpr& block, LowerCtx& ctx);
@@ -366,6 +534,8 @@ template <typename Decl>
         auto t = lower_type(*return_type, env, span);
         if (!t)
             return std::unexpected(std::move(t.error()));
+        if (t->is_ref())
+            return make_error(span, "reference return types are not supported");
         sig.return_ty = *t;
     } else {
         sig.return_ty = tyir::ty::unit();
@@ -377,6 +547,21 @@ template <typename Decl>
         sig.param_types.push_back(*pt);
     }
     return sig;
+}
+
+inline void append_temp_borrows(std::vector<std::size_t>& into, std::vector<std::size_t> from) {
+    into.insert(into.end(), from.begin(), from.end());
+}
+
+inline void release_temp_borrows(LowerCtx& ctx, const std::vector<std::size_t>& borrows) {
+    for (const std::size_t index : borrows)
+        ctx.scope.release_ephemeral_borrow(index);
+}
+
+inline void consume_temp_borrow(std::vector<std::size_t>& borrows, std::size_t owner_local) {
+    const auto it = std::find(borrows.begin(), borrows.end(), owner_local);
+    if (it != borrows.end())
+        borrows.erase(it);
 }
 
 // ─── Statement lowering ──────────────────────────────────────────────────────
@@ -399,26 +584,42 @@ template <typename Decl>
                     auto ann = lower_type(*s.type_annotation, ctx.env, s.span);
                     if (!ann)
                         return std::unexpected(std::move(ann.error()));
-                    if (!compatible((*init)->ty, *ann))
+                    if (!compatible(init->expr->ty, *ann))
                         return make_error(
                             s.span, "type mismatch in let binding: expected '" + ann->display()
-                                        + "', found '" + (*init)->ty.display() + "'");
+                                        + "', found '" + init->expr->ty.display() + "'");
                     binding_ty = *ann;
                 } else {
-                    binding_ty = (*init)->ty;
+                    binding_ty = init->expr->ty;
                 }
 
                 // Register binding in scope (unless discard pattern)
+                std::optional<std::size_t> borrowed_local;
+                if (binding_ty.is_ref() && init->persistent_borrow_owner.has_value()) {
+                    borrowed_local = init->persistent_borrow_owner;
+                    consume_temp_borrow(init->temp_borrows, borrowed_local.value());
+                }
+                if (binding_ty.is_ref() && !init->temp_borrows.empty()
+                    && !init->persistent_borrow_owner.has_value()) {
+                    return make_error(
+                        s.span,
+                        "this reference value cannot be stored in a local yet; bind a direct "
+                        "borrow instead");
+                }
                 if (!s.discard && s.name.is_valid())
-                    ctx.scope.insert(s.name, binding_ty);
+                    ctx.scope.insert(s.name, binding_ty, borrowed_local);
 
-                return tyir::TyLetStmt{s.discard, s.name, binding_ty, std::move(*init), s.span};
+                release_temp_borrows(ctx, init->temp_borrows);
+
+                return tyir::TyLetStmt{
+                    s.discard, s.name, binding_ty, std::move(init->expr), s.span};
 
             } else {                                          // ast::ExprStmt
                 auto expr = lower_expr(s.expr, ctx);
                 if (!expr)
                     return std::unexpected(std::move(expr.error()));
-                return tyir::TyExprStmt{std::move(*expr), s.span};
+                release_temp_borrows(ctx, expr->temp_borrows);
+                return tyir::TyExprStmt{std::move(expr->expr), s.span};
             }
         },
         stmt);
@@ -458,7 +659,8 @@ template <typename Decl>
                         return false;
                 }
                 return true;
-            } else if constexpr (std::is_same_v<N, tyir::TyUnary>) {
+            } else if constexpr (
+                std::is_same_v<N, tyir::TyBorrow> || std::is_same_v<N, tyir::TyUnary>) {
                 return expr_can_fallthrough(*node.rhs);
             } else if constexpr (std::is_same_v<N, tyir::TyBinary>) {
                 return expr_can_fallthrough(*node.lhs) && expr_can_fallthrough(*node.rhs);
@@ -536,7 +738,13 @@ template <typename Decl>
             ctx.scope.pop();
             return std::unexpected(std::move(tail.error()));
         }
-        result.tail = std::move(*tail);
+        if (tail->expr->ty.is_ref()) {
+            release_temp_borrows(ctx, tail->temp_borrows);
+            ctx.scope.pop();
+            return make_error(block.span, "block expressions cannot yield references yet");
+        }
+        release_temp_borrows(ctx, tail->temp_borrows);
+        result.tail = std::move(tail->expr);
         result.ty = reaches_tail ? (*result.tail)->ty : tyir::ty::never();
     } else {
         result.ty = reaches_tail ? tyir::ty::unit() : tyir::ty::never();
@@ -548,12 +756,95 @@ template <typename Decl>
 
 // ─── Expression lowering ─────────────────────────────────────────────────────
 
-[[nodiscard]] inline std::expected<tyir::TyExprPtr, LowerError>
+inline std::expected<void, LowerError> merge_loop_break_types(
+    std::vector<LoopCtx>& target, const std::vector<LoopCtx>& source, cstc::span::SourceSpan span) {
+    assert(target.size() == source.size());
+    for (std::size_t i = 0; i < target.size(); ++i) {
+        if (!source[i].break_ty.has_value())
+            continue;
+        if (!target[i].break_ty.has_value()) {
+            target[i].break_ty = source[i].break_ty;
+            continue;
+        }
+
+        const tyir::Ty& existing = *target[i].break_ty;
+        const tyir::Ty& incoming = *source[i].break_ty;
+        if (existing.is_never()) {
+            target[i].break_ty = incoming;
+            continue;
+        }
+        if (!compatible(incoming, existing))
+            return make_error(
+                span, "'break' value type mismatch: expected '" + existing.display() + "', found '"
+                          + incoming.display() + "'");
+    }
+    return {};
+}
+
+[[nodiscard]] inline std::expected<LoweredPlace, LowerError>
+    lower_place_expr(const ast::ExprPtr& expr, LowerCtx& ctx) {
+    assert(expr != nullptr);
+
+    return std::visit(
+        [&](const auto& node) -> std::expected<LoweredPlace, LowerError> {
+            using N = std::decay_t<decltype(node)>;
+
+            if constexpr (std::is_same_v<N, ast::PathExpr>) {
+                const std::string display_head = display_symbol(node.display_head, node.head);
+                if (node.tail.has_value())
+                    return make_error(expr->span, "enum variants cannot be borrowed directly");
+
+                const auto local_index = ctx.scope.lookup_local(node.head);
+                if (!local_index.has_value())
+                    return make_error(expr->span, "undefined variable '" + display_head + "'");
+
+                const auto& local = ctx.scope.local(*local_index);
+                if (local.moved)
+                    return make_error(expr->span, "use of moved value '" + display_head + "'");
+
+                return LoweredPlace{
+                    tyir::make_ty_expr(
+                        expr->span, tyir::LocalRef{node.head, tyir::ValueUseKind::Borrow},
+                        local.ty),
+                    local_index,
+                };
+            } else if constexpr (std::is_same_v<N, ast::FieldAccessExpr>) {
+                auto base = lower_place_expr(node.base, ctx);
+                if (!base)
+                    return std::unexpected(std::move(base.error()));
+
+                if (!base->expr->ty.is_named())
+                    return make_error(
+                        expr->span,
+                        "field access on non-struct type '" + base->expr->ty.display() + "'");
+
+                const auto field_ty = ctx.env.field_ty(base->expr->ty.name, node.field);
+                if (!field_ty)
+                    return make_error(
+                        expr->span, "no field '" + std::string(node.field.as_str())
+                                        + "' in struct '" + base->expr->ty.display() + "'");
+
+                return LoweredPlace{
+                    tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyFieldAccess{
+                            std::move(base->expr), node.field, tyir::ValueUseKind::Borrow},
+                        *field_ty),
+                    base->owner_local,
+                };
+            } else {
+                return make_error(expr->span, "borrow expressions require a local or field place");
+            }
+        },
+        expr->node);
+}
+
+[[nodiscard]] inline std::expected<LoweredExpr, LowerError>
     lower_expr(const ast::ExprPtr& expr, LowerCtx& ctx) {
     assert(expr != nullptr);
 
     return std::visit(
-        [&](const auto& node) -> std::expected<tyir::TyExprPtr, LowerError> {
+        [&](const auto& node) -> std::expected<LoweredExpr, LowerError> {
             using N = std::decay_t<decltype(node)>;
 
             // ── Literal ───────────────────────────────────────────────────
@@ -567,7 +858,7 @@ template <typename Decl>
                     break;
                 case ast::LiteralExpr::Kind::Str:
                     lit = {tyir::TyLiteral::Kind::Str, node.symbol, false};
-                    ty = tyir::ty::str();
+                    ty = tyir::ty::ref(tyir::ty::str());
                     break;
                 case ast::LiteralExpr::Kind::Bool:
                     lit = {
@@ -579,7 +870,11 @@ template <typename Decl>
                     ty = tyir::ty::unit();
                     break;
                 }
-                return tyir::make_ty_expr(expr->span, std::move(lit), std::move(ty));
+                return LoweredExpr{
+                    tyir::make_ty_expr(expr->span, std::move(lit), std::move(ty)),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // ── Path ──────────────────────────────────────────────────────
@@ -595,15 +890,40 @@ template <typename Decl>
                         return make_error(
                             expr->span, "no variant '" + std::string(variant_name.as_str())
                                             + "' in enum '" + display_head + "'");
-                    return tyir::make_ty_expr(
-                        expr->span, tyir::EnumVariantRef{enum_name, variant_name},
-                        tyir::ty::named(enum_name, node.display_head));
+                    return LoweredExpr{
+                        tyir::make_ty_expr(
+                            expr->span, tyir::EnumVariantRef{enum_name, variant_name},
+                            annotate_type_semantics(
+                                tyir::ty::named(enum_name, node.display_head), ctx.env)),
+                        {},
+                        std::nullopt,
+                    };
                 }
 
                 // Local variable reference
-                const auto local_ty = ctx.scope.lookup(node.head);
-                if (local_ty.has_value())
-                    return tyir::make_ty_expr(expr->span, tyir::LocalRef{node.head}, *local_ty);
+                const auto local_index = ctx.scope.lookup_local(node.head);
+                if (local_index.has_value()) {
+                    auto& local = ctx.scope.local(*local_index);
+                    if (local.moved)
+                        return make_error(expr->span, "use of moved value '" + display_head + "'");
+
+                    tyir::ValueUseKind use_kind = tyir::ValueUseKind::Copy;
+                    if (local.ty.is_move_only()) {
+                        if (local.active_borrows > 0)
+                            return make_error(
+                                expr->span,
+                                "cannot move '" + display_head + "' while it is borrowed");
+                        local.moved = true;
+                        use_kind = tyir::ValueUseKind::Move;
+                    }
+
+                    return LoweredExpr{
+                        tyir::make_ty_expr(
+                            expr->span, tyir::LocalRef{node.head, use_kind}, local.ty),
+                        {},
+                        local.ty.is_ref() ? local.borrowed_local : std::nullopt,
+                    };
+                }
 
                 return make_error(expr->span, "undefined variable '" + display_head + "'");
             }
@@ -626,6 +946,7 @@ template <typename Decl>
                 // Validate: no extra/duplicate fields, each field type matches
                 std::vector<tyir::TyStructInitField> lowered_fields;
                 lowered_fields.reserve(node.fields.size());
+                std::vector<std::size_t> temp_borrows;
                 std::unordered_map<
                     cstc::symbol::Symbol, cstc::span::SourceSpan, cstc::symbol::SymbolHash>
                     seen_fields;
@@ -649,14 +970,16 @@ template <typename Decl>
                     if (!val)
                         return std::unexpected(std::move(val.error()));
 
-                    if (!compatible((*val)->ty, *expected_ty))
+                    if (!compatible(val->expr->ty, *expected_ty))
                         return make_error(
                             field.span, "field '" + std::string(field.name.as_str())
                                             + "': expected '" + expected_ty->display()
-                                            + "', found '" + (*val)->ty.display() + "'");
+                                            + "', found '" + val->expr->ty.display() + "'");
+
+                    append_temp_borrows(temp_borrows, std::move(val->temp_borrows));
 
                     lowered_fields.push_back(
-                        tyir::TyStructInitField{field.name, std::move(*val), field.span});
+                        tyir::TyStructInitField{field.name, std::move(val->expr), field.span});
                 }
 
                 // Validate that every declared struct field is initialised exactly once.
@@ -668,36 +991,97 @@ template <typename Decl>
                                 + "' in struct initializer for '" + display_type_name + "'");
                 }
 
-                return tyir::make_ty_expr(
-                    expr->span, tyir::TyStructInit{type_name, std::move(lowered_fields)},
-                    tyir::ty::named(type_name, node.display_name));
+                const tyir::Ty result_ty =
+                    annotate_type_semantics(tyir::ty::named(type_name, node.display_name), ctx.env);
+                auto lowered = LoweredExpr{
+                    tyir::make_ty_expr(
+                        expr->span, tyir::TyStructInit{type_name, std::move(lowered_fields)},
+                        result_ty),
+                    {},
+                    std::nullopt,
+                };
+                release_temp_borrows(ctx, temp_borrows);
+                return lowered;
             }
 
             // ── Unary ─────────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::UnaryExpr>) {
-                auto rhs = lower_expr(node.rhs, ctx);
-                if (!rhs)
-                    return std::unexpected(std::move(rhs.error()));
-
-                tyir::Ty result_ty;
                 switch (node.op) {
-                case ast::UnaryOp::Negate:
-                    if (!compatible((*rhs)->ty, tyir::ty::num()))
-                        return make_error(
-                            expr->span,
-                            "unary '-' requires 'num', found '" + (*rhs)->ty.display() + "'");
-                    result_ty = tyir::ty::num();
-                    break;
-                case ast::UnaryOp::Not:
-                    if (!compatible((*rhs)->ty, tyir::ty::bool_()))
-                        return make_error(
-                            expr->span,
-                            "unary '!' requires 'bool', found '" + (*rhs)->ty.display() + "'");
-                    result_ty = tyir::ty::bool_();
-                    break;
+                case ast::UnaryOp::Borrow: {
+                    if (std::holds_alternative<ast::PathExpr>(node.rhs->node)
+                        || std::holds_alternative<ast::FieldAccessExpr>(node.rhs->node)) {
+                        auto place = lower_place_expr(node.rhs, ctx);
+                        if (!place)
+                            return std::unexpected(std::move(place.error()));
+
+                        std::vector<std::size_t> temp_borrows;
+                        if (place->owner_local.has_value()) {
+                            ctx.scope.add_ephemeral_borrow(*place->owner_local);
+                            temp_borrows.push_back(*place->owner_local);
+                        }
+                        const tyir::Ty ref_ty = tyir::ty::ref(place->expr->ty);
+
+                        return LoweredExpr{
+                            tyir::make_ty_expr(
+                                expr->span, tyir::TyBorrow{std::move(place->expr)}, ref_ty),
+                            std::move(temp_borrows),
+                            place->owner_local,
+                        };
+                    }
+
+                    auto rhs = lower_expr(node.rhs, ctx);
+                    if (!rhs)
+                        return std::unexpected(std::move(rhs.error()));
+
+                    if (rhs->expr->ty.is_never()) {
+                        return LoweredExpr{
+                            tyir::make_ty_expr(
+                                expr->span, tyir::TyBorrow{std::move(rhs->expr)},
+                                tyir::ty::never()),
+                            std::move(rhs->temp_borrows),
+                            std::nullopt,
+                        };
+                    }
+                    const tyir::Ty ref_ty = tyir::ty::ref(rhs->expr->ty);
+
+                    return LoweredExpr{
+                        tyir::make_ty_expr(
+                            expr->span, tyir::TyBorrow{std::move(rhs->expr)}, ref_ty),
+                        std::move(rhs->temp_borrows),
+                        std::nullopt,
+                    };
                 }
-                return tyir::make_ty_expr(
-                    expr->span, tyir::TyUnary{node.op, std::move(*rhs)}, std::move(result_ty));
+                case ast::UnaryOp::Negate:
+                case ast::UnaryOp::Not: {
+                    auto rhs = lower_expr(node.rhs, ctx);
+                    if (!rhs)
+                        return std::unexpected(std::move(rhs.error()));
+
+                    tyir::Ty result_ty;
+                    if (node.op == ast::UnaryOp::Negate) {
+                        if (!compatible(rhs->expr->ty, tyir::ty::num()))
+                            return make_error(
+                                expr->span, "unary '-' requires 'num', found '"
+                                                + rhs->expr->ty.display() + "'");
+                        result_ty = tyir::ty::num();
+                    } else {
+                        if (!compatible(rhs->expr->ty, tyir::ty::bool_()))
+                            return make_error(
+                                expr->span, "unary '!' requires 'bool', found '"
+                                                + rhs->expr->ty.display() + "'");
+                        result_ty = tyir::ty::bool_();
+                    }
+
+                    auto lowered = LoweredExpr{
+                        tyir::make_ty_expr(
+                            expr->span, tyir::TyUnary{node.op, std::move(rhs->expr)}, result_ty),
+                        {},
+                        std::nullopt,
+                    };
+                    release_temp_borrows(ctx, rhs->temp_borrows);
+                    return lowered;
+                }
+                }
             }
 
             // ── Binary ────────────────────────────────────────────────────
@@ -717,14 +1101,14 @@ template <typename Decl>
                 case Op::Mul:
                 case Op::Div:
                 case Op::Mod:
-                    if (!compatible((*lhs)->ty, tyir::ty::num()))
+                    if (!compatible(lhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on left, found '"
-                                            + (*lhs)->ty.display() + "'");
-                    if (!compatible((*rhs)->ty, tyir::ty::num()))
+                                            + lhs->expr->ty.display() + "'");
+                    if (!compatible(rhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on right, found '"
-                                            + (*rhs)->ty.display() + "'");
+                                            + rhs->expr->ty.display() + "'");
                     result_ty = tyir::ty::num();
                     break;
 
@@ -732,22 +1116,22 @@ template <typename Decl>
                 case Op::Le:
                 case Op::Gt:
                 case Op::Ge:
-                    if (!compatible((*lhs)->ty, tyir::ty::num()))
+                    if (!compatible(lhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on left, found '"
-                                            + (*lhs)->ty.display() + "'");
-                    if (!compatible((*rhs)->ty, tyir::ty::num()))
+                                            + lhs->expr->ty.display() + "'");
+                    if (!compatible(rhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on right, found '"
-                                            + (*rhs)->ty.display() + "'");
+                                            + rhs->expr->ty.display() + "'");
                     result_ty = tyir::ty::bool_();
                     break;
 
                 case Op::Eq:
                 case Op::Ne: {
                     // Both operands must have the same type (Never unifies)
-                    const tyir::Ty& lty = (*lhs)->ty;
-                    const tyir::Ty& rty = (*rhs)->ty;
+                    const tyir::Ty& lty = lhs->expr->ty;
+                    const tyir::Ty& rty = rhs->expr->ty;
                     if (!lty.is_never() && !rty.is_never() && lty != rty)
                         return make_error(
                             expr->span,
@@ -759,46 +1143,52 @@ template <typename Decl>
 
                 case Op::And:
                 case Op::Or:
-                    if (!compatible((*lhs)->ty, tyir::ty::bool_()))
+                    if (!compatible(lhs->expr->ty, tyir::ty::bool_()))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on left, found '"
-                                            + (*lhs)->ty.display() + "'");
-                    if (!compatible((*rhs)->ty, tyir::ty::bool_()))
+                                            + lhs->expr->ty.display() + "'");
+                    if (!compatible(rhs->expr->ty, tyir::ty::bool_()))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on right, found '"
-                                            + (*rhs)->ty.display() + "'");
+                                            + rhs->expr->ty.display() + "'");
                     result_ty = tyir::ty::bool_();
                     break;
                 }
-                return tyir::make_ty_expr(
-                    expr->span, tyir::TyBinary{node.op, std::move(*lhs), std::move(*rhs)},
-                    std::move(result_ty));
+                auto lowered = LoweredExpr{
+                    tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyBinary{node.op, std::move(lhs->expr), std::move(rhs->expr)},
+                        std::move(result_ty)),
+                    {},
+                    std::nullopt,
+                };
+                release_temp_borrows(ctx, lhs->temp_borrows);
+                release_temp_borrows(ctx, rhs->temp_borrows);
+                return lowered;
             }
 
             // ── Field access ──────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::FieldAccessExpr>) {
-                auto base = lower_expr(node.base, ctx);
-                if (!base)
-                    return std::unexpected(std::move(base.error()));
+                auto place = lower_place_expr(expr, ctx);
+                if (!place)
+                    return std::unexpected(std::move(place.error()));
 
-                if ((*base)->ty.is_never())
-                    return tyir::make_ty_expr(
-                        expr->span, tyir::TyFieldAccess{std::move(*base), node.field},
-                        tyir::ty::never());
-
-                if (!(*base)->ty.is_named())
+                if (!place->expr->ty.is_copy())
                     return make_error(
+                        expr->span, "cannot move field '" + std::string(node.field.as_str())
+                                        + "' out of '" + place->expr->ty.display()
+                                        + "'; borrow the field instead");
+
+                const auto* access = std::get_if<tyir::TyFieldAccess>(&place->expr->node);
+                assert(access != nullptr);
+                return LoweredExpr{
+                    tyir::make_ty_expr(
                         expr->span,
-                        "field access on non-struct type '" + (*base)->ty.display() + "'");
-
-                const auto field_ty = ctx.env.field_ty((*base)->ty.name, node.field);
-                if (!field_ty)
-                    return make_error(
-                        expr->span, "no field '" + std::string(node.field.as_str())
-                                        + "' in struct '" + (*base)->ty.display() + "'");
-
-                return tyir::make_ty_expr(
-                    expr->span, tyir::TyFieldAccess{std::move(*base), node.field}, *field_ty);
+                        tyir::TyFieldAccess{access->base, access->field, tyir::ValueUseKind::Copy},
+                        place->expr->ty),
+                    {},
+                    place->expr->ty.is_ref() ? place->owner_local : std::nullopt,
+                };
             }
 
             // ── Call ──────────────────────────────────────────────────────
@@ -825,22 +1215,30 @@ template <typename Decl>
 
                 std::vector<tyir::TyExprPtr> lowered_args;
                 lowered_args.reserve(node.args.size());
+                std::vector<std::size_t> temp_borrows;
 
                 for (std::size_t i = 0; i < node.args.size(); ++i) {
                     auto arg = lower_expr(node.args[i], ctx);
                     if (!arg)
                         return std::unexpected(std::move(arg.error()));
-                    if (!compatible((*arg)->ty, sig.param_types[i]))
+                    if (!compatible(arg->expr->ty, sig.param_types[i]))
                         return make_error(
                             node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
                                                     + display_fn_name + "': expected '"
                                                     + sig.param_types[i].display() + "', found '"
-                                                    + (*arg)->ty.display() + "'");
-                    lowered_args.push_back(std::move(*arg));
+                                                    + arg->expr->ty.display() + "'");
+                    append_temp_borrows(temp_borrows, std::move(arg->temp_borrows));
+                    lowered_args.push_back(std::move(arg->expr));
                 }
 
-                return tyir::make_ty_expr(
-                    expr->span, tyir::TyCall{fn_name, std::move(lowered_args)}, sig.return_ty);
+                auto lowered = LoweredExpr{
+                    tyir::make_ty_expr(
+                        expr->span, tyir::TyCall{fn_name, std::move(lowered_args)}, sig.return_ty),
+                    {},
+                    std::nullopt,
+                };
+                release_temp_borrows(ctx, temp_borrows);
+                return lowered;
             }
 
             // ── Block expression ──────────────────────────────────────────
@@ -850,7 +1248,11 @@ template <typename Decl>
                     return std::unexpected(std::move(block.error()));
                 tyir::Ty block_ty = block->ty;
                 auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
-                return tyir::make_ty_expr(expr->span, std::move(block_ptr), block_ty);
+                return LoweredExpr{
+                    tyir::make_ty_expr(expr->span, std::move(block_ptr), block_ty),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // ── If ────────────────────────────────────────────────────────
@@ -858,27 +1260,31 @@ template <typename Decl>
                 auto cond = lower_expr(node.condition, ctx);
                 if (!cond)
                     return std::unexpected(std::move(cond.error()));
-                if (!compatible((*cond)->ty, tyir::ty::bool_()))
+                if (!compatible(cond->expr->ty, tyir::ty::bool_()))
                     return make_error(
                         node.condition->span, "'if' condition must have type 'bool', found '"
-                                                  + (*cond)->ty.display() + "'");
+                                                  + cond->expr->ty.display() + "'");
+                release_temp_borrows(ctx, cond->temp_borrows);
 
-                auto then_block_val = lower_block(*node.then_block, ctx);
+                LowerCtx then_ctx = ctx;
+                auto then_block_val = lower_block(*node.then_block, then_ctx);
                 if (!then_block_val)
                     return std::unexpected(std::move(then_block_val.error()));
 
                 auto then_ptr = std::make_shared<tyir::TyBlock>(std::move(*then_block_val));
+                const bool then_reaches_join = block_can_fallthrough(*then_ptr);
 
                 tyir::Ty result_ty = then_ptr->ty;
 
                 std::optional<tyir::TyExprPtr> else_branch;
                 if (node.else_branch.has_value()) {
-                    auto else_val = lower_expr(*node.else_branch, ctx);
+                    LowerCtx else_ctx = ctx;
+                    auto else_val = lower_expr(*node.else_branch, else_ctx);
                     if (!else_val)
                         return std::unexpected(std::move(else_val.error()));
 
                     // Unify then / else types (Never unifies with anything)
-                    const tyir::Ty& else_ty = (*else_val)->ty;
+                    const tyir::Ty& else_ty = else_val->expr->ty;
                     if (!compatible(then_ptr->ty, else_ty) && !compatible(else_ty, then_ptr->ty))
                         return make_error(
                             expr->span, "'if' then-branch has type '" + then_ptr->ty.display()
@@ -888,16 +1294,48 @@ template <typename Decl>
                     if (then_ptr->ty.is_never())
                         result_ty = else_ty;
 
-                    else_branch = std::move(*else_val);
+                    if (auto merged =
+                            merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
+                        !merged) {
+                        return std::unexpected(std::move(merged.error()));
+                    }
+                    if (auto merged =
+                            merge_loop_break_types(ctx.loop_stack, else_ctx.loop_stack, expr->span);
+                        !merged) {
+                        return std::unexpected(std::move(merged.error()));
+                    }
+                    // Only branches that can reach the join may contribute
+                    // post-if move/borrow state.
+                    if (then_reaches_join)
+                        ctx.scope.merge_from(then_ctx.scope);
+                    if (expr_can_fallthrough(*else_val->expr))
+                        ctx.scope.merge_from(else_ctx.scope);
+
+                    else_branch = std::move(else_val->expr);
                 } else {
                     // No else branch: result type is Unit
                     result_ty = tyir::ty::unit();
+                    if (auto merged =
+                            merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
+                        !merged) {
+                        return std::unexpected(std::move(merged.error()));
+                    }
+                    if (then_reaches_join)
+                        ctx.scope.merge_from(then_ctx.scope);
                 }
 
-                return tyir::make_ty_expr(
-                    expr->span,
-                    tyir::TyIf{std::move(*cond), std::move(then_ptr), std::move(else_branch)},
-                    result_ty);
+                if (result_ty.is_ref())
+                    return make_error(expr->span, "'if' expressions cannot yield references yet");
+
+                return LoweredExpr{
+                    tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyIf{
+                            std::move(cond->expr), std::move(then_ptr), std::move(else_branch)},
+                        result_ty),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // ── Loop ──────────────────────────────────────────────────────
@@ -913,9 +1351,17 @@ template <typename Decl>
                 //   - bare break     → Unit
                 //   - break expr     → expr type
                 const tyir::Ty loop_ty = ctx.current_loop().break_ty.value_or(tyir::ty::never());
+                if (loop_ty.is_ref()) {
+                    ctx.pop_loop();
+                    return make_error(expr->span, "loop expressions cannot yield references yet");
+                }
                 ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
-                return tyir::make_ty_expr(expr->span, tyir::TyLoop{std::move(body_ptr)}, loop_ty);
+                return LoweredExpr{
+                    tyir::make_ty_expr(expr->span, tyir::TyLoop{std::move(body_ptr)}, loop_ty),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // ── While ─────────────────────────────────────────────────────
@@ -926,12 +1372,13 @@ template <typename Decl>
                     ctx.pop_loop();
                     return std::unexpected(std::move(cond.error()));
                 }
-                if (!compatible((*cond)->ty, tyir::ty::bool_())) {
+                if (!compatible(cond->expr->ty, tyir::ty::bool_())) {
                     ctx.pop_loop();
                     return make_error(
                         node.condition->span, "'while' condition must have type 'bool', found '"
-                                                  + (*cond)->ty.display() + "'");
+                                                  + cond->expr->ty.display() + "'");
                 }
+                release_temp_borrows(ctx, cond->temp_borrows);
 
                 auto body = lower_block(*node.body, ctx);
                 if (!body) {
@@ -941,9 +1388,13 @@ template <typename Decl>
                 ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
 
-                return tyir::make_ty_expr(
-                    expr->span, tyir::TyWhile{std::move(*cond), std::move(body_ptr)},
-                    tyir::ty::unit());
+                return LoweredExpr{
+                    tyir::make_ty_expr(
+                        expr->span, tyir::TyWhile{std::move(cond->expr), std::move(body_ptr)},
+                        tyir::ty::unit()),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // ── For ───────────────────────────────────────────────────────
@@ -972,22 +1423,29 @@ template <typename Decl>
                                 ctx.scope.pop();
                                 return std::unexpected(std::move(ann.error()));
                             }
-                            if (!compatible((*init_expr)->ty, *ann)) {
+                            if (!compatible(init_expr->expr->ty, *ann)) {
                                 ctx.pop_loop();
                                 ctx.scope.pop();
                                 return make_error(
                                     init_let->span, "for-init type mismatch: expected '"
                                                         + ann->display() + "', found '"
-                                                        + (*init_expr)->ty.display() + "'");
+                                                        + init_expr->expr->ty.display() + "'");
                             }
                             init_ty = *ann;
                         } else {
-                            init_ty = (*init_expr)->ty;
+                            init_ty = init_expr->expr->ty;
+                        }
+
+                        std::optional<std::size_t> borrowed_local;
+                        if (init_ty.is_ref() && init_expr->persistent_borrow_owner.has_value()) {
+                            borrowed_local = init_expr->persistent_borrow_owner;
+                            consume_temp_borrow(init_expr->temp_borrows, borrowed_local.value());
                         }
                         if (!init_let->discard && init_let->name.is_valid())
-                            ctx.scope.insert(init_let->name, init_ty);
+                            ctx.scope.insert(init_let->name, init_ty, borrowed_local);
+                        release_temp_borrows(ctx, init_expr->temp_borrows);
                         lowered_init = tyir::TyForInit{
-                            init_let->discard, init_let->name, init_ty, std::move(*init_expr),
+                            init_let->discard, init_let->name, init_ty, std::move(init_expr->expr),
                             init_let->span};
                     } else {
                         // Expression initializer
@@ -998,10 +1456,11 @@ template <typename Decl>
                             ctx.scope.pop();
                             return std::unexpected(std::move(init_expr.error()));
                         }
+                        release_temp_borrows(ctx, init_expr->temp_borrows);
                         // Treat as a discard init — wrap in TyForInit with discard=true
                         lowered_init = tyir::TyForInit{
-                            true, cstc::symbol::kInvalidSymbol, (*init_expr)->ty,
-                            std::move(*init_expr), init_expr_ptr->span};
+                            true, cstc::symbol::kInvalidSymbol, init_expr->expr->ty,
+                            std::move(init_expr->expr), init_expr_ptr->span};
                     }
                 }
 
@@ -1013,15 +1472,16 @@ template <typename Decl>
                         ctx.scope.pop();
                         return std::unexpected(std::move(cond.error()));
                     }
-                    if (!compatible((*cond)->ty, tyir::ty::bool_())) {
+                    if (!compatible(cond->expr->ty, tyir::ty::bool_())) {
                         ctx.pop_loop();
                         ctx.scope.pop();
                         return make_error(
                             (*node.condition)->span,
-                            "'for' condition must have type 'bool', found '" + (*cond)->ty.display()
-                                + "'");
+                            "'for' condition must have type 'bool', found '"
+                                + cond->expr->ty.display() + "'");
                     }
-                    lowered_cond = std::move(*cond);
+                    release_temp_borrows(ctx, cond->temp_borrows);
+                    lowered_cond = std::move(cond->expr);
                 }
 
                 std::optional<tyir::TyExprPtr> lowered_step;
@@ -1032,7 +1492,8 @@ template <typename Decl>
                         ctx.scope.pop();
                         return std::unexpected(std::move(step.error()));
                     }
-                    lowered_step = std::move(*step);
+                    release_temp_borrows(ctx, step->temp_borrows);
+                    lowered_step = std::move(step->expr);
                 }
 
                 auto body = lower_block(*node.body, ctx);
@@ -1046,12 +1507,16 @@ template <typename Decl>
 
                 ctx.scope.pop();
 
-                return tyir::make_ty_expr(
-                    expr->span,
-                    tyir::TyFor{
-                        std::move(lowered_init), std::move(lowered_cond), std::move(lowered_step),
-                        std::move(body_ptr)},
-                    tyir::ty::unit());
+                return LoweredExpr{
+                    tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyFor{
+                            std::move(lowered_init), std::move(lowered_cond),
+                            std::move(lowered_step), std::move(body_ptr)},
+                        tyir::ty::unit()),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // ── Break ─────────────────────────────────────────────────────
@@ -1075,10 +1540,12 @@ template <typename Decl>
                     auto val = lower_expr(*node.value, ctx);
                     if (!val)
                         return std::unexpected(std::move(val.error()));
+                    if (val->expr->ty.is_ref())
+                        return make_error(expr->span, "'break' values cannot be references yet");
 
                     // Re-acquire the reference after recursion.
                     auto& loop_ctx = ctx.current_loop();
-                    const tyir::Ty& val_ty = (*val)->ty;
+                    const tyir::Ty& val_ty = val->expr->ty;
                     if (!loop_ctx.break_ty.has_value()) {
                         loop_ctx.break_ty = val_ty;
                     } else {
@@ -1094,8 +1561,13 @@ template <typename Decl>
                         }
                     }
 
-                    return tyir::make_ty_expr(
-                        expr->span, tyir::TyBreak{std::move(*val)}, tyir::ty::never());
+                    release_temp_borrows(ctx, val->temp_borrows);
+                    return LoweredExpr{
+                        tyir::make_ty_expr(
+                            expr->span, tyir::TyBreak{std::move(val->expr)}, tyir::ty::never()),
+                        {},
+                        std::nullopt,
+                    };
                 }
 
                 // Bare break — no recursive call, so a fresh reference is safe.
@@ -1117,15 +1589,22 @@ template <typename Decl>
                 }
                 // Bare break in while/for: no type tracking needed
 
-                return tyir::make_ty_expr(
-                    expr->span, tyir::TyBreak{std::nullopt}, tyir::ty::never());
+                return LoweredExpr{
+                    tyir::make_ty_expr(expr->span, tyir::TyBreak{std::nullopt}, tyir::ty::never()),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // ── Continue ──────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::ContinueExpr>) {
                 if (!ctx.in_loop())
                     return make_error(expr->span, "'continue' outside of a loop");
-                return tyir::make_ty_expr(expr->span, tyir::TyContinue{}, tyir::ty::never());
+                return LoweredExpr{
+                    tyir::make_ty_expr(expr->span, tyir::TyContinue{}, tyir::ty::never()),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // ── Return ────────────────────────────────────────────────────
@@ -1135,12 +1614,13 @@ template <typename Decl>
                     auto val = lower_expr(*node.value, ctx);
                     if (!val)
                         return std::unexpected(std::move(val.error()));
-                    if (!compatible((*val)->ty, ctx.current_return_ty))
+                    if (!compatible(val->expr->ty, ctx.current_return_ty))
                         return make_error(
                             expr->span, "return type mismatch: expected '"
                                             + ctx.current_return_ty.display() + "', found '"
-                                            + (*val)->ty.display() + "'");
-                    lowered_val = std::move(*val);
+                                            + val->expr->ty.display() + "'");
+                    release_temp_borrows(ctx, val->temp_borrows);
+                    lowered_val = std::move(val->expr);
                 } else {
                     // Bare `return` — valid only in functions returning Unit
                     if (!compatible(tyir::ty::unit(), ctx.current_return_ty))
@@ -1148,8 +1628,12 @@ template <typename Decl>
                             expr->span, "bare 'return' in function returning '"
                                             + ctx.current_return_ty.display() + "'");
                 }
-                return tyir::make_ty_expr(
-                    expr->span, tyir::TyReturn{std::move(lowered_val)}, tyir::ty::never());
+                return LoweredExpr{
+                    tyir::make_ty_expr(
+                        expr->span, tyir::TyReturn{std::move(lowered_val)}, tyir::ty::never()),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // Should be exhaustive — but keep the compiler happy
@@ -1260,9 +1744,12 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
         if (const auto* s = std::get_if<ast::StructDecl>(&item)) {
             auto& fields = env.struct_fields.at(s->name);
             for (const ast::FieldDecl& f : s->fields) {
-                auto ty = detail::lower_type(f.type, env, f.span);
+                auto ty = detail::lower_type_shape(f.type, env, f.span);
                 if (!ty)
                     return std::unexpected(std::move(ty.error()));
+                if (ty->is_ref())
+                    return detail::make_error(
+                        f.span, "reference fields are not supported in structs");
                 fields.push_back(tyir::TyFieldDecl{f.name, *ty, f.span});
             }
         } else if (const auto* e = std::get_if<ast::EnumDecl>(&item)) {
@@ -1271,6 +1758,8 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 variants.push_back(tyir::TyEnumVariant{v.name, v.discriminant, v.span});
         }
     }
+
+    detail::finalize_env_type_semantics(env);
 
     // ── Phase 3: resolve function signatures ─────────────────────────────
     for (const ast::Item& item : program.items) {

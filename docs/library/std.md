@@ -58,9 +58,9 @@ All standard library functions use the `extern` declaration syntax:
 
 ```cicest
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: str);
+pub extern "lang" fn print(value: &str);
 [[lang = "cstc_std_println"]]
-pub extern "lang" fn println(value: str);
+pub extern "lang" fn println(value: &str);
 pub extern "lang" struct Handle;
 ```
 
@@ -85,7 +85,7 @@ resolved `link_name`.
 
 ```cicest
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: str);
+pub extern "lang" fn print(value: &str);
 ```
 
 Declarations that should flow through explicit imports or the implicit prelude
@@ -147,20 +147,18 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 
 | Cicest declaration                     | LLVM IR                                            | C signature                                           |
 | -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
-| `fn print(value: str)`                 | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const char*)`                    |
-| `fn println(value: str)`               | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const char*)`                  |
+| `fn print(value: &str)`                | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const char*)`                    |
+| `fn println(value: &str)`              | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const char*)`                  |
 | `fn to_str(value: num) -> str`         | `declare ptr @cstc_std_to_str(double)`             | `char* cstc_std_to_str(double)`                       |
-| `fn str_concat(a: str, b: str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)`       | `char* cstc_std_str_concat(const char*, const char*)` |
-| `fn str_len(value: str) -> num`        | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const char*)`                |
+| `fn str_concat(a: &str, b: &str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)`     | `char* cstc_std_str_concat(const char*, const char*)` |
+| `fn str_len(value: &str) -> num`       | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const char*)`                |
 | `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr)`             | `void cstc_std_str_free(const char*)`                 |
 | `fn assert(condition: bool)`           | `declare void @cstc_std_assert(i1)`                | `void cstc_std_assert(int)`                           |
 | `fn assert_eq(a: num, b: num)`         | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)`             |
 
-> **Note:** Functions returning `str` (`to_str`, `str_concat`) allocate memory
-> with `malloc`. The caller owns the returned string and should release it with
-> `str_free` when it is no longer needed. String literals must not be passed to
-> `str_free`. This is a manual convention today, not a type-checked ownership
-> rule. See [docs/unresolved/string-lifetime.md](../unresolved/string-lifetime.md).
+> **Note:** `str` is now an owned, move-only string value. The compiler inserts
+> automatic drop at scope exit, and `str_free(value: str)` is a low-level
+> consuming escape hatch. Borrowing APIs use `&str`.
 
 ## Available functions
 
@@ -170,8 +168,8 @@ The prelude currently provides the following functions:
 
 | Function  | Signature                | Description                                                    |
 | --------- | ------------------------ | -------------------------------------------------------------- |
-| `print`   | `fn print(value: str)`   | Prints a string to standard output without a trailing newline. |
-| `println` | `fn println(value: str)` | Prints a string to standard output followed by a newline.      |
+| `print`   | `fn print(value: &str)`   | Prints a borrowed string without a trailing newline. |
+| `println` | `fn println(value: &str)` | Prints a borrowed string followed by a newline.      |
 
 ### Conversion
 
@@ -183,9 +181,9 @@ The prelude currently provides the following functions:
 
 | Function     | Signature                              | Description                                                         |
 | ------------ | -------------------------------------- | ------------------------------------------------------------------- |
-| `str_concat` | `fn str_concat(a: str, b: str) -> str` | Concatenates two strings and returns the result.                    |
-| `str_len`    | `fn str_len(value: str) -> num`        | Returns the length of a string as a number.                         |
-| `str_free`   | `fn str_free(value: str)`              | Frees a heap-allocated string returned by `to_str` or `str_concat`. |
+| `str_concat` | `fn str_concat(a: &str, b: &str) -> str` | Concatenates two borrowed strings and returns an owned string. |
+| `str_len`    | `fn str_len(value: &str) -> num`         | Returns the length of a borrowed string as a number.           |
+| `str_free`   | `fn str_free(value: str)`                | Consumes and frees an owned string explicitly.                 |
 
 ### Assertions
 
@@ -221,18 +219,19 @@ bb0:
 ```cicest
 fn main() {
     let greeting: str = str_concat("hello, ", "world");
-    println(greeting);
-    let length: num = str_len(greeting);
-    println(to_str(length));
+    println(&greeting);
+    let length: num = str_len(&greeting);
+    let rendered: str = to_str(length);
+    println(&rendered);
 }
 ```
 
 ### Mixing with user-defined functions
 
 ```cicest
-fn greet(name: str) {
+fn greet(name: &str) {
     let message: str = str_concat("hello, ", name);
-    println(message);
+    println(&message);
 }
 
 fn main() {
@@ -263,11 +262,11 @@ Example output (prelude items appear first):
 
 ```text
 TyProgram
-  TyExternFnDecl "lang" print(value: str) -> Unit
-  TyExternFnDecl "lang" println(value: str) -> Unit
+  TyExternFnDecl "lang" print(value: &str) -> Unit
+  TyExternFnDecl "lang" println(value: &str) -> Unit
   TyExternFnDecl "lang" to_str(value: num) -> str
-  TyExternFnDecl "lang" str_concat(a: str, b: str) -> str
-  TyExternFnDecl "lang" str_len(value: str) -> num
+  TyExternFnDecl "lang" str_concat(a: &str, b: &str) -> str
+  TyExternFnDecl "lang" str_len(value: &str) -> num
   TyFnDecl main() -> Unit
     ...
 ```
@@ -312,7 +311,5 @@ To add a new function to the standard library:
 - The prelude is always imported — there is no mechanism to suppress it.
 - Source code cannot spell `import *`; that behavior is reserved for the
   compiler's implicit prelude import.
-- Functions returning `str` allocate memory with `malloc`. Callers should use
-  `str_free` to release the returned string when it is no longer needed, but
-  the language does not yet define a settled lifetime/ownership model for
-  `str`. See [docs/unresolved/string-lifetime.md](../unresolved/string-lifetime.md).
+- Functions returning `str` allocate memory with `malloc`, but ordinary Cicest
+  code now relies on automatic drop instead of explicit `str_free`.

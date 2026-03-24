@@ -1,0 +1,9 @@
+fn consume(value: str) {
+    println(&value);
+}
+
+fn main() {
+    let rendered: str = to_str(1);
+    consume(rendered);
+    consume(rendered);
+}

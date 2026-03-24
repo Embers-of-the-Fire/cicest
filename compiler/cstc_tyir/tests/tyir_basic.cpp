@@ -11,22 +11,30 @@ using namespace cstc::symbol;
 // ─── Ty helpers ──────────────────────────────────────────────────────────────
 
 static void test_ty_primitives() {
-    static_assert(ty::unit().is_unit());
-    static_assert(!ty::unit().is_never());
-    static_assert(!ty::unit().is_named());
+    assert(ty::unit().is_unit());
+    assert(!ty::unit().is_never());
+    assert(!ty::unit().is_named());
 
-    static_assert(ty::never().is_never());
-    static_assert(!ty::never().is_unit());
+    assert(ty::never().is_never());
+    assert(!ty::never().is_unit());
 
-    static_assert(ty::num() == ty::num());
-    static_assert(ty::num() != ty::str());
-    static_assert(ty::bool_() != ty::unit());
+    assert(ty::num() == ty::num());
+    assert(ty::num() != ty::str());
+    assert(ty::bool_() != ty::unit());
 
     assert(ty::unit().display() == "Unit");
     assert(ty::num().display() == "num");
     assert(ty::str().display() == "str");
     assert(ty::bool_().display() == "bool");
     assert(ty::never().display() == "!");
+}
+
+static void test_ty_ref() {
+    const Ty r = ty::ref(ty::str());
+    assert(r.is_ref());
+    assert(r.is_copy());
+    assert(r.display() == "&str");
+    assert(r == ty::ref(ty::str()));
 }
 
 static void test_ty_named() {
@@ -114,6 +122,7 @@ int main() {
     SymbolSession session;
 
     test_ty_primitives();
+    test_ty_ref();
     test_ty_named();
     test_make_literal();
     test_make_local_ref();

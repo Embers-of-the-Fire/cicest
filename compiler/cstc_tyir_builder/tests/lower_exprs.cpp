@@ -57,8 +57,11 @@ static void test_num_literal() {
 }
 
 static void test_str_literal() {
-    const auto prog = must_lower("fn f() -> str { \"hi\" }");
-    assert((*first_fn(prog).body->tail)->ty == ty::str());
+    const auto prog = must_lower("fn f() { let s: &str = \"hi\"; }");
+    const auto& stmt = std::get<TyLetStmt>(first_fn(prog).body->stmts[0]);
+    assert(stmt.ty == ty::ref(ty::str()));
+    assert(stmt.init->ty == ty::ref(ty::str()));
+    assert(std::get<TyLiteral>(stmt.init->node).kind == TyLiteral::Kind::Str);
 }
 
 static void test_bool_literals() {
@@ -283,7 +286,9 @@ static void test_loop_break_num_type() {
 }
 
 static void test_loop_break_str_type() {
-    const auto prog = must_lower("fn f() -> str { loop { break \"hi\"; } }");
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn f() -> str { loop { break to_str(1); } }");
     const auto& tail = *first_fn(prog).body->tail;
     assert(tail->ty == ty::str());
 }
@@ -537,6 +542,45 @@ static void test_if_else_one_branch_diverges() {
     assert(tail->ty == ty::num());
 }
 
+static void test_if_diverging_then_does_not_leak_move_state() {
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "fn f(b: bool) {"
+        "  let s: str = to_str(1);"
+        "  if b { consume(s); return; }"
+        "  consume(s);"
+        "}");
+    (void)prog;
+}
+
+static void test_if_diverging_else_does_not_leak_move_state() {
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "fn f(b: bool) {"
+        "  let s: str = to_str(1);"
+        "  if b { } else { consume(s); return; }"
+        "  consume(s);"
+        "}");
+    (void)prog;
+}
+
+static void test_if_breaking_then_does_not_leak_move_state() {
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "fn f(b: bool) {"
+        "  let s: str = to_str(1);"
+        "  loop {"
+        "    if b { consume(s); break; }"
+        "    consume(s);"
+        "    break;"
+        "  }"
+        "}");
+    (void)prog;
+}
+
 static void test_loop_body_diverges_via_return() {
     // loop { return 1; } — no break, loop type is Never (diverges via return)
     // The loop body itself diverges, but loop type comes from break_ty (no break → Never)
@@ -680,6 +724,50 @@ static void test_field_access_unknown_field_error() {
         "fn f(p: Point) -> num { p.z }");
 }
 
+// ─── Ownership / borrows ─────────────────────────────────────────────────────
+
+static void test_borrow_local_binding() {
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn f() { let s: str = to_str(1); let r: &str = &s; }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.stmts.size() == 2);
+    const auto& stmt = std::get<TyLetStmt>(body.stmts[1]);
+    assert(stmt.ty == ty::ref(ty::str()));
+    assert(std::holds_alternative<TyBorrow>(stmt.init->node));
+    const auto& borrow = std::get<TyBorrow>(stmt.init->node);
+    assert(std::holds_alternative<LocalRef>(borrow.rhs->node));
+    assert(std::get<LocalRef>(borrow.rhs->node).use_kind == ValueUseKind::Borrow);
+}
+
+static void test_move_after_move_error() {
+    must_fail_with_message(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "fn f() { let s: str = to_str(1); consume(s); consume(s); }",
+        "use of moved value 's'");
+}
+
+static void test_move_while_borrowed_error() {
+    must_fail_with_message(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "fn f() { let s: str = to_str(1); let r: &str = &s; consume(s); }",
+        "cannot move 's' while it is borrowed");
+}
+
+static void test_copy_ref_binding_keeps_borrow() {
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn print(value: &str);"
+        "fn f() { let s: str = to_str(1); let r: &str = &s; let q: &str = r; print(q); }");
+    const auto& body = *first_fn(prog).body;
+    const auto& copy_stmt = std::get<TyLetStmt>(body.stmts[2]);
+    assert(copy_stmt.ty == ty::ref(ty::str()));
+    assert(std::holds_alternative<LocalRef>(copy_stmt.init->node));
+    assert(std::get<LocalRef>(copy_stmt.init->node).use_kind == ValueUseKind::Copy);
+}
+
 int main() {
     SymbolSession session;
 
@@ -754,6 +842,9 @@ int main() {
     test_diverging_stmt_followed_by_tail_still_diverges();
     test_if_one_branch_diverges_other_unit();
     test_if_else_one_branch_diverges();
+    test_if_diverging_then_does_not_leak_move_state();
+    test_if_diverging_else_does_not_leak_move_state();
+    test_if_breaking_then_does_not_leak_move_state();
     test_loop_body_diverges_via_return();
     test_block_only_let_stmts_is_unit();
     test_empty_block_is_unit();
@@ -773,6 +864,10 @@ int main() {
     test_struct_init_missing_field_error();
     test_field_access();
     test_field_access_unknown_field_error();
+    test_borrow_local_binding();
+    test_move_after_move_error();
+    test_move_while_borrowed_error();
+    test_copy_ref_binding_keeps_borrow();
 
     return 0;
 }

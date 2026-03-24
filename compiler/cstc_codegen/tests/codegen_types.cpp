@@ -72,7 +72,18 @@ static void test_field_access() {
     const std::string ir = must_codegen(
         "struct Point { x: num, y: num }"
         "fn get_x(p: Point) -> num { p.x }");
-    assert(ir_contains(ir, "extractvalue"));
+    assert(ir_contains(ir, "getelementptr inbounds nuw %Point"));
+}
+
+static void test_nested_field_access() {
+    const std::string ir = must_codegen(
+        "struct Inner { x: num, s: str }"
+        "struct Outer { inner: Inner }"
+        "fn get_x(o: Outer) -> num { o.inner.x }");
+    assert(ir_contains(ir, "%Outer = type { %Inner }"));
+    assert(ir_contains(ir, "%Inner = type { double, ptr }"));
+    assert(ir_contains(ir, "getelementptr inbounds nuw %Outer"));
+    assert(ir_contains(ir, "getelementptr inbounds nuw %Inner"));
 }
 
 // ─── Struct as parameter ──────────────────────────────────────────────────────
@@ -113,6 +124,7 @@ int main() {
     test_enum_type();
     test_struct_init();
     test_field_access();
+    test_nested_field_access();
     test_struct_param();
     test_enum_variant_ref();
     test_struct_return();

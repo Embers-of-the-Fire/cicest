@@ -371,7 +371,7 @@ void test_imported_extern_link_name_uses_source_name() {
     const TempDir temp = make_temp_dir();
 
     write_file(temp.path / "std" / "prelude.cst", "");
-    write_file(temp.path / "lib.cst", "pub extern \"c\" fn puts(value: str);\n");
+    write_file(temp.path / "lib.cst", "pub extern \"c\" fn puts(value: &str);\n");
     write_file(
         temp.path / "root.cst", "import { puts } from \"lib.cst\";\n"
                                 "fn main() { puts(\"hello\"); }\n");

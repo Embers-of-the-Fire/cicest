@@ -82,13 +82,13 @@ No other literal forms are supported.
 Punctuation:
 
 ```text
-{ } ( ) , ; : :: . ->
+{ } ( ) , ; : :: . -> &
 ```
 
 Operators:
 
 ```text
-+ - * / % ! && || == != < <= > >=
+& + - * / % ! && || == != < <= > >=
 ```
 
 `=` exists only in declaration contexts (`let`, enum discriminant).
@@ -142,18 +142,27 @@ Notes:
 ### 3.2 Types
 
 ```ebnf
-Type               = BuiltinType | NeverType | UserType ;
+Type               = RefType | BuiltinType | NeverType | UserType ;
+RefType            = "&" , Type ;
 BuiltinType        = "Unit" | "num" | "str" | "bool" ;
 NeverType          = "!" ;
 UserType           = IDENT ;
 ```
 
 > **Note:** The `Never` type (`!`) is a bottom type produced by diverging
-> expressions (`return`, `break`, `continue`, and body-less `loop`).  It can
+> expressions (`return`, `break`, `continue`, and body-less `loop`). It can
 > also be used as an explicit return type annotation (e.g., `fn f() -> ! { loop {} }`)
 > to indicate that a function never returns.
 
 No generic parameters are allowed anywhere.
+
+Ownership notes:
+
+- `str` is an owned, move-only string value.
+- String literals have type `&str`.
+- `&T` is an immutable shared reference type.
+- Reference types are currently restricted to local bindings and function
+  parameters; they are not yet valid in struct fields or return positions.
 
 ### 3.3 Blocks and statements
 
@@ -184,7 +193,7 @@ RelExpr            = AddExpr , { ( "<" | "<=" | ">" | ">=" ) , AddExpr } ;
 AddExpr            = MulExpr , { ( "+" | "-" ) , MulExpr } ;
 MulExpr            = UnaryExpr , { ( "*" | "/" | "%" ) , UnaryExpr } ;
 
-UnaryExpr          = ( "!" | "-" ) , UnaryExpr
+UnaryExpr          = ( "&" | "!" | "-" ) , UnaryExpr
                    | PostfixExpr ;
 
 PostfixExpr        = PrimaryExpr , { PostfixOp } ;
@@ -219,6 +228,9 @@ Notes:
 - `EnumName::Variant` is the canonical enum value expression.
 - Tuple/grouping ambiguity is avoided: `(expr)` is grouping; `()` is the unit literal.
 - No tuple literals or tuple types are defined.
+- `&expr` creates an immutable shared borrow.
+- Moving a non-`Copy` value out of a field is intentionally unsupported in this
+  stage; borrow the field instead (`&value.field`).
 
 ### 3.5 Control-flow expressions
 
@@ -253,13 +265,13 @@ Rules:
 From highest to lowest:
 
 1. Postfix: `.`, function call `(...)` (left-associative)
-2. Unary prefix: `!`, unary `-` (right-associative)
-3. Multiplicative: `*`, `/`, `%` (left-associative)
-4. Additive: `+`, `-` (left-associative)
-5. Relational: `<`, `<=`, `>`, `>=` (left-associative)
-6. Equality: `==`, `!=` (left-associative)
-7. Logical AND: `&&` (left-associative)
-8. Logical OR: `||` (left-associative)
+1. Unary prefix: `&`, `!`, unary `-` (right-associative)
+1. Multiplicative: `*`, `/`, `%` (left-associative)
+1. Additive: `+`, `-` (left-associative)
+1. Relational: `<`, `<=`, `>`, `>=` (left-associative)
+1. Equality: `==`, `!=` (left-associative)
+1. Logical AND: `&&` (left-associative)
+1. Logical OR: `||` (left-associative)
 
 No assignment-expression precedence tier exists.
 
@@ -284,7 +296,7 @@ Mandatory constraints for frontend validation:
 
 The type of a `loop` expression is inferred from its `break` values:
 
-- If the loop contains no `break` statements (e.g., it diverges via `return`), the loop has type `Never` (bottom type, `!`).  See §3.2 for the type grammar.
+- If the loop contains no `break` statements (e.g., it diverges via `return`), the loop has type `Never` (bottom type, `!`). See §3.2 for the type grammar.
 - If the loop contains only bare `break;` (no value), the loop has type `Unit`.
 - If the loop contains `break expr;`, the loop has the type of `expr`.
 - All `break` values within a single `loop` must have the same type. Conflicting break types produce a type error.
@@ -320,7 +332,7 @@ Every statement has an implicit type used for block type computation:
 A block `{ stmt1; stmt2; ... [tail] }` has its type computed as follows:
 
 1. If a **tail expression** is present (final expression without `;`), the block type is the tail expression's type.
-2. If **no tail expression** is present:
+1. If **no tail expression** is present:
    - If any statement in the block has type `Never` (i.e., an `ExprStmt` wrapping a diverging expression), the block type is `Never`.
    - Otherwise, the block type is `Unit`.
 
@@ -336,7 +348,7 @@ fn f(b: bool) -> num {
 ## 7. Valid Syntax Examples
 
 ```text
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 extern "lang" fn to_str(value: num) -> str;
 extern "lang" struct Handle;
 

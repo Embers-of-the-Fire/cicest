@@ -25,10 +25,11 @@ Source → Lexer → Tokens → Parser → AST → [TyIR Builder] → TyIR → [
 ## Type system
 
 LIR re-uses the TyIR type system wholesale.  See [tyir.md](tyir.md) for the
-full description.  The six type kinds available:
+full description.  The seven type kinds available:
 
 | Type | Kind | Notes |
 |---|---|---|
+| `&T` | built-in | Shared immutable reference |
 | `Unit` / `()` | built-in | Zero-information type |
 | `num` | built-in | Single numeric type |
 | `str` | built-in | String type |
@@ -56,7 +57,7 @@ place forms:
 | Form | Meaning | Printed as |
 |---|---|---|
 | `Local(id)` | The entire local variable slot | `_%id` |
-| `Field(base_local, field_name)` | A named field of a struct-typed local | `_%id.field` |
+| `Field(base_local, field_path...)` | One or more named field projections rooted at a struct local | `_%id.field[.field...]` |
 
 ### Operands
 
@@ -65,6 +66,7 @@ An **operand** is an SSA-style read value — the "leaf" of every computation:
 | Form | Meaning | Printed as |
 |---|---|---|
 | `Copy(place)` | Copy of the value at a place | `copy(_%id)` |
+| `Move(place)` | Move the value out of a place | `move(_%id)` |
 | `Const(constant)` | Compile-time constant | literal text (e.g. `42`, `"hi"`, `true`, `()`) |
 
 ### Constants
@@ -80,21 +82,32 @@ Compile-time constant values embedded directly in operands:
 
 ## Statements
 
-LIR has a single statement kind: **assignment**.  Every side-effecting
-operation — including calls whose return values are discarded — is expressed as
-an assignment of an rvalue to a destination place:
+LIR has two statement kinds:
+
+- **assignment** for computing and storing values
+- **drop** for explicit lexical destruction of owned locals
+
+Every side-effecting computation — including calls whose return values are
+discarded — is expressed as an assignment of an rvalue to a destination place:
 
 ```
 dest_place = rvalue
 ```
 
+Owned locals are destroyed with:
+
+```
+drop _%id
+```
+
 ### Rvalues
 
-The right-hand side of an assignment.  Six rvalue forms exist:
+The right-hand side of an assignment.  Seven rvalue forms exist:
 
 | Rvalue | Description | Printed as |
 |---|---|---|
 | `Use(operand)` | Copy/move an operand into the destination | `copy(_%0)` or a constant |
+| `Borrow(place)` | Create a shared reference to a place | `Borrow(_%0)` |
 | `BinaryOp(op, lhs, rhs)` | Binary arithmetic/logical operation | `BinOp(+, copy(_%0), copy(_%1))` |
 | `UnaryOp(op, operand)` | Unary arithmetic/logical operation | `UnaryOp(-, copy(_%0))` |
 | `Call(fn_name, args…)` | Direct function call | `Call(add, copy(_%0), copy(_%1))` |
@@ -186,7 +199,12 @@ enum Val {
 ## Control flow lowering
 
 The LIR builder transforms TyIR's nested control-flow expressions into explicit
-CFG structures.
+CFG structures, and also makes ownership effects explicit:
+
+- move-only by-value uses lower to `move(place)` operands
+- borrow expressions lower to `Borrow(place)` rvalues
+- lexical scope exits insert `drop _%id` statements in reverse local order
+- `return`, `break`, and `continue` emit the drops for every scope they exit
 
 ### If (no else)
 
@@ -339,7 +357,7 @@ LIR is designed for straightforward translation to LLVM IR:
 | `LirStructDecl` | named `StructType` |
 | `LirEnumDecl` | `{ i32 }` (discriminant-only) |
 | `LirLocalId` | entry-block `alloca` (promoted by mem2reg) |
-| `LirPlace::Field` | `getelementptr` (stores) / `extractvalue` (loads) |
+| `LirPlace::Field` | chained `getelementptr` + `load` / `store` |
 | `LirBinaryOp` | FP arithmetic/comparison; `and`/`or` for bool ops |
 | `LirUnaryOp` | `fneg` or boolean xor-not |
 | `LirCall` | direct `call` |
@@ -350,8 +368,8 @@ LIR is designed for straightforward translation to LLVM IR:
 
 ## Limitations (current version)
 
-- No support for nested field projections (e.g. `a.b.c`); only single-level
-  field access is represented.
+- Moves from projected places are not yet supported; only whole-local moves are
+  lowered.
 - No first-class functions or closures — all calls are direct.
 - No generics (none in Cicest source language).
 - Enum variants are fieldless (no data-carrying variants).

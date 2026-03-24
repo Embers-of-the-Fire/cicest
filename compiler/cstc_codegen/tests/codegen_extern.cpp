@@ -38,7 +38,7 @@ fn main() { }
 static void test_extern_fn_with_str_param() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 fn main() { }
 )");
     assert(ir_contains(ir, "declare void @print(ptr)"));
@@ -56,7 +56,7 @@ fn main() { }
 static void test_extern_fn_multiple_params() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
-extern "lang" fn concat(a: str, b: str) -> str;
+extern "lang" fn concat(a: &str, b: &str) -> str;
 fn main() { }
 )");
     assert(ir_contains(ir, "declare ptr @concat(ptr, ptr)"));
@@ -65,7 +65,7 @@ fn main() { }
 static void test_extern_fn_num_return() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
-extern "lang" fn str_len(value: str) -> num;
+extern "lang" fn str_len(value: &str) -> num;
 fn main() { }
 )");
     assert(ir_contains(ir, "declare double @str_len(ptr)"));
@@ -85,7 +85,7 @@ fn main() { }
 static void test_call_extern_void_fn() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 fn main() { print("hello"); }
 )");
     assert(ir_contains(ir, "declare void @print(ptr)"));
@@ -108,9 +108,10 @@ static void test_call_chain_through_extern() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
 extern "lang" fn to_str(value: num) -> str;
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 fn main() {
-    print(to_str(42));
+    let s: str = to_str(42);
+    print(&s);
 }
 )");
     assert(ir_contains(ir, "declare ptr @to_str(double)"));
@@ -123,7 +124,7 @@ static void test_extern_fn_custom_lang_link_name() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
 [[lang = "cstc_std_print"]]
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 fn main() { print("hello"); }
 )");
     assert(ir_contains(ir, "declare void @cstc_std_print(ptr)"));
@@ -149,8 +150,8 @@ fn main() { bar(); }
 static void test_multiple_extern_declarations() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
-extern "lang" fn print(value: str);
-extern "lang" fn println(value: str);
+extern "lang" fn print(value: &str);
+extern "lang" fn println(value: &str);
 extern "lang" fn to_str(value: num) -> str;
 fn main() { }
 )");
