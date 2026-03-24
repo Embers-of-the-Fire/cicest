@@ -22,9 +22,15 @@ struct BlockExpr;
 using ExprPtr = std::shared_ptr<Expr>;
 /// Shared pointer used for recursive block references.
 using BlockPtr = std::shared_ptr<BlockExpr>;
+/// Forward declaration for recursive type references.
+struct TypeRef;
+/// Shared pointer used for recursive type references.
+using TypeRefPtr = std::shared_ptr<TypeRef>;
 
 /// Kind of type represented by a `TypeRef`.
 enum class TypeKind {
+    /// Shared immutable reference type (`&T`).
+    Ref,
     /// Built-in unit type.
     Unit,
     /// Built-in numeric type.
@@ -47,6 +53,8 @@ struct TypeRef {
     cstc::symbol::Symbol symbol = cstc::symbol::kInvalidSymbol;
     /// Human-facing name to preserve source diagnostics after resolution.
     cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
+    /// Referenced inner type when `kind == TypeKind::Ref`.
+    TypeRefPtr pointee;
 };
 
 /// Declaration attribute attached to an item.
@@ -212,6 +220,8 @@ struct StructInitExpr {
 
 /// Unary operator kind.
 enum class UnaryOp {
+    /// Shared immutable borrow (`&expr`).
+    Borrow,
     /// Arithmetic negation (`-expr`).
     Negate,
     /// Logical negation (`!expr`).

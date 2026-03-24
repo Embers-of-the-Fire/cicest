@@ -111,6 +111,7 @@ void test_all_single_char_operators() {
         {";", cstc::lexer::TokenKind::Semicolon},
         {":",     cstc::lexer::TokenKind::Colon},
         {".",       cstc::lexer::TokenKind::Dot},
+        {"&",       cstc::lexer::TokenKind::Amp},
         {"+",      cstc::lexer::TokenKind::Plus},
         {"-",     cstc::lexer::TokenKind::Minus},
         {"*",      cstc::lexer::TokenKind::Star},

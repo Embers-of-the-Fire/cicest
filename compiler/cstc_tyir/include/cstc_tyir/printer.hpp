@@ -45,6 +45,7 @@ inline void indent(std::ostringstream& out, std::size_t level) {
 
 [[nodiscard]] inline std::string_view unary_name(cstc::ast::UnaryOp op) {
     switch (op) {
+    case cstc::ast::UnaryOp::Borrow: return "&";
     case cstc::ast::UnaryOp::Negate: return "-";
     case cstc::ast::UnaryOp::Not: return "!";
     }

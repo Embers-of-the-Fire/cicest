@@ -612,6 +612,7 @@ private:
 
         using UO = cstc::ast::UnaryOp;
         switch (unop.op) {
+        case UO::Borrow: return nullptr;
         case UO::Negate: return builder_.CreateFNeg(operand, "neg");
         case UO::Not:
             return builder_.CreateXor(operand, llvm::ConstantInt::getTrue(context_), "not");

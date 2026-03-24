@@ -330,6 +330,8 @@ template <typename Decl>
 [[nodiscard]] inline std::expected<tyir::Ty, LowerError>
     lower_type(const ast::TypeRef& ref, const TypeEnv& env, cstc::span::SourceSpan span) {
     switch (ref.kind) {
+    case ast::TypeKind::Ref:
+        return make_error(span, "reference types are not supported by TyIR lowering yet");
     case ast::TypeKind::Unit: return tyir::ty::unit();
     case ast::TypeKind::Num: return tyir::ty::num();
     case ast::TypeKind::Str: return tyir::ty::str();
@@ -681,6 +683,9 @@ template <typename Decl>
 
                 tyir::Ty result_ty;
                 switch (node.op) {
+                case ast::UnaryOp::Borrow:
+                    return make_error(
+                        expr->span, "borrow expressions are not supported by TyIR lowering yet");
                 case ast::UnaryOp::Negate:
                     if (!compatible((*rhs)->ty, tyir::ty::num()))
                         return make_error(

@@ -108,6 +108,24 @@ void test_unary_not() {
     assert(unary.op == cstc::ast::UnaryOp::Not);
 }
 
+void test_unary_borrow() {
+    cstc::symbol::SymbolSession session;
+    const auto& expr = tail_of("&value");
+    const auto& unary = std::get<cstc::ast::UnaryExpr>(expr.node);
+    assert(unary.op == cstc::ast::UnaryOp::Borrow);
+    const auto& inner = std::get<cstc::ast::PathExpr>(unary.rhs->node);
+    assert(inner.head.as_str() == "value");
+}
+
+void test_borrow_of_field_access() {
+    cstc::symbol::SymbolSession session;
+    const auto& expr = tail_of("&person.name");
+    const auto& unary = std::get<cstc::ast::UnaryExpr>(expr.node);
+    assert(unary.op == cstc::ast::UnaryOp::Borrow);
+    const auto& field = std::get<cstc::ast::FieldAccessExpr>(unary.rhs->node);
+    assert(field.field.as_str() == "name");
+}
+
 void test_binary_add() {
     cstc::symbol::SymbolSession session;
     const auto& expr = tail_of("1 + 2");
@@ -345,6 +363,8 @@ int main() {
     test_path_enum_variant();
     test_unary_negate();
     test_unary_not();
+    test_unary_borrow();
+    test_borrow_of_field_access();
     test_binary_add();
     test_binary_all_ops();
     test_precedence_mul_before_add();

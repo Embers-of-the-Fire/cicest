@@ -544,6 +544,12 @@ private:
         }
 
         void rewrite_type(cstc::ast::TypeRef& type) {
+            if (type.kind == cstc::ast::TypeKind::Ref) {
+                if (type.pointee)
+                    rewrite_type(*type.pointee);
+                return;
+            }
+
             if (type.kind != cstc::ast::TypeKind::Named)
                 return;
 

@@ -101,6 +101,8 @@ enum class TokenKind {
     Dot,
     /// `->`
     Arrow,
+    /// `&`
+    Amp,
 
     /// `+`
     Plus,
@@ -196,6 +198,7 @@ struct Token {
     case TokenKind::ColonColon: return "ColonColon";
     case TokenKind::Dot: return "Dot";
     case TokenKind::Arrow: return "Arrow";
+    case TokenKind::Amp: return "Amp";
     case TokenKind::Plus: return "Plus";
     case TokenKind::Minus: return "Minus";
     case TokenKind::Star: return "Star";
