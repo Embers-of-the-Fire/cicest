@@ -69,6 +69,29 @@ static LirLocalId find_local_assigned_num(const LirFnDef& fn, const char* litera
     return kInvalidLocal;
 }
 
+static LirLocalId find_local_assigned_bool(const LirFnDef& fn, bool value) {
+    for (const LirBasicBlock& block : fn.blocks) {
+        for (const LirStmt& stmt : block.stmts) {
+            const auto* assign = std::get_if<LirAssign>(&stmt.node);
+            if (assign == nullptr)
+                continue;
+            const auto* use = std::get_if<LirUse>(&assign->rhs.node);
+            if (use == nullptr)
+                continue;
+            if (use->operand.kind != LirOperand::Kind::Const)
+                continue;
+            if (use->operand.constant.kind != LirConst::Kind::Bool)
+                continue;
+            if (use->operand.constant.bool_value != value)
+                continue;
+            if (assign->dest.kind != LirPlace::Kind::Local)
+                continue;
+            return assign->dest.local_id;
+        }
+    }
+    return kInvalidLocal;
+}
+
 // ─── If (no else) ─────────────────────────────────────────────────────────────
 
 static void test_if_no_else() {
@@ -97,6 +120,18 @@ static void test_if_else_bool() {
     assert(output_contains(prog, "switchBool"));
     assert(output_contains(prog, "true"));
     assert(output_contains(prog, "false"));
+}
+
+static void test_if_never_typed_skips_following_code() {
+    const LirProgram prog = must_lower(
+        "fn f(b: bool) -> num {"
+        "  if b { return 1; } else { return 2; }"
+        "  3"
+        "}");
+    const LirFnDef& fn = first_fn(prog);
+    assert(output_contains(prog, "return 1"));
+    assert(output_contains(prog, "return 2"));
+    assert(find_local_assigned_num(fn, "3") == kInvalidLocal);
 }
 
 // ─── If-else if chain ─────────────────────────────────────────────────────────
@@ -143,6 +178,15 @@ static void test_loop_infinite_with_return() {
     assert(output_contains(prog, "return"));
 }
 
+static void test_infinite_loop_skips_following_code() {
+    const LirProgram prog = must_lower(
+        "fn f() {"
+        "  loop {};"
+        "  1 + 2;"
+        "}");
+    assert(!output_contains(prog, "BinOp(+"));
+}
+
 static void test_loop_break_value_returned() {
     // loop { break 42; } with -> num return → codegen stores 42 and returns it
     const LirProgram prog = must_lower("fn f() -> num { loop { break 42; } }");
@@ -175,6 +219,17 @@ static void test_while_continue() {
     assert(!prog.fns.empty());
 }
 
+static void test_while_never_condition_skips_following_code() {
+    const LirProgram prog = must_lower(
+        "fn f() -> bool {"
+        "  while return true { }"
+        "  false"
+        "}");
+    const LirFnDef& fn = first_fn(prog);
+    assert(!output_contains(prog, "switchBool"));
+    assert(find_local_assigned_bool(fn, false) == kInvalidLocal);
+}
+
 // ─── For loop ─────────────────────────────────────────────────────────────────
 
 static void test_for_with_init_and_condition() {
@@ -203,6 +258,17 @@ static void test_for_break() {
 static void test_for_continue() {
     const LirProgram prog = must_lower("fn f() { for (let i: num = 0; i < 5; ) { continue; } }");
     assert(!prog.fns.empty());
+}
+
+static void test_for_never_condition_skips_following_code() {
+    const LirProgram prog = must_lower(
+        "fn f() -> bool {"
+        "  for (; return false; ) { }"
+        "  true"
+        "}");
+    const LirFnDef& fn = first_fn(prog);
+    assert(!output_contains(prog, "switchBool"));
+    assert(find_local_assigned_bool(fn, true) == kInvalidLocal);
 }
 
 // ─── Return ───────────────────────────────────────────────────────────────────
@@ -361,23 +427,27 @@ int main() {
     test_if_no_else();
     test_if_else_num();
     test_if_else_bool();
+    test_if_never_typed_skips_following_code();
     test_if_else_if();
 
     test_loop_break();
     test_loop_break_value();
     test_loop_break_value_returned();
     test_loop_infinite_with_return();
+    test_infinite_loop_skips_following_code();
 
     test_while_simple();
     test_while_with_body();
     test_while_break();
     test_while_continue();
+    test_while_never_condition_skips_following_code();
 
     test_for_with_init_and_condition();
     test_for_with_step();
     test_for_no_condition();
     test_for_break();
     test_for_continue();
+    test_for_never_condition_skips_following_code();
 
     test_early_return();
     test_return_void();

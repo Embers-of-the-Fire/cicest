@@ -123,6 +123,7 @@ public:
         // Placeholder terminator — will be overwritten before the block is sealed.
         block.terminator = lir::LirTerminator{lir::LirUnreachable{}, {}};
         blocks_.push_back(std::move(block));
+        block_has_predecessor_.push_back(false);
         return id;
     }
 
@@ -135,6 +136,10 @@ public:
     }
 
     [[nodiscard]] lir::LirBlockId current_block_id() const { return current_block_; }
+    [[nodiscard]] bool block_has_predecessor(lir::LirBlockId id) const {
+        assert(id < block_has_predecessor_.size());
+        return block_has_predecessor_[id];
+    }
 
     /// Returns true if the current block has already been given a terminator
     /// (e.g. by a `return`/`break`/`continue` statement inside it).
@@ -149,6 +154,8 @@ public:
     /// Sets the terminator of the current block and marks it as terminated.
     void seal_block(lir::LirTerminator term) {
         assert(current_block_ < blocks_.size());
+        assert(!block_terminated_ && "current block already sealed");
+        mark_successors(term);
         blocks_[current_block_].terminator = std::move(term);
         block_terminated_ = true;
     }
@@ -233,6 +240,25 @@ public:
     }
 
 private:
+    void mark_successor(lir::LirBlockId id) {
+        assert(id < block_has_predecessor_.size());
+        block_has_predecessor_[id] = true;
+    }
+
+    void mark_successors(const lir::LirTerminator& term) {
+        std::visit(
+            [&](const auto& node) {
+                using N = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<N, lir::LirJump>) {
+                    mark_successor(node.target);
+                } else if constexpr (std::is_same_v<N, lir::LirSwitchBool>) {
+                    mark_successor(node.true_target);
+                    mark_successor(node.false_target);
+                }
+            },
+            term.node);
+    }
+
     struct ScopeFrame {
         std::unordered_map<cstc::symbol::Symbol, lir::LirLocalId, cstc::symbol::SymbolHash>
             bindings;
@@ -241,6 +267,7 @@ private:
 
     std::vector<lir::LirLocalDecl> locals_;
     std::vector<lir::LirBasicBlock> blocks_;
+    std::vector<bool> block_has_predecessor_;
     lir::LirBlockId current_block_ = lir::kInvalidBlock;
     bool block_terminated_ = false;
     std::vector<ScopeFrame> scope_;
@@ -461,6 +488,8 @@ private:
             // ── If expression ─────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, tyir::TyIf>) {
                 const lir::LirOperand cond_op = lower_expr(builder, node.condition);
+                if (builder.is_terminated())
+                    return lir::LirOperand::from_const(lir::LirConst::unit());
 
                 const std::optional<lir::LirLocalId> result_local =
                     (!expr->ty.is_unit() && !expr->ty.is_never())
@@ -509,6 +538,9 @@ private:
                     }
                 }
 
+                if (!builder.block_has_predecessor(merge_id))
+                    return lir::LirOperand::from_const(lir::LirConst::unit());
+
                 builder.set_current_block(merge_id);
                 if (result_local.has_value())
                     return operand_for_local(*result_local, expr->ty);
@@ -538,6 +570,9 @@ private:
                 if (!builder.is_terminated())
                     builder.seal_block(lir::LirTerminator{lir::LirJump{header_id}, expr->span});
 
+                if (!builder.block_has_predecessor(after_id))
+                    return lir::LirOperand::from_const(lir::LirConst::unit());
+
                 builder.set_current_block(after_id);
                 if (result_local.has_value())
                     return operand_for_local(*result_local, expr->ty);
@@ -555,6 +590,8 @@ private:
                 // Condition block.
                 builder.set_current_block(cond_id);
                 const lir::LirOperand cond_op = lower_expr(builder, node.condition);
+                if (builder.is_terminated())
+                    return lir::LirOperand::from_const(lir::LirConst::unit());
                 builder.seal_block(
                     lir::LirTerminator{
                         lir::LirSwitchBool{cond_op, body_id, after_id},
@@ -569,6 +606,9 @@ private:
                 if (!builder.is_terminated())
                     builder.seal_block(lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
 
+                if (!builder.block_has_predecessor(after_id))
+                    return lir::LirOperand::from_const(lir::LirConst::unit());
+
                 builder.set_current_block(after_id);
                 // `while` always yields `()`.
                 return lir::LirOperand::from_const(lir::LirConst::unit());
@@ -581,6 +621,10 @@ private:
                 if (node.init.has_value()) {
                     const tyir::TyForInit& init = *node.init;
                     const lir::LirOperand init_val = lower_expr(builder, init.init);
+                    if (builder.is_terminated()) {
+                        builder.pop_scope();
+                        return lir::LirOperand::from_const(lir::LirConst::unit());
+                    }
                     if (!init.discard) {
                         const lir::LirLocalId loc = builder.alloc_local(init.ty, init.name);
                         builder.emit_stmt(
@@ -603,6 +647,10 @@ private:
                 builder.set_current_block(cond_id);
                 if (node.condition.has_value()) {
                     const lir::LirOperand cond_op = lower_expr(builder, *node.condition);
+                    if (builder.is_terminated()) {
+                        builder.pop_scope();
+                        return lir::LirOperand::from_const(lir::LirConst::unit());
+                    }
                     builder.seal_block(
                         lir::LirTerminator{
                             lir::LirSwitchBool{cond_op, body_id, after_id},
@@ -632,9 +680,14 @@ private:
                         builder.seal_block(lir::LirTerminator{lir::LirJump{cond_id}, expr->span});
                 }
 
+                if (!builder.block_has_predecessor(after_id)) {
+                    builder.pop_scope(); // init scope
+                    return lir::LirOperand::from_const(lir::LirConst::unit());
+                }
+
                 builder.set_current_block(after_id);
                 builder.emit_current_scope_drops(expr->span);
-                builder.pop_scope(); // init scope
+                builder.pop_scope();     // init scope
                 return lir::LirOperand::from_const(lir::LirConst::unit());
             }
 
