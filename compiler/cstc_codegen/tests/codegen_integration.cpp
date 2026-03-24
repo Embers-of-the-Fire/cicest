@@ -24,6 +24,16 @@ static bool ir_contains(const std::string& ir, const std::string& needle) {
     return ir.find(needle) != std::string::npos;
 }
 
+static std::size_t count_occurrences(const std::string& ir, const std::string& needle) {
+    std::size_t count = 0;
+    std::size_t pos = 0;
+    while ((pos = ir.find(needle, pos)) != std::string::npos) {
+        ++count;
+        pos += needle.size();
+    }
+    return count;
+}
+
 // ─── Integration: full std prelude usage ─────────────────────────────────────
 
 /// Simulates the full std prelude (same declarations as libraries/std/prelude.cst)
@@ -139,10 +149,43 @@ fn main() {
     assert(ir_contains(ir, "%Color = type { i32 }"));
 }
 
+static void test_auto_drop_emits_runtime_str_free() {
+    SymbolSession session;
+    const auto ir = must_codegen(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn main() {
+    let s: str = to_str(42);
+}
+)");
+    assert(ir_contains(ir, "declare void @cstc_std_str_free(ptr)"));
+    assert(ir_contains(ir, "call void @cstc_std_str_free(ptr"));
+}
+
+static void test_auto_drop_recurses_through_struct_fields() {
+    SymbolSession session;
+    const auto ir = must_codegen(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+struct Pair {
+    left: str,
+    right: str,
+}
+
+fn main() {
+    let p: Pair = Pair { left: to_str(1), right: to_str(2) };
+}
+)");
+    assert(ir_contains(ir, "%Pair = type { ptr, ptr }"));
+    assert(count_occurrences(ir, "call void @cstc_std_str_free(ptr") >= 2);
+}
+
 int main() {
     test_program_with_full_prelude();
     test_user_fn_calling_extern();
     test_extern_with_opaque_types();
     test_extern_with_structs_and_enums();
+    test_auto_drop_emits_runtime_str_free();
+    test_auto_drop_recurses_through_struct_fields();
     return 0;
 }
