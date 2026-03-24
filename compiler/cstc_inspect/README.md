@@ -28,7 +28,7 @@ cstc_inspect <input-file> --out-type ast
 cstc_inspect <input-file> --out-type tyir
 cstc_inspect <input-file> --out-type lir
 cstc_inspect <input-file> --out-type llvm
-cstc_inspect <input-file> --out-type ast -o output.txt
+cstc_inspect <input-file> --out-type llvm -o output.ll
 ```
 
 Flags:
@@ -36,6 +36,16 @@ Flags:
 - `--out-type <tokens|ast|tyir|lir|llvm>` (required)
 - `-o, --output <path>`
 - `--keep-trivia` (tokens mode)
+
+Output kinds:
+
+- `tokens`: lexer token stream for the root source file; optionally keeps trivia
+  with `--keep-trivia`.
+- `ast`: parsed AST for the root source file only.
+- `tyir`: typed IR after import resolution and implicit std prelude injection.
+- `lir`: low-level IR lowered from the resolved typed program.
+- `llvm`: LLVM IR emitted for the resolved module graph and injected std
+  prelude.
 
 `tokens` and `ast` operate on the root source file only. `tyir`, `lir`, and
 `llvm` first resolve the full module graph and inject the std prelude.

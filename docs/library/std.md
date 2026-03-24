@@ -64,12 +64,12 @@ pub extern "lang" fn println(value: str);
 pub extern "lang" struct Handle;
 ```
 
-| Component | Description |
-|-----------|-------------|
-| `extern` | Keyword introducing an external declaration |
-| `"lang"` | ABI string literal — `"lang"` denotes the cicest language runtime |
-| `fn` / `struct` | Declares a function signature or opaque struct type |
-| `;` | Terminator — extern declarations have no body |
+| Component          | Description                                                                  |
+| ------------------ | ---------------------------------------------------------------------------- |
+| `extern`           | Keyword introducing an external declaration                                  |
+| `"lang"`           | ABI string literal — `"lang"` denotes the cicest language runtime            |
+| `fn` / `struct`    | Declares a function signature or opaque struct type                          |
+| `;`                | Terminator — extern declarations have no body                                |
 | `[[lang = "..."]]` | Optional attribute setting the extern function's `link_name` used by codegen |
 
 The ABI string is stored as a `Symbol` and carried through the full pipeline
@@ -85,11 +85,14 @@ resolved `link_name`.
 
 ```cicest
 [[lang = "cstc_std_print"]]
-extern "lang" fn print(value: str);
+pub extern "lang" fn print(value: str);
 ```
 
-This declaration is called in Cicest as `print("hello")`, but it lowers to an
-extern declaration for `@cstc_std_print` in LLVM IR.
+Declarations that should flow through explicit imports or the implicit prelude
+import must be marked `pub extern`, not bare `extern`.
+
+This declaration is called in Cicest as `print("hello")`, but it lowers to a
+public extern declaration for `@cstc_std_print` in LLVM IR.
 
 ### Extern functions
 
@@ -142,16 +145,16 @@ cl   user.obj  /path/to/cicest_rt.lib  /Fe:user.exe   # MSVC
 
 The C implementations must match the LLVM IR signatures emitted by codegen:
 
-| Cicest declaration | LLVM IR | C signature |
-|--------------------|---------|-------------|
-| `fn print(value: str)` | `declare void @cstc_std_print(ptr)` | `void cstc_std_print(const char*)` |
-| `fn println(value: str)` | `declare void @cstc_std_println(ptr)` | `void cstc_std_println(const char*)` |
-| `fn to_str(value: num) -> str` | `declare ptr @cstc_std_to_str(double)` | `char* cstc_std_to_str(double)` |
-| `fn str_concat(a: str, b: str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)` | `char* cstc_std_str_concat(const char*, const char*)` |
-| `fn str_len(value: str) -> num` | `declare double @cstc_std_str_len(ptr)` | `double cstc_std_str_len(const char*)` |
-| `fn str_free(value: str)` | `declare void @cstc_std_str_free(ptr)` | `void cstc_std_str_free(const char*)` |
-| `fn assert(condition: bool)` | `declare void @cstc_std_assert(i1)` | `void cstc_std_assert(int)` |
-| `fn assert_eq(a: num, b: num)` | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)` |
+| Cicest declaration                     | LLVM IR                                            | C signature                                           |
+| -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
+| `fn print(value: str)`                 | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const char*)`                    |
+| `fn println(value: str)`               | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const char*)`                  |
+| `fn to_str(value: num) -> str`         | `declare ptr @cstc_std_to_str(double)`             | `char* cstc_std_to_str(double)`                       |
+| `fn str_concat(a: str, b: str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)`       | `char* cstc_std_str_concat(const char*, const char*)` |
+| `fn str_len(value: str) -> num`        | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const char*)`                |
+| `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr)`             | `void cstc_std_str_free(const char*)`                 |
+| `fn assert(condition: bool)`           | `declare void @cstc_std_assert(i1)`                | `void cstc_std_assert(int)`                           |
+| `fn assert_eq(a: num, b: num)`         | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)`             |
 
 > **Note:** Functions returning `str` (`to_str`, `str_concat`) allocate memory
 > with `malloc`. The caller owns the returned string and should release it with
@@ -165,30 +168,30 @@ The prelude currently provides the following functions:
 
 ### I/O
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `print` | `fn print(value: str)` | Prints a string to standard output without a trailing newline. |
-| `println` | `fn println(value: str)` | Prints a string to standard output followed by a newline. |
+| Function  | Signature                | Description                                                    |
+| --------- | ------------------------ | -------------------------------------------------------------- |
+| `print`   | `fn print(value: str)`   | Prints a string to standard output without a trailing newline. |
+| `println` | `fn println(value: str)` | Prints a string to standard output followed by a newline.      |
 
 ### Conversion
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
+| Function | Signature                      | Description                                     |
+| -------- | ------------------------------ | ----------------------------------------------- |
 | `to_str` | `fn to_str(value: num) -> str` | Converts a number to its string representation. |
 
 ### String operations
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `str_concat` | `fn str_concat(a: str, b: str) -> str` | Concatenates two strings and returns the result. |
-| `str_len` | `fn str_len(value: str) -> num` | Returns the length of a string as a number. |
-| `str_free` | `fn str_free(value: str)` | Frees a heap-allocated string returned by `to_str` or `str_concat`. |
+| Function     | Signature                              | Description                                                         |
+| ------------ | -------------------------------------- | ------------------------------------------------------------------- |
+| `str_concat` | `fn str_concat(a: str, b: str) -> str` | Concatenates two strings and returns the result.                    |
+| `str_len`    | `fn str_len(value: str) -> num`        | Returns the length of a string as a number.                         |
+| `str_free`   | `fn str_free(value: str)`              | Frees a heap-allocated string returned by `to_str` or `str_concat`. |
 
 ### Assertions
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `assert` | `fn assert(condition: bool)` | Terminates the program with `assertion failed` on standard error when `condition` is `false`. |
+| Function    | Signature                      | Description                                                                                                  |
+| ----------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------ |
+| `assert`    | `fn assert(condition: bool)`   | Terminates the program with `assertion failed` on standard error when `condition` is `false`.                |
 | `assert_eq` | `fn assert_eq(a: num, b: num)` | Terminates the program when `a` and `b` differ by more than `1e-9`, reporting both values on standard error. |
 
 ## Usage examples
@@ -273,12 +276,12 @@ TyProgram
 
 Each pipeline stage has a corresponding node type for extern declarations:
 
-| Stage | Node | Container |
-|-------|------|-----------|
-| AST | `ExternFnDecl`, `ExternStructDecl` | `Item` variant |
-| TyIR | `TyExternFnDecl`, `TyExternStructDecl` | `TyItem` variant |
-| LIR | `LirExternFnDecl`, `LirExternStructDecl` | `LirProgram::extern_fns`, `LirProgram::extern_structs` |
-| LLVM IR | `declare` instruction | Module-level |
+| Stage   | Node                                     | Container                                              |
+| ------- | ---------------------------------------- | ------------------------------------------------------ |
+| AST     | `ExternFnDecl`, `ExternStructDecl`       | `Item` variant                                         |
+| TyIR    | `TyExternFnDecl`, `TyExternStructDecl`   | `TyItem` variant                                       |
+| LIR     | `LirExternFnDecl`, `LirExternStructDecl` | `LirProgram::extern_fns`, `LirProgram::extern_structs` |
+| LLVM IR | `declare` instruction                    | Module-level                                           |
 
 Extern structs have their own dedicated node at every stage. At TyIR,
 `TyExternStructDecl` preserves the ABI and opaque nature so that later
