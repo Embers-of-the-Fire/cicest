@@ -173,6 +173,37 @@ void test_pub_import_reexports_bindings() {
     must_lower(temp.path / "root.cst", temp.path / "std");
 }
 
+void test_import_alias_can_share_name_across_type_and_value_namespaces() {
+    cstc::symbol::SymbolSession session;
+    const TempDir temp = make_temp_dir();
+
+    write_file(temp.path / "std" / "prelude.cst", "");
+    write_file(
+        temp.path / "lib.cst", "pub struct TypeThing;\n"
+                               "pub fn make_foo() -> TypeThing { TypeThing { } }\n");
+    write_file(
+        temp.path / "root.cst", "import { TypeThing as Foo, make_foo as Foo } from \"lib.cst\";\n"
+                                "fn main() { let value: Foo = Foo(); }\n");
+
+    must_lower(temp.path / "root.cst", temp.path / "std");
+}
+
+void test_import_alias_duplicate_value_binding_is_rejected_by_resolver() {
+    cstc::symbol::SymbolSession session;
+    const TempDir temp = make_temp_dir();
+
+    write_file(temp.path / "std" / "prelude.cst", "");
+    write_file(
+        temp.path / "lib.cst", "pub fn left() { }\n"
+                               "pub fn right() { }\n");
+    write_file(
+        temp.path / "root.cst", "import { left as foo, right as foo } from \"lib.cst\";\n"
+                                "fn main() { foo(); }\n");
+
+    must_fail_with_message(
+        temp.path / "root.cst", temp.path / "std", "duplicate function name 'foo'");
+}
+
 void test_std_path_import_resolves_relative_to_std_root() {
     cstc::symbol::SymbolSession session;
     const TempDir temp = make_temp_dir();
@@ -303,6 +334,8 @@ int main() {
     test_private_helpers_do_not_collide_across_modules();
     test_private_import_is_rejected();
     test_pub_import_reexports_bindings();
+    test_import_alias_can_share_name_across_type_and_value_namespaces();
+    test_import_alias_duplicate_value_binding_is_rejected_by_resolver();
     test_std_path_import_resolves_relative_to_std_root();
     test_local_item_shadows_prelude();
     test_explicit_import_shadows_prelude_fallback();

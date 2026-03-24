@@ -628,7 +628,6 @@ private:
 
         ast::ImportDecl decl;
         decl.is_public = is_public;
-        std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> seen_local_names;
 
         if (!check(TokenKind::RBrace)) {
             while (true) {
@@ -639,7 +638,6 @@ private:
                 ast::ImportItem item;
                 item.name = item_name->symbol;
                 item.span = item_name->span;
-                Token local_name_token = *item_name;
 
                 if (match(TokenKind::KwAs)) {
                     auto alias = consume_identifier("expected alias name after `as`");
@@ -647,14 +645,6 @@ private:
                         return std::unexpected(alias.error());
                     item.alias = alias->symbol;
                     item.span = merge_spans(item.span, alias->span);
-                    local_name_token = *alias;
-                }
-
-                const cstc::symbol::Symbol local_name = item.alias.value_or(item.name);
-                if (!seen_local_names.insert(local_name).second) {
-                    const std::string local_name_text = std::string(token_text(local_name_token));
-                    return std::unexpected(make_error_token(
-                        local_name_token, "duplicate import binding `" + local_name_text + "`"));
                 }
 
                 decl.items.push_back(std::move(item));
