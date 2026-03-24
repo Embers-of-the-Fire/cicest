@@ -542,6 +542,45 @@ static void test_if_else_one_branch_diverges() {
     assert(tail->ty == ty::num());
 }
 
+static void test_if_diverging_then_does_not_leak_move_state() {
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "fn f(b: bool) {"
+        "  let s: str = to_str(1);"
+        "  if b { consume(s); return; }"
+        "  consume(s);"
+        "}");
+    (void)prog;
+}
+
+static void test_if_diverging_else_does_not_leak_move_state() {
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "fn f(b: bool) {"
+        "  let s: str = to_str(1);"
+        "  if b { } else { consume(s); return; }"
+        "  consume(s);"
+        "}");
+    (void)prog;
+}
+
+static void test_if_breaking_then_does_not_leak_move_state() {
+    const auto prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "fn f(b: bool) {"
+        "  let s: str = to_str(1);"
+        "  loop {"
+        "    if b { consume(s); break; }"
+        "    consume(s);"
+        "    break;"
+        "  }"
+        "}");
+    (void)prog;
+}
+
 static void test_loop_body_diverges_via_return() {
     // loop { return 1; } — no break, loop type is Never (diverges via return)
     // The loop body itself diverges, but loop type comes from break_ty (no break → Never)
@@ -803,6 +842,9 @@ int main() {
     test_diverging_stmt_followed_by_tail_still_diverges();
     test_if_one_branch_diverges_other_unit();
     test_if_else_one_branch_diverges();
+    test_if_diverging_then_does_not_leak_move_state();
+    test_if_diverging_else_does_not_leak_move_state();
+    test_if_breaking_then_does_not_leak_move_state();
     test_loop_body_diverges_via_return();
     test_block_only_let_stmts_is_unit();
     test_empty_block_is_unit();

@@ -1272,6 +1272,7 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                     return std::unexpected(std::move(then_block_val.error()));
 
                 auto then_ptr = std::make_shared<tyir::TyBlock>(std::move(*then_block_val));
+                const bool then_reaches_join = block_can_fallthrough(*then_ptr);
 
                 tyir::Ty result_ty = then_ptr->ty;
 
@@ -1303,8 +1304,12 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                         !merged) {
                         return std::unexpected(std::move(merged.error()));
                     }
-                    ctx.scope.merge_from(then_ctx.scope);
-                    ctx.scope.merge_from(else_ctx.scope);
+                    // Only branches that can reach the join may contribute
+                    // post-if move/borrow state.
+                    if (then_reaches_join)
+                        ctx.scope.merge_from(then_ctx.scope);
+                    if (expr_can_fallthrough(*else_val->expr))
+                        ctx.scope.merge_from(else_ctx.scope);
 
                     else_branch = std::move(else_val->expr);
                 } else {
@@ -1315,7 +1320,8 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                         !merged) {
                         return std::unexpected(std::move(merged.error()));
                     }
-                    ctx.scope.merge_from(then_ctx.scope);
+                    if (then_reaches_join)
+                        ctx.scope.merge_from(then_ctx.scope);
                 }
 
                 if (result_ty.is_ref())
