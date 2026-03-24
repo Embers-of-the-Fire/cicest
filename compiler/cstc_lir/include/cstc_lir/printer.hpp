@@ -69,13 +69,15 @@ inline void indent(std::ostringstream& out, std::size_t level) {
     return "?";
 }
 
-/// Formats a place as "_%id" or "_%id.field".
+/// Formats a place as "_%id" or "_%id.field[.field...]".
 [[nodiscard]] inline std::string format_place(const LirPlace& place) {
     std::string s = "_%";
     s += std::to_string(place.local_id);
     if (place.kind == LirPlace::Kind::Field) {
-        s += ".";
-        s += place.field_name.is_valid() ? std::string(place.field_name.as_str()) : "<field>";
+        for (const cstc::symbol::Symbol field_name : place.field_path) {
+            s += ".";
+            s += field_name.is_valid() ? std::string(field_name.as_str()) : "<field>";
+        }
     }
     return s;
 }

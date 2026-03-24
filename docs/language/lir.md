@@ -57,7 +57,7 @@ place forms:
 | Form | Meaning | Printed as |
 |---|---|---|
 | `Local(id)` | The entire local variable slot | `_%id` |
-| `Field(base_local, field_name)` | A named field of a struct-typed local | `_%id.field` |
+| `Field(base_local, field_path...)` | One or more named field projections rooted at a struct local | `_%id.field[.field...]` |
 
 ### Operands
 
@@ -357,7 +357,7 @@ LIR is designed for straightforward translation to LLVM IR:
 | `LirStructDecl` | named `StructType` |
 | `LirEnumDecl` | `{ i32 }` (discriminant-only) |
 | `LirLocalId` | entry-block `alloca` (promoted by mem2reg) |
-| `LirPlace::Field` | `getelementptr` (stores) / `extractvalue` (loads) |
+| `LirPlace::Field` | chained `getelementptr` + `load` / `store` |
 | `LirBinaryOp` | FP arithmetic/comparison; `and`/`or` for bool ops |
 | `LirUnaryOp` | `fneg` or boolean xor-not |
 | `LirCall` | direct `call` |
@@ -368,8 +368,8 @@ LIR is designed for straightforward translation to LLVM IR:
 
 ## Limitations (current version)
 
-- No support for nested field projections (e.g. `a.b.c`); only single-level
-  field access is represented.
+- Moves from projected places are not yet supported; only whole-local moves are
+  lowered.
 - No first-class functions or closures — all calls are direct.
 - No generics (none in Cicest source language).
 - Enum variants are fieldless (no data-carrying variants).

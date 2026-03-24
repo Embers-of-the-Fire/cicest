@@ -180,6 +180,31 @@ fn main() {
     assert(count_occurrences(ir, "call void @cstc_std_str_free(ptr") >= 2);
 }
 
+static void test_nested_field_borrow_uses_projected_geps() {
+    SymbolSession session;
+    const auto ir = must_codegen(R"(
+extern "lang" fn print(value: &str);
+extern "lang" fn to_str(value: num) -> str;
+
+struct Inner {
+    s: str,
+}
+
+struct Outer {
+    inner: Inner,
+}
+
+fn main() {
+    let outer: Outer = Outer { inner: Inner { s: to_str(1) } };
+    print(&outer.inner.s);
+}
+)");
+    assert(ir_contains(ir, "declare void @print(ptr)"));
+    assert(ir_contains(ir, "getelementptr inbounds nuw %Outer"));
+    assert(ir_contains(ir, "getelementptr inbounds nuw %Inner"));
+    assert(ir_contains(ir, "call void @print(ptr"));
+}
+
 int main() {
     test_program_with_full_prelude();
     test_user_fn_calling_extern();
@@ -187,5 +212,6 @@ int main() {
     test_extern_with_structs_and_enums();
     test_auto_drop_emits_runtime_str_free();
     test_auto_drop_recurses_through_struct_fields();
+    test_nested_field_borrow_uses_projected_geps();
     return 0;
 }

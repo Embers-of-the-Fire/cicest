@@ -79,7 +79,7 @@ static void test_place_local() {
     const LirPlace p = LirPlace::local(3);
     assert(p.kind == LirPlace::Kind::Local);
     assert(p.local_id == 3);
-    assert(!p.field_name.is_valid());
+    assert(p.field_path.empty());
 }
 
 static void test_place_field() {
@@ -88,15 +88,30 @@ static void test_place_field() {
     const LirPlace p = LirPlace::field(0, x);
     assert(p.kind == LirPlace::Kind::Field);
     assert(p.local_id == 0);
-    assert(p.field_name == x);
+    assert(p.field_path.size() == 1);
+    assert(p.field_path[0] == x);
+}
+
+static void test_place_nested_field() {
+    SymbolSession session;
+    const Symbol inner = Symbol::intern("inner");
+    const Symbol value = Symbol::intern("value");
+    const LirPlace p = LirPlace::field(0, inner).project(value);
+    assert(p.kind == LirPlace::Kind::Field);
+    assert(p.local_id == 0);
+    assert(p.field_path.size() == 2);
+    assert(p.field_path[0] == inner);
+    assert(p.field_path[1] == value);
 }
 
 static void test_place_equality() {
     SymbolSession session;
     const Symbol f = Symbol::intern("foo");
+    const Symbol g = Symbol::intern("bar");
     assert(LirPlace::local(1) == LirPlace::local(1));
     assert(!(LirPlace::local(1) == LirPlace::local(2)));
     assert(LirPlace::field(0, f) == LirPlace::field(0, f));
+    assert(LirPlace::field(0, f).project(g) == LirPlace::field(0, f).project(g));
     assert(!(LirPlace::field(0, f) == LirPlace::local(0)));
 }
 
@@ -250,6 +265,7 @@ int main() {
 
     test_place_local();
     test_place_field();
+    test_place_nested_field();
     test_place_equality();
 
     test_operand_copy();

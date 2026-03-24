@@ -269,6 +269,24 @@ static void test_field_access() {
     assert(output_contains(prog, ".x"));
 }
 
+static void test_nested_field_access_reuses_projected_place() {
+    const LirProgram prog = must_lower(
+        "struct Inner { x: num, s: str }"
+        "struct Outer { inner: Inner }"
+        "fn get_x(o: Outer) -> num { o.inner.x }");
+    assert(output_contains(prog, "copy(_%0.inner.x)"));
+    assert(!output_contains(prog, "copy(_%0.inner)"));
+}
+
+static void test_nested_borrow_reuses_projected_place() {
+    const LirProgram prog = must_lower(
+        "struct Inner { s: str }"
+        "struct Outer { inner: Inner }"
+        "fn borrow_s(o: Outer) { let r: &str = &o.inner.s; }");
+    assert(output_contains(prog, "Borrow(_%0.inner.s)"));
+    assert(!output_contains(prog, "copy(_%0.inner)"));
+}
+
 // ─── Enum variant reference ───────────────────────────────────────────────────
 
 static void test_enum_variant_ref() {
@@ -347,6 +365,8 @@ int main() {
     test_fn_call();
     test_struct_init();
     test_field_access();
+    test_nested_field_access_reuses_projected_place();
+    test_nested_borrow_reuses_projected_place();
     test_enum_variant_ref();
     test_borrow_lowers_to_explicit_borrow();
     test_scope_exit_inserts_drop_for_owned_local();

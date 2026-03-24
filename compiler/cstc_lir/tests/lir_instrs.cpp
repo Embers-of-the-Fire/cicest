@@ -119,7 +119,22 @@ static void test_assign_field_dest() {
     const LirStmt stmt{dest, rhs, {}};
     const auto& assign = as_assign(stmt);
     assert(assign.dest.kind == LirPlace::Kind::Field);
-    assert(assign.dest.field_name == field);
+    assert(assign.dest.field_path.size() == 1);
+    assert(assign.dest.field_path[0] == field);
+}
+
+static void test_assign_nested_field_dest() {
+    SymbolSession session;
+    const Symbol inner = Symbol::intern("inner");
+    const Symbol value = Symbol::intern("value");
+    const LirPlace dest = LirPlace::field(0, inner).project(value);
+    const LirRvalue rhs{LirUse{LirOperand::from_const(LirConst::num(Symbol::intern("5")))}};
+    const LirStmt stmt{dest, rhs, {}};
+    const auto& assign = as_assign(stmt);
+    assert(assign.dest.kind == LirPlace::Kind::Field);
+    assert(assign.dest.field_path.size() == 2);
+    assert(assign.dest.field_path[0] == inner);
+    assert(assign.dest.field_path[1] == value);
 }
 
 static void test_drop_stmt() {
@@ -203,6 +218,7 @@ int main() {
     test_assign_struct_init_empty_fields();
     test_assign_struct_init_two_fields();
     test_assign_field_dest();
+    test_assign_nested_field_dest();
     test_drop_stmt();
 
     test_terminator_return_void();

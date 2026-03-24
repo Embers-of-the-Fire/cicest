@@ -139,16 +139,14 @@ struct LirConst {
 ///
 /// LIR supports two place forms:
 ///  - `Local(id)` — the entire local variable.
-///  - `Field(base_local, field_name)` — a named field projection on a struct local.
-///
-/// More complex projections (slice indexing, nested fields) are not yet needed
-/// and can be added when required.
+///  - `Field(base_local, field_path...)` — one or more named field projections
+///    rooted at a struct local (for example `local.inner.value`).
 struct LirPlace {
     /// Category of place.
     enum class Kind {
         /// The whole local variable.
         Local,
-        /// A named field of a struct-typed local (`base.field`).
+        /// One or more named fields projected from a struct-typed local.
         Field,
     };
 
@@ -156,8 +154,8 @@ struct LirPlace {
     Kind kind = Kind::Local;
     /// The local variable that forms the root of this place.
     LirLocalId local_id = kInvalidLocal;
-    /// Field name; valid only when `kind == Field`.
-    cstc::symbol::Symbol field_name = cstc::symbol::kInvalidSymbol;
+    /// Field projection path; non-empty only when `kind == Field`.
+    std::vector<cstc::symbol::Symbol> field_path;
 
     // ─── Factories ───────────────────────────────────────────────────────────
 
@@ -165,6 +163,8 @@ struct LirPlace {
     [[nodiscard]] static LirPlace local(LirLocalId id);
     /// Constructs a field-projection place (`local_id.field_name`).
     [[nodiscard]] static LirPlace field(LirLocalId id, cstc::symbol::Symbol name);
+    /// Appends a field projection to an existing place.
+    [[nodiscard]] LirPlace project(cstc::symbol::Symbol name) const;
 
     friend bool operator==(const LirPlace&, const LirPlace&) = default;
 };
@@ -532,12 +532,17 @@ inline std::string LirConst::display() const {
 
 // ─── LirPlace ────────────────────────────────────────────────────────────────
 
-inline LirPlace LirPlace::local(LirLocalId id) {
-    return LirPlace{Kind::Local, id, cstc::symbol::kInvalidSymbol};
-}
+inline LirPlace LirPlace::local(LirLocalId id) { return LirPlace{Kind::Local, id, {}}; }
 
 inline LirPlace LirPlace::field(LirLocalId id, cstc::symbol::Symbol name) {
-    return LirPlace{Kind::Field, id, name};
+    return LirPlace{Kind::Field, id, {name}};
+}
+
+inline LirPlace LirPlace::project(cstc::symbol::Symbol name) const {
+    LirPlace projected = *this;
+    projected.kind = Kind::Field;
+    projected.field_path.push_back(name);
+    return projected;
 }
 
 // ─── LirOperand ──────────────────────────────────────────────────────────────
@@ -545,14 +550,14 @@ inline LirPlace LirPlace::field(LirLocalId id, cstc::symbol::Symbol name) {
 inline LirOperand LirOperand::copy(LirPlace place) {
     LirOperand op;
     op.kind = Kind::Copy;
-    op.place = place;
+    op.place = std::move(place);
     return op;
 }
 
 inline LirOperand LirOperand::move(LirPlace place) {
     LirOperand op;
     op.kind = Kind::Move;
-    op.place = place;
+    op.place = std::move(place);
     return op;
 }
 

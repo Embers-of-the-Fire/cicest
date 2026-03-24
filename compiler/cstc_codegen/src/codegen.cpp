@@ -539,52 +539,65 @@ private:
             local_drop_flags_[local]);
     }
 
+    struct LoweredPlaceAddr {
+        llvm::Value* addr = nullptr;
+        llvm::Type* value_ty = nullptr;
+    };
+
+    /// Returns an address suitable for storing into `place`, plus the value
+    /// type currently referenced by that address.
+    LoweredPlaceAddr lower_place_addr_info(const LirPlace& place) {
+        llvm::AllocaInst* base = local_allocas_[place.local_id];
+        llvm::Value* addr = base;
+        llvm::Type* current_ty = base->getAllocatedType();
+
+        for (const Symbol field_name : place.field_path) {
+            auto* struct_ty = llvm::dyn_cast<llvm::StructType>(current_ty);
+            assert(struct_ty != nullptr && "field projection on non-struct type");
+            const unsigned field_idx = find_struct_field_index(struct_ty, field_name);
+            addr = builder_.CreateStructGEP(
+                struct_ty, addr, field_idx, std::string(field_name.as_str()));
+            current_ty = struct_ty->getElementType(field_idx);
+        }
+
+        return {addr, current_ty};
+    }
+
     /// Returns an address suitable for storing into `place`.
     llvm::Value* lower_place_addr(const LirPlace& place) {
-        llvm::AllocaInst* base = local_allocas_[place.local_id];
-        if (place.kind == LirPlace::Kind::Local)
-            return base;
-
-        // Field access: GEP into the struct
-        llvm::Type* struct_ty = base->getAllocatedType();
-        unsigned field_idx = find_struct_field_index(struct_ty, place.field_name);
-        return builder_.CreateStructGEP(
-            struct_ty, base, field_idx, std::string(place.field_name.as_str()));
+        return lower_place_addr_info(place).addr;
     }
 
     /// Loads the runtime value currently held by `place`.
     llvm::Value* lower_place_load(const LirPlace& place) {
-        if (place.kind == LirPlace::Kind::Local) {
-            llvm::AllocaInst* alloca = local_allocas_[place.local_id];
-            return builder_.CreateLoad(alloca->getAllocatedType(), alloca);
-        }
-
-        // Field: load the struct, then extractvalue
-        llvm::AllocaInst* base = local_allocas_[place.local_id];
-        llvm::Value* struct_val = builder_.CreateLoad(base->getAllocatedType(), base);
-        unsigned field_idx = find_struct_field_index(base->getAllocatedType(), place.field_name);
-        return builder_.CreateExtractValue(struct_val, field_idx);
+        const LoweredPlaceAddr lowered = lower_place_addr_info(place);
+        return builder_.CreateLoad(lowered.value_ty, lowered.addr);
     }
 
     /// Resolves the type currently referenced by `place`.
     const Ty& place_ty(const LirFnDef& fn, const LirPlace& place) {
-        if (place.kind == LirPlace::Kind::Local)
-            return fn.locals[place.local_id].ty;
+        const Ty* current_ty = &fn.locals[place.local_id].ty;
+        for (const Symbol field_name : place.field_path) {
+            if (!current_ty->is_named())
+                return *current_ty;
 
-        const Ty& base_ty = fn.locals[place.local_id].ty;
-        if (!base_ty.is_named())
-            return base_ty;
+            const auto it = struct_decls_.find(std::string(current_ty->name.as_str()));
+            if (it == struct_decls_.end())
+                return *current_ty;
 
-        const auto it = struct_decls_.find(std::string(base_ty.name.as_str()));
-        if (it == struct_decls_.end())
-            return base_ty;
-
-        const LirStructDecl* decl = it->second;
-        for (const LirStructField& field : decl->fields) {
-            if (field.name == place.field_name)
-                return field.ty;
+            const LirStructDecl* decl = it->second;
+            const LirStructField* matched_field = nullptr;
+            for (const LirStructField& field : decl->fields) {
+                if (field.name == field_name) {
+                    matched_field = &field;
+                    break;
+                }
+            }
+            if (matched_field == nullptr)
+                return *current_ty;
+            current_ty = &matched_field->ty;
         }
-        return base_ty;
+        return *current_ty;
     }
 
     /// Resolves a struct field symbol to its positional field index.
@@ -614,7 +627,10 @@ private:
         if (op.kind == LirOperand::Kind::Copy)
             return lower_place_load(op.place);
         if (op.kind == LirOperand::Kind::Move) {
-            assert(op.place.kind == LirPlace::Kind::Local && "field moves are not supported");
+            if (op.place.kind != LirPlace::Kind::Local) {
+                assert(false && "moves from projected LIR places are not supported");
+                std::abort();
+            }
             llvm::Value* value = lower_place_load(op.place);
             set_drop_flag(op.place.local_id, false);
             return value;

@@ -251,6 +251,31 @@ static void test_print_borrow_move_and_drop() {
     assert(contains(out, "return move(_%0)"));
 }
 
+static void test_print_nested_projection() {
+    SymbolSession session;
+    LirProgram prog;
+    LirFnDef fn;
+    fn.name = Symbol::intern("nested");
+    fn.return_ty = ty::unit();
+    fn.locals.push_back({0, ty::named(Symbol::intern("Outer")), Symbol::intern("outer")});
+    fn.locals.push_back({1, ty::ref(ty::str()), Symbol::intern("r")});
+
+    LirBasicBlock entry;
+    entry.id = 0;
+    entry.stmts.push_back(
+        LirStmt{
+            LirPlace::local(1),
+            LirRvalue{LirBorrow{
+                LirPlace::field(0, Symbol::intern("inner")).project(Symbol::intern("s"))}},
+            {}});
+    entry.terminator = LirTerminator{LirReturn{std::nullopt}, {}};
+    fn.blocks.push_back(std::move(entry));
+    prog.fns.push_back(std::move(fn));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "Borrow(_%0.inner.s)"));
+}
+
 static void test_print_enum_variant_rvalue() {
     SymbolSession session;
     LirProgram prog;
@@ -307,6 +332,7 @@ int main() {
     test_print_switch_bool();
     test_print_call_rvalue();
     test_print_borrow_move_and_drop();
+    test_print_nested_projection();
     test_print_enum_variant_rvalue();
     test_print_unreachable();
 

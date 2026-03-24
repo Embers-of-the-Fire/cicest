@@ -53,6 +53,7 @@ namespace cstc::lir_builder {
 } // namespace cstc::lir_builder
 
 #include <cassert>
+#include <cstdlib>
 #include <optional>
 #include <type_traits>
 #include <unordered_map>
@@ -252,6 +253,11 @@ private:
 [[nodiscard]] lir::LirOperand lower_expr(FnBuilder& builder, const tyir::TyExprPtr& expr);
 [[nodiscard]] lir::LirOperand lower_block(FnBuilder& builder, const tyir::TyBlockPtr& block);
 
+[[noreturn]] inline void unsupported_projected_move() {
+    assert(false && "moves from projected LIR places are not supported");
+    std::abort();
+}
+
 [[nodiscard]] inline lir::LirOperand operand_for_local(lir::LirLocalId id, const tyir::Ty& ty) {
     const lir::LirPlace place = lir::LirPlace::local(id);
     if (ty.is_move_only())
@@ -260,11 +266,12 @@ private:
 }
 
 [[nodiscard]] inline lir::LirOperand operand_for_place(
-    lir::LirPlace place, const tyir::Ty& ty,
+    const lir::LirPlace& place, const tyir::Ty& ty,
     tyir::ValueUseKind use_kind = tyir::ValueUseKind::Copy) {
     (void)ty;
     if (use_kind == tyir::ValueUseKind::Move) {
-        assert(place.kind == lir::LirPlace::Kind::Local);
+        if (place.kind != lir::LirPlace::Kind::Local)
+            unsupported_projected_move();
         return lir::LirOperand::move(place);
     }
     return lir::LirOperand::copy(place);
@@ -274,7 +281,8 @@ private:
     FnBuilder& builder, lir::LirOperand operand, const tyir::Ty& ty, cstc::span::SourceSpan span) {
     const lir::LirLocalId tmp = builder.alloc_local(ty);
     builder.emit_stmt(
-        lir::LirAssign{lir::LirPlace::local(tmp), lir::LirRvalue{lir::LirUse{operand}}, span});
+        lir::LirAssign{
+            lir::LirPlace::local(tmp), lir::LirRvalue{lir::LirUse{std::move(operand)}}, span});
     return tmp;
 }
 
@@ -290,15 +298,7 @@ private:
                 const auto base_place = lower_borrow_place(builder, node.base);
                 if (!base_place.has_value())
                     return std::nullopt;
-
-                if (base_place->kind == lir::LirPlace::Kind::Local)
-                    return lir::LirPlace::field(base_place->local_id, node.field);
-
-                const lir::LirLocalId base_local = materialize_operand(
-                    builder,
-                    operand_for_place(*base_place, node.base->ty, tyir::ValueUseKind::Copy),
-                    node.base->ty, expr->span);
-                return lir::LirPlace::field(base_local, node.field);
+                return base_place->project(node.field);
             } else {
                 return std::nullopt;
             }
@@ -407,29 +407,23 @@ private:
 
             // ── Field access ──────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, tyir::TyFieldAccess>) {
-                lir::LirLocalId base_local = lir::kInvalidLocal;
-                if (const auto base_place = lower_borrow_place(builder, node.base);
-                    base_place.has_value()) {
-                    if (base_place->kind == lir::LirPlace::Kind::Local) {
-                        base_local = base_place->local_id;
-                    } else {
-                        base_local = materialize_operand(
-                            builder,
-                            operand_for_place(*base_place, node.base->ty, tyir::ValueUseKind::Copy),
-                            node.base->ty, expr->span);
+                const lir::LirPlace field_place = [&]() {
+                    if (const auto base_place = lower_borrow_place(builder, node.base);
+                        base_place.has_value()) {
+                        return base_place->project(node.field);
                     }
-                } else {
-                    base_local = materialize_operand(
+
+                    const lir::LirLocalId base_local = materialize_operand(
                         builder, lower_expr(builder, node.base), node.base->ty, expr->span);
-                }
+                    return lir::LirPlace::field(base_local, node.field);
+                }();
 
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
                 builder.emit_stmt(
                     lir::LirAssign{
                         lir::LirPlace::local(tmp),
-                        lir::LirRvalue{lir::LirUse{operand_for_place(
-                            lir::LirPlace::field(base_local, node.field), expr->ty,
-                            node.use_kind)}},
+                        lir::LirRvalue{
+                            lir::LirUse{operand_for_place(field_place, expr->ty, node.use_kind)}},
                         expr->span});
                 return operand_for_local(tmp, expr->ty);
             }
