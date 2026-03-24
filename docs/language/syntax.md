@@ -82,7 +82,7 @@ No other literal forms are supported.
 Punctuation:
 
 ```text
-{ } ( ) , ; : :: . ->
+{ } ( ) , ; : :: . -> &
 ```
 
 Operators:
@@ -142,7 +142,8 @@ Notes:
 ### 3.2 Types
 
 ```ebnf
-Type               = BuiltinType | NeverType | UserType ;
+Type               = RefType | BuiltinType | NeverType | UserType ;
+RefType            = "&" , Type ;
 BuiltinType        = "Unit" | "num" | "str" | "bool" ;
 NeverType          = "!" ;
 UserType           = IDENT ;
@@ -154,6 +155,14 @@ UserType           = IDENT ;
 > to indicate that a function never returns.
 
 No generic parameters are allowed anywhere.
+
+Ownership notes:
+
+- `str` is an owned, move-only string value.
+- String literals have type `&str`.
+- `&T` is an immutable shared reference type.
+- Reference types are currently restricted to local bindings and function
+  parameters; they are not yet valid in struct fields or return positions.
 
 ### 3.3 Blocks and statements
 
@@ -184,7 +193,7 @@ RelExpr            = AddExpr , { ( "<" | "<=" | ">" | ">=" ) , AddExpr } ;
 AddExpr            = MulExpr , { ( "+" | "-" ) , MulExpr } ;
 MulExpr            = UnaryExpr , { ( "*" | "/" | "%" ) , UnaryExpr } ;
 
-UnaryExpr          = ( "!" | "-" ) , UnaryExpr
+UnaryExpr          = ( "&" | "!" | "-" ) , UnaryExpr
                    | PostfixExpr ;
 
 PostfixExpr        = PrimaryExpr , { PostfixOp } ;
@@ -219,6 +228,9 @@ Notes:
 - `EnumName::Variant` is the canonical enum value expression.
 - Tuple/grouping ambiguity is avoided: `(expr)` is grouping; `()` is the unit literal.
 - No tuple literals or tuple types are defined.
+- `&expr` creates an immutable shared borrow.
+- Moving a non-`Copy` value out of a field is intentionally unsupported in this
+  stage; borrow the field instead (`&value.field`).
 
 ### 3.5 Control-flow expressions
 
@@ -336,7 +348,7 @@ fn f(b: bool) -> num {
 ## 7. Valid Syntax Examples
 
 ```text
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 extern "lang" fn to_str(value: num) -> str;
 extern "lang" struct Handle;
 
