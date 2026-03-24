@@ -257,10 +257,11 @@ private:
         }
 
         if (match(TokenKind::KwImport)) {
-            if (!attributes.empty())
-                return std::unexpected(
-                    make_error_here("attributes are not supported on import declarations"));
             const Token import_keyword = previous();
+            if (!attributes.empty()) {
+                return std::unexpected(make_error_token(
+                    import_keyword, "attributes are not supported on import declarations"));
+            }
             const Token& lead =
                 visibility_keyword.has_value() ? *visibility_keyword : import_keyword;
             auto decl = parse_import_decl(lead, is_public);
@@ -271,7 +272,7 @@ private:
 
         if (!attributes.empty()) {
             return std::unexpected(make_error_here(
-                "expected item after attributes (`struct`, `enum`, `fn`, `extern`, `import`)"));
+                "expected item after attributes (`struct`, `enum`, `fn`, `extern`)"));
         }
 
         if (is_public) {

@@ -13,6 +13,13 @@ void expect_error(std::string_view source, std::string_view needle) {
     assert(result.error().message.find(needle) != std::string::npos);
 }
 
+void expect_error_at(std::string_view source, std::string_view needle, std::size_t expected_start) {
+    const auto result = cstc::parser::parse_source(source);
+    assert(!result.has_value());
+    assert(result.error().message.find(needle) != std::string::npos);
+    assert(result.error().span.start == expected_start);
+}
+
 // ---------------------------------------------------------------------------
 // Top-level item errors
 // ---------------------------------------------------------------------------
@@ -54,8 +61,8 @@ void test_error_single_bracket_between_attributes_and_item() {
 
 void test_error_attributes_on_import() {
     cstc::symbol::SymbolSession session;
-    expect_error(
-        "[[a]] import { foo } from \"mod.cst\";", "attributes are not supported on import");
+    constexpr std::string_view source = "[[a]] import { foo } from \"mod.cst\";";
+    expect_error_at(source, "attributes are not supported on import", source.find("import"));
 }
 
 // ---------------------------------------------------------------------------
