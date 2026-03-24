@@ -87,15 +87,16 @@ struct ModuleInfo {
     return std::unexpected(ModuleError{span, std::move(message)});
 }
 
-[[nodiscard]] inline std::string read_source_file(const std::filesystem::path& path) {
+[[nodiscard]] inline std::expected<std::string, ModuleError>
+    read_source_file(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file)
-        throw std::runtime_error("failed to open input file: " + path.string());
+        return make_error({}, "failed to open input file: " + path.string());
 
     std::ostringstream buffer;
     buffer << file.rdbuf();
     if (!file.good() && !file.eof())
-        throw std::runtime_error("failed while reading input file: " + path.string());
+        return make_error({}, "failed while reading input file: " + path.string());
     return buffer.str();
 }
 
@@ -272,12 +273,10 @@ private:
         module.is_prelude = is_prelude;
         module.module_id = is_root ? 0 : next_module_id_++;
 
-        try {
-            const std::string source = read_source_file(canonical_path);
-            module.file_id = source_map_.add_file(canonical_path.string(), source);
-        } catch (const std::exception& error) {
-            return make_error({}, error.what());
-        }
+        const auto source = read_source_file(canonical_path);
+        if (!source.has_value())
+            return std::unexpected(source.error());
+        module.file_id = source_map_.add_file(canonical_path.string(), *source);
 
         const cstc::span::SourceFile* source_file = source_map_.file(module.file_id);
         if (source_file == nullptr)
