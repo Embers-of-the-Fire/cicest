@@ -124,11 +124,8 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 indent(out, level);
                 switch (node.kind) {
                 case TyLiteral::Kind::Num:
-                    out << "TyLiteral(" << node.symbol.as_str() << "): " << expr->ty.display()
-                        << "\n";
-                    break;
                 case TyLiteral::Kind::Str:
-                    out << "TyLiteral(\"" << node.symbol.as_str() << "\"): " << expr->ty.display()
+                    out << "TyLiteral(" << node.symbol.as_str() << "): " << expr->ty.display()
                         << "\n";
                     break;
                 case TyLiteral::Kind::Bool:
