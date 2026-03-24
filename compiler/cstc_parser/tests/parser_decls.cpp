@@ -228,6 +228,7 @@ void test_pub_import_decl() {
     const auto prog = must_parse("pub import { println } from \"@std/prelude.cst\";");
     const auto& import = std::get<cstc::ast::ImportDecl>(prog.items[0]);
     assert(import.is_public);
+    assert(import.path.as_str() == "@std/prelude.cst");
     assert(import.items.size() == 1);
     assert(import.items[0].name.as_str() == "println");
 }
