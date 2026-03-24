@@ -6,6 +6,7 @@
 ///   `if cond { ... }`, `while cond { ... }`, `for (init; cond; step) { ... }`
 
 #include <cassert>
+#include <optional>
 #include <string>
 
 #include <cstc_lir/lir.hpp>
@@ -43,6 +44,67 @@ static const LirFnDef& first_fn(const LirProgram& prog) {
 
 static bool output_contains(const LirProgram& prog, const std::string& needle) {
     return format_program(prog).find(needle) != std::string::npos;
+}
+
+static LirLocalId find_named_local(const LirFnDef& fn, const char* name) {
+    const Symbol symbol = Symbol::intern(name);
+    for (const LirLocalDecl& local : fn.locals) {
+        if (local.debug_name != symbol)
+            continue;
+        return local.id;
+    }
+    return kInvalidLocal;
+}
+
+static std::size_t count_drop_stmts_for_local(const LirFnDef& fn, LirLocalId local) {
+    std::size_t count = 0;
+    for (const LirBasicBlock& block : fn.blocks) {
+        for (const LirStmt& stmt : block.stmts) {
+            const auto* drop = std::get_if<LirDrop>(&stmt.node);
+            if (drop == nullptr)
+                continue;
+            if (drop->local == local)
+                ++count;
+        }
+    }
+    return count;
+}
+
+static std::optional<std::size_t>
+    find_stmt_index_of_drop(const LirBasicBlock& block, LirLocalId local) {
+    for (std::size_t index = 0; index < block.stmts.size(); ++index) {
+        const auto* drop = std::get_if<LirDrop>(&block.stmts[index].node);
+        if (drop == nullptr)
+            continue;
+        if (drop->local == local)
+            return index;
+    }
+    return std::nullopt;
+}
+
+static std::optional<std::size_t> find_stmt_index_of_assign_from_use_operand(
+    const LirBasicBlock& block, LirLocalId dest_local, const LirOperand& operand) {
+    for (std::size_t index = 0; index < block.stmts.size(); ++index) {
+        const auto* assign = std::get_if<LirAssign>(&block.stmts[index].node);
+        if (assign == nullptr)
+            continue;
+        if (assign->dest != LirPlace::local(dest_local))
+            continue;
+        const auto* use = std::get_if<LirUse>(&assign->rhs.node);
+        if (use == nullptr)
+            continue;
+        if (use->operand == operand)
+            return index;
+    }
+    return std::nullopt;
+}
+
+static LirBlockId find_block_with_drop_of_local(const LirFnDef& fn, LirLocalId local) {
+    for (const LirBasicBlock& block : fn.blocks) {
+        if (find_stmt_index_of_drop(block, local).has_value())
+            return block.id;
+    }
+    return kInvalidBlock;
 }
 
 static LirLocalId find_local_assigned_num(const LirFnDef& fn, const char* literal_text) {
@@ -296,8 +358,34 @@ static void test_return_drops_owned_locals() {
         "  let b: str = to_str(2);"
         "  return b;"
         "}");
-    assert(output_contains(prog, "drop"));
-    assert(output_contains(prog, "move("));
+    const LirFnDef& fn = first_fn(prog);
+    const LirLocalId a_local = find_named_local(fn, "a");
+    const LirLocalId b_local = find_named_local(fn, "b");
+    assert(a_local != kInvalidLocal);
+    assert(b_local != kInvalidLocal);
+    assert(count_drop_stmts_for_local(fn, a_local) == 1);
+    assert(count_drop_stmts_for_local(fn, b_local) == 1);
+
+    const LirBasicBlock& block = fn.blocks[0];
+    const auto& ret = std::get<LirReturn>(block.terminator.node);
+    assert(ret.value.has_value());
+    assert(ret.value->kind == LirOperand::Kind::Move);
+    assert(ret.value->place.kind == LirPlace::Kind::Local);
+
+    const LirLocalId returned_local = ret.value->place.local_id;
+    assert(returned_local != a_local);
+    assert(returned_local != b_local);
+    assert(!find_stmt_index_of_drop(block, returned_local).has_value());
+
+    const auto return_move_index = find_stmt_index_of_assign_from_use_operand(
+        block, returned_local, LirOperand::move(LirPlace::local(b_local)));
+    const auto b_drop_index = find_stmt_index_of_drop(block, b_local);
+    const auto a_drop_index = find_stmt_index_of_drop(block, a_local);
+    assert(return_move_index.has_value());
+    assert(b_drop_index.has_value());
+    assert(a_drop_index.has_value());
+    assert(*return_move_index < *b_drop_index);
+    assert(*b_drop_index < *a_drop_index);
 }
 
 static void test_return_from_nested_block() {
@@ -363,14 +451,40 @@ static void test_break_drops_owned_locals() {
     const LirProgram prog = must_lower(
         "extern \"lang\" fn to_str(value: num) -> str;"
         "fn f() { loop { let s: str = to_str(1); break; } }");
-    assert(output_contains(prog, "drop"));
+    const LirFnDef& fn = first_fn(prog);
+    const LirLocalId s_local = find_named_local(fn, "s");
+    assert(s_local != kInvalidLocal);
+    assert(count_drop_stmts_for_local(fn, s_local) == 1);
+
+    const LirBlockId drop_block_id = find_block_with_drop_of_local(fn, s_local);
+    assert(drop_block_id != kInvalidBlock);
+    const LirBasicBlock& drop_block = fn.blocks[drop_block_id];
+    assert(find_stmt_index_of_drop(drop_block, s_local).has_value());
+
+    const auto* jump = std::get_if<LirJump>(&drop_block.terminator.node);
+    assert(jump != nullptr);
+    assert(jump->target != drop_block_id);
+    assert(std::holds_alternative<LirReturn>(fn.blocks[jump->target].terminator.node));
 }
 
 static void test_continue_drops_owned_locals() {
     const LirProgram prog = must_lower(
         "extern \"lang\" fn to_str(value: num) -> str;"
         "fn f(b: bool) { while b { let s: str = to_str(1); continue; } }");
-    assert(output_contains(prog, "drop"));
+    const LirFnDef& fn = first_fn(prog);
+    const LirLocalId s_local = find_named_local(fn, "s");
+    assert(s_local != kInvalidLocal);
+    assert(count_drop_stmts_for_local(fn, s_local) == 1);
+
+    const LirBlockId drop_block_id = find_block_with_drop_of_local(fn, s_local);
+    assert(drop_block_id != kInvalidBlock);
+    const LirBasicBlock& drop_block = fn.blocks[drop_block_id];
+    assert(find_stmt_index_of_drop(drop_block, s_local).has_value());
+
+    const auto* jump = std::get_if<LirJump>(&drop_block.terminator.node);
+    assert(jump != nullptr);
+    assert(jump->target != drop_block_id);
+    assert(std::holds_alternative<LirSwitchBool>(fn.blocks[jump->target].terminator.node));
 }
 
 // ─── Nested control flow ──────────────────────────────────────────────────────
