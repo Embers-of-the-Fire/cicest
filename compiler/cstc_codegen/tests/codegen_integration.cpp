@@ -162,6 +162,22 @@ fn main() {
     assert(ir_contains(ir, "call void @cstc_std_str_free(ptr"));
 }
 
+static void test_borrowed_str_literal_does_not_emit_runtime_str_free() {
+    SymbolSession session;
+    const auto ir = must_codegen(R"(
+extern "lang" fn print(value: &str);
+
+fn main() {
+    let literal: &str = "hi";
+    let alias: &str = literal;
+    print(alias);
+}
+)");
+    assert(ir_contains(ir, "@0 = private unnamed_addr constant [3 x i8] c\"hi\\00\""));
+    assert(ir_contains(ir, "call void @print(ptr @0)"));
+    assert(!ir_contains(ir, "call void @cstc_std_str_free(ptr"));
+}
+
 static void test_auto_drop_recurses_through_struct_fields() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
@@ -211,6 +227,7 @@ int main() {
     test_extern_with_opaque_types();
     test_extern_with_structs_and_enums();
     test_auto_drop_emits_runtime_str_free();
+    test_borrowed_str_literal_does_not_emit_runtime_str_free();
     test_auto_drop_recurses_through_struct_fields();
     test_nested_field_borrow_uses_projected_geps();
     return 0;
