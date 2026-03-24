@@ -124,6 +124,27 @@ static void test_fn_str_return() {
     assert(prog.fns[0].return_ty == cstc::tyir::ty::str());
 }
 
+static void test_str_literal_lowers_to_borrowed_str_const() {
+    const LirProgram prog = must_lower("fn greeting() { let s: &str = \"hello\"; }");
+    assert(prog.fns.size() == 1);
+
+    const LirFnDef& fn = prog.fns[0];
+    assert(fn.locals.size() == 1);
+    assert(fn.locals[0].ty == cstc::tyir::ty::ref(cstc::tyir::ty::str()));
+    assert(fn.locals[0].debug_name.has_value());
+    assert(*fn.locals[0].debug_name == Symbol::intern("s"));
+
+    assert(fn.blocks.size() == 1);
+    assert(fn.blocks[0].stmts.size() == 1);
+    const auto& assign = std::get<LirAssign>(fn.blocks[0].stmts[0].node);
+    assert(assign.dest == LirPlace::local(fn.locals[0].id));
+
+    const auto& use = std::get<LirUse>(assign.rhs.node);
+    assert(use.operand.kind == LirOperand::Kind::Const);
+    assert(use.operand.constant.kind == LirConst::Kind::Str);
+    assert(use.operand.constant.symbol == Symbol::intern("\"hello\""));
+}
+
 // ─── Multiple items: order preserved ─────────────────────────────────────────
 
 static void test_item_order() {
@@ -170,6 +191,7 @@ int main() {
     test_fn_add_params();
     test_fn_bool_return();
     test_fn_str_return();
+    test_str_literal_lowers_to_borrowed_str_const();
     test_item_order();
     test_printer_smoke();
     test_entry_block_is_zero();
