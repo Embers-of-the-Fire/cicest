@@ -211,6 +211,16 @@ struct ModuleInfo {
     return decl_binding;
 }
 
+[[nodiscard]] inline BindingSet
+    merge_binding_sets(const BindingSet& visible, const BindingSet& fallback) {
+    BindingSet merged = visible;
+    if (!merged.type_binding.has_value())
+        merged.type_binding = fallback.type_binding;
+    if (!merged.value_binding.has_value())
+        merged.value_binding = fallback.value_binding;
+    return merged;
+}
+
 class Resolver {
 public:
     Resolver(
@@ -479,15 +489,19 @@ private:
         }
 
     private:
-        [[nodiscard]] const BindingSet* lookup_visible(Symbol name) const {
-            const auto it = module_.visible_bindings.find(name);
-            if (it != module_.visible_bindings.end())
-                return &it->second;
-
+        [[nodiscard]] std::optional<BindingSet> lookup_visible(Symbol name) const {
+            const auto visible = module_.visible_bindings.find(name);
             const auto fallback = module_.fallback_bindings.find(name);
+            if (visible == module_.visible_bindings.end()) {
+                if (fallback == module_.fallback_bindings.end())
+                    return std::nullopt;
+                return fallback->second;
+            }
+
             if (fallback == module_.fallback_bindings.end())
-                return nullptr;
-            return &fallback->second;
+                return visible->second;
+
+            return merge_binding_sets(visible->second, fallback->second);
         }
 
         [[nodiscard]] const BindingSet* lookup_local(Symbol name) const {
@@ -534,8 +548,8 @@ private:
             if (type.kind != cstc::ast::TypeKind::Named)
                 return;
 
-            const BindingSet* binding = lookup_visible(type.symbol);
-            if (binding == nullptr || !binding->type_binding.has_value())
+            const std::optional<BindingSet> binding = lookup_visible(type.symbol);
+            if (!binding.has_value() || !binding->type_binding.has_value())
                 return;
 
             if (!type.display_name.is_valid())
@@ -602,8 +616,8 @@ private:
                             node.display_head = node.head;
 
                         if (node.tail.has_value()) {
-                            const BindingSet* binding = lookup_visible(node.head);
-                            if (binding != nullptr && binding->type_binding.has_value())
+                            const std::optional<BindingSet> binding = lookup_visible(node.head);
+                            if (binding.has_value() && binding->type_binding.has_value())
                                 node.head = binding->type_binding->internal_name;
                             return;
                         }
@@ -611,14 +625,14 @@ private:
                         if (is_local_name(node.head))
                             return;
 
-                        const BindingSet* binding = lookup_visible(node.head);
-                        if (binding != nullptr && binding->value_binding.has_value())
+                        const std::optional<BindingSet> binding = lookup_visible(node.head);
+                        if (binding.has_value() && binding->value_binding.has_value())
                             node.head = binding->value_binding->internal_name;
                     } else if constexpr (std::is_same_v<Node, cstc::ast::StructInitExpr>) {
                         if (!node.display_name.is_valid())
                             node.display_name = node.type_name;
-                        const BindingSet* binding = lookup_visible(node.type_name);
-                        if (binding != nullptr && binding->type_binding.has_value())
+                        const std::optional<BindingSet> binding = lookup_visible(node.type_name);
+                        if (binding.has_value() && binding->type_binding.has_value())
                             node.type_name = binding->type_binding->internal_name;
                         for (cstc::ast::StructInitField& field : node.fields)
                             rewrite_expr(field.value);

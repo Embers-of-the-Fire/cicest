@@ -235,6 +235,31 @@ void test_pub_type_does_not_export_private_value_binding_with_same_name() {
         temp.path / "root.cst", temp.path / "std", "undefined function 'Foo'");
 }
 
+void test_imported_type_keeps_prelude_fallback_value_namespace() {
+    cstc::symbol::SymbolSession session;
+    const TempDir temp = make_temp_dir();
+
+    write_file(temp.path / "std" / "prelude.cst", "pub fn Foo() -> num { 1 }\n");
+    write_file(temp.path / "lib.cst", "pub struct Foo;\n");
+    write_file(
+        temp.path / "root.cst", "import { Foo } from \"lib.cst\";\n"
+                                "fn main() -> num { Foo() }\n");
+
+    must_lower(temp.path / "root.cst", temp.path / "std");
+}
+
+void test_local_value_keeps_prelude_fallback_type_namespace() {
+    cstc::symbol::SymbolSession session;
+    const TempDir temp = make_temp_dir();
+
+    write_file(temp.path / "std" / "prelude.cst", "pub struct Foo;\n");
+    write_file(
+        temp.path / "root.cst", "fn Foo() -> Foo { Foo { } }\n"
+                                "fn main() { let value: Foo = Foo(); }\n");
+
+    must_lower(temp.path / "root.cst", temp.path / "std");
+}
+
 void test_std_path_import_resolves_relative_to_std_root() {
     cstc::symbol::SymbolSession session;
     const TempDir temp = make_temp_dir();
@@ -369,6 +394,8 @@ int main() {
     test_import_alias_duplicate_value_binding_is_rejected_by_resolver();
     test_pub_items_can_share_export_name_across_type_and_value_namespaces();
     test_pub_type_does_not_export_private_value_binding_with_same_name();
+    test_imported_type_keeps_prelude_fallback_value_namespace();
+    test_local_value_keeps_prelude_fallback_type_namespace();
     test_std_path_import_resolves_relative_to_std_root();
     test_local_item_shadows_prelude();
     test_explicit_import_shadows_prelude_fallback();
