@@ -25,7 +25,7 @@ Source → Lexer → Tokens → Parser → AST → [TyIR Builder] → TyIR → [
 ## Type system
 
 LIR re-uses the TyIR type system wholesale.  See [tyir.md](tyir.md) for the
-full description.  The six type kinds available:
+full description.  The seven type kinds available:
 
 | Type | Kind | Notes |
 |---|---|---|
