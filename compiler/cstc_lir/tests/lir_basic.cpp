@@ -110,6 +110,14 @@ static void test_operand_copy() {
     assert(op.place == p);
 }
 
+static void test_operand_move() {
+    SymbolSession session;
+    const LirPlace p = LirPlace::local(7);
+    const LirOperand op = LirOperand::move(p);
+    assert(op.kind == LirOperand::Kind::Move);
+    assert(op.place == p);
+}
+
 static void test_operand_const() {
     SymbolSession session;
     const LirConst c = LirConst::bool_(false);
@@ -133,6 +141,13 @@ static void test_rvalue_use() {
     SymbolSession session;
     const LirRvalue rv{LirUse{LirOperand::from_const(LirConst::unit())}};
     assert(std::holds_alternative<LirUse>(rv.node));
+}
+
+static void test_rvalue_borrow() {
+    SymbolSession session;
+    const LirRvalue rv{LirBorrow{LirPlace::local(1)}};
+    assert(std::holds_alternative<LirBorrow>(rv.node));
+    assert(std::get<LirBorrow>(rv.node).place == LirPlace::local(1));
 }
 
 static void test_rvalue_binary_op() {
@@ -238,10 +253,12 @@ int main() {
     test_place_equality();
 
     test_operand_copy();
+    test_operand_move();
     test_operand_const();
     test_operand_equality();
 
     test_rvalue_use();
+    test_rvalue_borrow();
     test_rvalue_binary_op();
     test_rvalue_unary_op();
     test_rvalue_call();

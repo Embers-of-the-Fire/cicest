@@ -11,6 +11,8 @@ using namespace cstc::lir;
 using namespace cstc::symbol;
 using namespace cstc::tyir;
 
+static const LirAssign& as_assign(const LirStmt& stmt) { return std::get<LirAssign>(stmt.node); }
+
 // ─── LirAssign (LirStmt) ──────────────────────────────────────────────────────
 
 static void test_assign_use() {
@@ -18,8 +20,9 @@ static void test_assign_use() {
     const LirPlace dest = LirPlace::local(0);
     const LirRvalue rhs{LirUse{LirOperand::from_const(LirConst::num(Symbol::intern("7")))}};
     const LirStmt stmt{dest, rhs, {}};
-    assert(stmt.dest == dest);
-    assert(std::holds_alternative<LirUse>(stmt.rhs.node));
+    const auto& assign = as_assign(stmt);
+    assert(assign.dest == dest);
+    assert(std::holds_alternative<LirUse>(assign.rhs.node));
 }
 
 static void test_assign_binary() {
@@ -31,8 +34,9 @@ static void test_assign_binary() {
         LirBinaryOp{cstc::ast::BinaryOp::Mul, lhs, rhs_op}
     };
     const LirStmt stmt{dest, rhs, {}};
-    assert(stmt.dest == LirPlace::local(2));
-    const auto& bin = std::get<LirBinaryOp>(stmt.rhs.node);
+    const auto& assign = as_assign(stmt);
+    assert(assign.dest == LirPlace::local(2));
+    const auto& bin = std::get<LirBinaryOp>(assign.rhs.node);
     assert(bin.op == cstc::ast::BinaryOp::Mul);
 }
 
@@ -44,7 +48,7 @@ static void test_assign_call_no_args() {
         LirCall{fn, {}}
     };
     const LirStmt stmt{dest, rhs, {}};
-    const auto& call = std::get<LirCall>(stmt.rhs.node);
+    const auto& call = std::get<LirCall>(as_assign(stmt).rhs.node);
     assert(call.fn_name == fn);
     assert(call.args.empty());
 }
@@ -58,7 +62,7 @@ static void test_assign_call_with_args() {
         LirCall{fn, {a0, a1}}
     };
     const LirStmt stmt{LirPlace::local(2), rhs, {}};
-    const auto& call = std::get<LirCall>(stmt.rhs.node);
+    const auto& call = std::get<LirCall>(as_assign(stmt).rhs.node);
     assert(call.args.size() == 2);
 }
 
@@ -69,8 +73,15 @@ static void test_assign_unary_negate() {
         LirUnaryOp{cstc::ast::UnaryOp::Negate, operand}
     };
     const LirStmt stmt{LirPlace::local(1), rhs, {}};
-    const auto& unop = std::get<LirUnaryOp>(stmt.rhs.node);
+    const auto& unop = std::get<LirUnaryOp>(as_assign(stmt).rhs.node);
     assert(unop.op == cstc::ast::UnaryOp::Negate);
+}
+
+static void test_assign_borrow() {
+    SymbolSession session;
+    const LirStmt stmt{LirPlace::local(1), LirRvalue{LirBorrow{LirPlace::local(0)}}, {}};
+    const auto& borrow = std::get<LirBorrow>(as_assign(stmt).rhs.node);
+    assert(borrow.place == LirPlace::local(0));
 }
 
 static void test_assign_struct_init_empty_fields() {
@@ -79,7 +90,7 @@ static void test_assign_struct_init_empty_fields() {
     LirStructInit si;
     si.type_name = type_name;
     const LirStmt stmt{LirPlace::local(0), LirRvalue{std::move(si)}, {}};
-    const auto& init = std::get<LirStructInit>(stmt.rhs.node);
+    const auto& init = std::get<LirStructInit>(as_assign(stmt).rhs.node);
     assert(init.type_name == type_name);
     assert(init.fields.empty());
 }
@@ -94,7 +105,7 @@ static void test_assign_struct_init_two_fields() {
     si.fields.push_back({fx, LirOperand::from_const(LirConst::num(Symbol::intern("1")))});
     si.fields.push_back({fy, LirOperand::from_const(LirConst::num(Symbol::intern("2")))});
     const LirStmt stmt{LirPlace::local(2), LirRvalue{std::move(si)}, {}};
-    const auto& init = std::get<LirStructInit>(stmt.rhs.node);
+    const auto& init = std::get<LirStructInit>(as_assign(stmt).rhs.node);
     assert(init.fields.size() == 2);
     assert(init.fields[0].name == fx);
     assert(init.fields[1].name == fy);
@@ -106,8 +117,18 @@ static void test_assign_field_dest() {
     const LirPlace dest = LirPlace::field(0, field);
     const LirRvalue rhs{LirUse{LirOperand::from_const(LirConst::num(Symbol::intern("5")))}};
     const LirStmt stmt{dest, rhs, {}};
-    assert(stmt.dest.kind == LirPlace::Kind::Field);
-    assert(stmt.dest.field_name == field);
+    const auto& assign = as_assign(stmt);
+    assert(assign.dest.kind == LirPlace::Kind::Field);
+    assert(assign.dest.field_name == field);
+}
+
+static void test_drop_stmt() {
+    SymbolSession session;
+    const LirStmt stmt{
+        LirDrop{3, {}}
+    };
+    const auto& drop = std::get<LirDrop>(stmt.node);
+    assert(drop.local == 3);
 }
 
 // ─── LirTerminator ────────────────────────────────────────────────────────────
@@ -178,9 +199,11 @@ int main() {
     test_assign_call_no_args();
     test_assign_call_with_args();
     test_assign_unary_negate();
+    test_assign_borrow();
     test_assign_struct_init_empty_fields();
     test_assign_struct_init_two_fields();
     test_assign_field_dest();
+    test_drop_stmt();
 
     test_terminator_return_void();
     test_terminator_return_value();

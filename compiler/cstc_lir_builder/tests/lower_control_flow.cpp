@@ -49,7 +49,10 @@ static LirLocalId find_local_assigned_num(const LirFnDef& fn, const char* litera
     const Symbol literal = Symbol::intern(literal_text);
     for (const LirBasicBlock& block : fn.blocks) {
         for (const LirStmt& stmt : block.stmts) {
-            const auto* use = std::get_if<LirUse>(&stmt.rhs.node);
+            const auto* assign = std::get_if<LirAssign>(&stmt.node);
+            if (assign == nullptr)
+                continue;
+            const auto* use = std::get_if<LirUse>(&assign->rhs.node);
             if (use == nullptr)
                 continue;
             if (use->operand.kind != LirOperand::Kind::Const)
@@ -58,9 +61,9 @@ static LirLocalId find_local_assigned_num(const LirFnDef& fn, const char* litera
                 continue;
             if (use->operand.constant.symbol != literal)
                 continue;
-            if (stmt.dest.kind != LirPlace::Kind::Local)
+            if (assign->dest.kind != LirPlace::Kind::Local)
                 continue;
-            return stmt.dest.local_id;
+            return assign->dest.local_id;
         }
     }
     return kInvalidLocal;
@@ -219,6 +222,18 @@ static void test_return_void() {
     assert(output_contains(prog, "return\n"));
 }
 
+static void test_return_drops_owned_locals() {
+    const LirProgram prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn f() -> str {"
+        "  let a: str = to_str(1);"
+        "  let b: str = to_str(2);"
+        "  return b;"
+        "}");
+    assert(output_contains(prog, "drop"));
+    assert(output_contains(prog, "move("));
+}
+
 static void test_return_from_nested_block() {
     // `return 42` without semicolon → tail expression with type Never,
     // which is compatible with the function's `num` return type.
@@ -256,8 +271,8 @@ static void test_nested_block_shadowing_prefers_inner_binding() {
     assert(ret.value.has_value());
     assert(ret.value->kind == LirOperand::Kind::Copy);
     assert(ret.value->place.kind == LirPlace::Kind::Local);
-    assert(ret.value->place.local_id == inner_x);
     assert(ret.value->place.local_id != outer_x);
+    assert(output_contains(prog, "copy(_%" + std::to_string(inner_x) + ")"));
 }
 
 static void test_terminated_block_skips_tail_expr() {
@@ -276,6 +291,20 @@ static void test_terminated_block_skips_tail_expr() {
 static void test_terminated_loop_body_skips_following_stmt() {
     const LirProgram prog = must_lower("fn f() { loop { break; 1 + 2; } }");
     assert(!output_contains(prog, "BinOp(+"));
+}
+
+static void test_break_drops_owned_locals() {
+    const LirProgram prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn f() { loop { let s: str = to_str(1); break; } }");
+    assert(output_contains(prog, "drop"));
+}
+
+static void test_continue_drops_owned_locals() {
+    const LirProgram prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn f(b: bool) { while b { let s: str = to_str(1); continue; } }");
+    assert(output_contains(prog, "drop"));
 }
 
 // ─── Nested control flow ──────────────────────────────────────────────────────
@@ -352,11 +381,14 @@ int main() {
 
     test_early_return();
     test_return_void();
+    test_return_drops_owned_locals();
     test_return_from_nested_block();
     test_param_shadowing_in_fn_body();
     test_nested_block_shadowing_prefers_inner_binding();
     test_terminated_block_skips_tail_expr();
     test_terminated_loop_body_skips_following_stmt();
+    test_break_drops_owned_locals();
+    test_continue_drops_owned_locals();
 
     test_if_inside_while();
     test_nested_if();

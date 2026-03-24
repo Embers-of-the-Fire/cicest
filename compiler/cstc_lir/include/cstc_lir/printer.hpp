@@ -80,10 +80,12 @@ inline void indent(std::ostringstream& out, std::size_t level) {
     return s;
 }
 
-/// Formats an operand as "copy(place)" or the constant display string.
+/// Formats an operand as "copy(place)", "move(place)", or the constant display string.
 [[nodiscard]] inline std::string format_operand(const LirOperand& op) {
     if (op.kind == LirOperand::Kind::Copy)
         return "copy(" + format_place(op.place) + ")";
+    if (op.kind == LirOperand::Kind::Move)
+        return "move(" + format_place(op.place) + ")";
     return op.constant.display();
 }
 
@@ -94,6 +96,8 @@ inline void print_rvalue(std::ostringstream& out, const LirRvalue& rv) {
 
             if constexpr (std::is_same_v<N, LirUse>) {
                 out << format_operand(node.operand);
+            } else if constexpr (std::is_same_v<N, LirBorrow>) {
+                out << "Borrow(" << format_place(node.place) << ")";
             } else if constexpr (std::is_same_v<N, LirBinaryOp>) {
                 out << "BinOp(" << binary_op_name(node.op) << ", " << format_operand(node.lhs)
                     << ", " << format_operand(node.rhs) << ")";
@@ -155,16 +159,28 @@ inline void
         term.node);
 }
 
+inline void print_stmt(std::ostringstream& out, const LirStmt& stmt, std::size_t level) {
+    std::visit(
+        [&](const auto& node) {
+            using N = std::decay_t<decltype(node)>;
+            indent(out, level);
+            if constexpr (std::is_same_v<N, LirAssign>) {
+                out << format_place(node.dest) << " = ";
+                print_rvalue(out, node.rhs);
+                out << "\n";
+            } else if constexpr (std::is_same_v<N, LirDrop>) {
+                out << "drop _%" << node.local << "\n";
+            }
+        },
+        stmt.node);
+}
+
 inline void
     print_basic_block(std::ostringstream& out, const LirBasicBlock& block, std::size_t level) {
     indent(out, level);
     out << "bb" << block.id << ":\n";
-    for (const LirStmt& stmt : block.stmts) {
-        indent(out, level + 1);
-        out << format_place(stmt.dest) << " = ";
-        print_rvalue(out, stmt.rhs);
-        out << "\n";
-    }
+    for (const LirStmt& stmt : block.stmts)
+        print_stmt(out, stmt, level + 1);
     print_terminator(out, block.terminator, level + 1);
 }
 

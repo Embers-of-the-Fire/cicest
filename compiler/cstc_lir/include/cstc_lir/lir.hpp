@@ -45,6 +45,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -170,7 +171,7 @@ struct LirPlace {
 
 // ─── Operands ───────────────────────────────────────────────────────────────
 
-/// An SSA-style value: either a copy of a place's current value, or a
+/// An SSA-style value: either a copy/move of a place's current value, or a
 /// compile-time constant.
 ///
 /// Operands are the "leaves" of every rvalue computation: every input to a
@@ -180,13 +181,15 @@ struct LirOperand {
     enum class Kind {
         /// A copy of the value currently held by `place`.
         Copy,
+        /// A move out of the value currently held by `place`.
+        Move,
         /// A compile-time constant embedded directly.
         Const,
     };
 
     /// Operand category.
     Kind kind = Kind::Const;
-    /// Source place; valid when `kind == Copy`.
+    /// Source place; valid when `kind == Copy` or `kind == Move`.
     LirPlace place = LirPlace{};
     /// Constant payload; valid when `kind == Const`.
     LirConst constant = LirConst{};
@@ -195,6 +198,8 @@ struct LirOperand {
 
     /// Operand that copies the value at `place`.
     [[nodiscard]] static LirOperand copy(LirPlace place);
+    /// Operand that moves the value out of `place`.
+    [[nodiscard]] static LirOperand move(LirPlace place);
     /// Operand that embeds a compile-time constant.
     [[nodiscard]] static LirOperand from_const(LirConst constant);
 
@@ -209,6 +214,11 @@ struct LirOperand {
 /// Trivial rvalue: just move/copy an operand into the destination.
 struct LirUse {
     LirOperand operand;
+};
+
+/// Shared borrow of a place.
+struct LirBorrow {
+    LirPlace place;
 };
 
 /// Arithmetic or logical binary operation.
@@ -252,8 +262,8 @@ struct LirEnumVariantRef {
 
 /// The right-hand side of an `LirAssign` statement.
 struct LirRvalue {
-    using Node =
-        std::variant<LirUse, LirBinaryOp, LirUnaryOp, LirCall, LirStructInit, LirEnumVariantRef>;
+    using Node = std::variant<
+        LirUse, LirBorrow, LirBinaryOp, LirUnaryOp, LirCall, LirStructInit, LirEnumVariantRef>;
 
     Node node;
 };
@@ -274,8 +284,28 @@ struct LirAssign {
     cstc::span::SourceSpan span;
 };
 
-/// Any statement within a basic block (currently only `LirAssign`).
-using LirStmt = LirAssign;
+/// Explicit drop of an owned local.
+struct LirDrop {
+    /// Local whose destructor logic should run if it still owns a value.
+    LirLocalId local = kInvalidLocal;
+    /// Source location for diagnostics / debug info.
+    cstc::span::SourceSpan span;
+};
+
+/// Any statement within a basic block.
+struct LirStmt {
+    using Node = std::variant<LirAssign, LirDrop>;
+
+    Node node;
+
+    LirStmt() = default;
+    LirStmt(LirAssign assign)
+        : node(std::move(assign)) {}
+    LirStmt(LirDrop drop)
+        : node(std::move(drop)) {}
+    LirStmt(LirPlace dest, LirRvalue rhs, cstc::span::SourceSpan span)
+        : node(LirAssign{std::move(dest), std::move(rhs), span}) {}
+};
 
 // ─── Terminators ────────────────────────────────────────────────────────────
 
@@ -515,6 +545,13 @@ inline LirPlace LirPlace::field(LirLocalId id, cstc::symbol::Symbol name) {
 inline LirOperand LirOperand::copy(LirPlace place) {
     LirOperand op;
     op.kind = Kind::Copy;
+    op.place = place;
+    return op;
+}
+
+inline LirOperand LirOperand::move(LirPlace place) {
+    LirOperand op;
+    op.kind = Kind::Move;
     op.place = place;
     return op;
 }
