@@ -221,6 +221,7 @@ private:
     /// Unknown names conservatively fall back to an empty struct type.
     llvm::Type* map_type(const Ty& ty) {
         switch (ty.kind) {
+        case tyir::TyKind::Ref: return llvm::PointerType::getUnqual(context_);
         case tyir::TyKind::Num: return llvm::Type::getDoubleTy(context_);
         case tyir::TyKind::Bool: return llvm::Type::getInt1Ty(context_);
         case tyir::TyKind::Str: return llvm::PointerType::getUnqual(context_);

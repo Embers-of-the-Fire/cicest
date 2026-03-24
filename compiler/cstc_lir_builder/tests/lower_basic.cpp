@@ -117,7 +117,9 @@ static void test_fn_bool_return() {
 // ─── Function with str return ────────────────────────────────────────────────
 
 static void test_fn_str_return() {
-    const LirProgram prog = must_lower("fn greeting() -> str { \"hello\" }");
+    const LirProgram prog = must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn greeting() -> str { to_str(0) }");
     assert(prog.fns.size() == 1);
     assert(prog.fns[0].return_ty == cstc::tyir::ty::str());
 }

@@ -31,18 +31,18 @@ static bool ir_contains(const std::string& ir, const std::string& needle) {
 static void test_program_with_full_prelude() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
-extern "lang" fn print(value: str);
-extern "lang" fn println(value: str);
+extern "lang" fn print(value: &str);
+extern "lang" fn println(value: &str);
 extern "lang" fn to_str(value: num) -> str;
-extern "lang" fn str_concat(a: str, b: str) -> str;
-extern "lang" fn str_len(value: str) -> num;
+extern "lang" fn str_concat(a: &str, b: &str) -> str;
+extern "lang" fn str_len(value: &str) -> num;
 
 fn main() {
     println("hello world");
     let s: str = to_str(42);
-    print(s);
+    print(&s);
     let combined: str = str_concat("a", "b");
-    let length: num = str_len(combined);
+    let length: num = str_len(&combined);
 }
 )");
     // All 5 extern fns should be declared
@@ -67,17 +67,17 @@ fn main() {
 static void test_user_fn_calling_extern() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
-extern "lang" fn println(value: str);
+extern "lang" fn println(value: &str);
 extern "lang" fn to_str(value: num) -> str;
 
-fn greet(name: str) {
+fn greet(name: &str) {
     println(name);
 }
 
 fn main() {
     greet("world");
     let s: str = to_str(100);
-    greet(s);
+    greet(&s);
 }
 )");
     assert(ir_contains(ir, "declare void @println(ptr)"));
@@ -109,7 +109,7 @@ fn main() {
 static void test_extern_with_structs_and_enums() {
     SymbolSession session;
     const auto ir = must_codegen(R"(
-extern "lang" fn println(value: str);
+extern "lang" fn println(value: &str);
 extern "lang" fn to_str(value: num) -> str;
 
 struct Point {
@@ -128,7 +128,8 @@ fn use_color(c: Color) -> Color { c }
 
 fn main() {
     let p: Point = Point { x: 1, y: 2 };
-    println(to_str(use_point(p)));
+    let rendered: str = to_str(use_point(p));
+    println(&rendered);
     let c: Color = use_color(Color::Green);
 }
 )");

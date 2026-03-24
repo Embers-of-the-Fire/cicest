@@ -478,7 +478,7 @@ inline LirConst LirConst::unit() {
 inline Ty LirConst::ty() const {
     switch (kind) {
     case Kind::Num: return tyir::ty::num();
-    case Kind::Str: return tyir::ty::str();
+    case Kind::Str: return tyir::ty::ref(tyir::ty::str());
     case Kind::Bool: return tyir::ty::bool_();
     case Kind::Unit: return tyir::ty::unit();
     }

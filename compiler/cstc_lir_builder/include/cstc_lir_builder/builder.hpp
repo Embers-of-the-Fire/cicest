@@ -82,7 +82,7 @@ public:
     lir::LirLocalId alloc_local(
         cstc::tyir::Ty ty, std::optional<cstc::symbol::Symbol> debug_name = std::nullopt) {
         const lir::LirLocalId id = static_cast<lir::LirLocalId>(locals_.size());
-        locals_.push_back({id, ty, debug_name});
+        locals_.push_back({id, std::move(ty), debug_name});
         return id;
     }
 
@@ -253,6 +253,15 @@ private:
                     lir::LirStmt{
                         lir::LirPlace::local(tmp), lir::LirRvalue{std::move(si)}, expr->span});
                 return lir::LirOperand::copy(lir::LirPlace::local(tmp));
+            }
+
+            // ── Borrow expression ────────────────────────────────────────────
+            else if constexpr (std::is_same_v<N, tyir::TyBorrow>) {
+                // Temporary compatibility shim: for borrowed string-like values
+                // we can re-use the lowered operand directly. Full ownership-
+                // aware borrow lowering is implemented in the dedicated LIR
+                // ownership stage.
+                return lower_expr(builder, node.rhs);
             }
 
             // ── Unary operation ───────────────────────────────────────────────

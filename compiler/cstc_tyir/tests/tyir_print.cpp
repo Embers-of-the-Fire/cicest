@@ -85,8 +85,8 @@ static void test_print_enum_with_discriminant() {
 static void test_print_literals() {
     auto num_lit =
         make_ty_expr({}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("42"), false}, ty::num());
-    auto str_lit =
-        make_ty_expr({}, TyLiteral{TyLiteral::Kind::Str, Symbol::intern("hi"), false}, ty::str());
+    auto str_lit = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Str, Symbol::intern("hi"), false}, ty::ref(ty::str()));
     auto bool_true =
         make_ty_expr({}, TyLiteral{TyLiteral::Kind::Bool, kInvalidSymbol, true}, ty::bool_());
     auto bool_false =
@@ -114,7 +114,7 @@ static void test_print_literals() {
 
     const std::string out = format_program(prog);
     assert(contains(out, "TyLiteral(42): num"));
-    assert(contains(out, "TyLiteral(\"hi\"): str"));
+    assert(contains(out, "TyLiteral(\"hi\"): &str"));
     assert(contains(out, "TyLiteral(true): bool"));
     assert(contains(out, "TyLiteral(false): bool"));
     assert(contains(out, "TyLiteral(()): Unit"));

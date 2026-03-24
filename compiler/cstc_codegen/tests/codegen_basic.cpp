@@ -75,7 +75,8 @@ static void test_fn_returns_bool() {
 // ─── Function returning str ──────────────────────────────────────────────────
 
 static void test_fn_returns_str() {
-    const std::string ir = must_codegen("fn f() -> str { \"hello\" }");
+    const std::string ir =
+        must_codegen("extern \"lang\" fn to_str(value: num) -> str; fn f() -> str { to_str(0) }");
     assert(ir_contains(ir, "define ptr @f()"));
     assert(ir_contains(ir, "ret ptr"));
 }

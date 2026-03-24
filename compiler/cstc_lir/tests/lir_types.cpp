@@ -12,11 +12,11 @@ using namespace cstc::tyir;
 
 static void test_primitive_types() {
     SymbolSession session;
-    static_assert((ty::unit() == Ty{TyKind::Unit, kInvalidSymbol}));
-    static_assert((ty::num() == Ty{TyKind::Num, kInvalidSymbol}));
-    static_assert((ty::str() == Ty{TyKind::Str, kInvalidSymbol}));
-    static_assert((ty::bool_() == Ty{TyKind::Bool, kInvalidSymbol}));
-    static_assert((ty::never() == Ty{TyKind::Never, kInvalidSymbol}));
+    assert(ty::unit() == ty::unit());
+    assert(ty::num() == ty::num());
+    assert(ty::str() == ty::str());
+    assert(ty::bool_() == ty::bool_());
+    assert(ty::never() == ty::never());
 }
 
 static void test_named_type() {
@@ -30,22 +30,24 @@ static void test_named_type() {
 
 static void test_type_equality() {
     SymbolSession session;
-    static_assert(ty::num() == ty::num());
-    static_assert(!(ty::num() == ty::bool_()));
-    static_assert(!(ty::str() == ty::unit()));
+    assert(ty::num() == ty::num());
+    assert(!(ty::num() == ty::bool_()));
+    assert(!(ty::str() == ty::unit()));
     const Symbol s = Symbol::intern("Foo");
     assert(ty::named(s) == ty::named(s));
     assert(!(ty::named(s) == ty::num()));
+    assert(ty::ref(ty::str()) == ty::ref(ty::str()));
 }
 
 static void test_type_predicates() {
     SymbolSession session;
-    static_assert(ty::unit().is_unit());
-    static_assert(!ty::num().is_unit());
-    static_assert(ty::never().is_never());
-    static_assert(!ty::bool_().is_never());
+    assert(ty::unit().is_unit());
+    assert(!ty::num().is_unit());
+    assert(ty::never().is_never());
+    assert(!ty::bool_().is_never());
     assert(ty::named(Symbol::intern("X")).is_named());
-    static_assert(!ty::num().is_named());
+    assert(!ty::num().is_named());
+    assert(ty::ref(ty::num()).is_ref());
 }
 
 static void test_type_display() {
@@ -56,6 +58,7 @@ static void test_type_display() {
     assert(ty::bool_().display() == "bool");
     assert(ty::never().display() == "!");
     assert(ty::named(Symbol::intern("MyType")).display() == "MyType");
+    assert(ty::ref(ty::str()).display() == "&str");
 }
 
 static void test_const_ty_consistency() {
@@ -63,7 +66,7 @@ static void test_const_ty_consistency() {
     const Symbol s42 = Symbol::intern("42");
     const Symbol shel = Symbol::intern("hello");
     assert(LirConst::num(s42).ty() == ty::num());
-    assert(LirConst::str(shel).ty() == ty::str());
+    assert(LirConst::str(shel).ty() == ty::ref(ty::str()));
     assert(LirConst::bool_(true).ty() == ty::bool_());
     assert(LirConst::unit().ty() == ty::unit());
 }

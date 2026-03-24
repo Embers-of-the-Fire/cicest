@@ -52,6 +52,15 @@ inline void indent(std::ostringstream& out, std::size_t level) {
     return "?";
 }
 
+[[nodiscard]] inline std::string_view use_kind_suffix(ValueUseKind use_kind) {
+    switch (use_kind) {
+    case ValueUseKind::Copy: return "";
+    case ValueUseKind::Move: return " [move]";
+    case ValueUseKind::Borrow: return " [borrow]";
+    }
+    return "";
+}
+
 [[nodiscard]] inline std::string_view binary_name(cstc::ast::BinaryOp op) {
     switch (op) {
     case cstc::ast::BinaryOp::Add: return "+";
@@ -115,19 +124,25 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 indent(out, level);
                 switch (node.kind) {
                 case TyLiteral::Kind::Num:
-                    out << "TyLiteral(" << node.symbol.as_str() << "): num\n";
+                    out << "TyLiteral(" << node.symbol.as_str() << "): " << expr->ty.display()
+                        << "\n";
                     break;
                 case TyLiteral::Kind::Str:
-                    out << "TyLiteral(\"" << node.symbol.as_str() << "\"): str\n";
+                    out << "TyLiteral(\"" << node.symbol.as_str() << "\"): " << expr->ty.display()
+                        << "\n";
                     break;
                 case TyLiteral::Kind::Bool:
-                    out << "TyLiteral(" << (node.bool_value ? "true" : "false") << "): bool\n";
+                    out << "TyLiteral(" << (node.bool_value ? "true" : "false")
+                        << "): " << expr->ty.display() << "\n";
                     break;
-                case TyLiteral::Kind::Unit: out << "TyLiteral(()): Unit\n"; break;
+                case TyLiteral::Kind::Unit:
+                    out << "TyLiteral(()): " << expr->ty.display() << "\n";
+                    break;
                 }
             } else if constexpr (std::is_same_v<N, LocalRef>) {
                 indent(out, level);
-                out << "TyLocal(" << node.name.as_str() << "): " << expr->ty.display() << "\n";
+                out << "TyLocal(" << node.name.as_str() << ")" << use_kind_suffix(node.use_kind)
+                    << ": " << expr->ty.display() << "\n";
             } else if constexpr (std::is_same_v<N, EnumVariantRef>) {
                 indent(out, level);
                 out << "TyVariant(" << node.enum_name.as_str() << "::" << node.variant_name.as_str()
@@ -141,6 +156,10 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                     out << field.name.as_str() << ":\n";
                     print_ty_expr(out, field.value, level + 2);
                 }
+            } else if constexpr (std::is_same_v<N, TyBorrow>) {
+                indent(out, level);
+                out << "TyBorrow: " << expr->ty.display() << "\n";
+                print_ty_expr(out, node.rhs, level + 1);
             } else if constexpr (std::is_same_v<N, TyUnary>) {
                 indent(out, level);
                 out << "TyUnary(" << unary_name(node.op) << "): " << expr->ty.display() << "\n";
@@ -152,8 +171,8 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 print_ty_expr(out, node.rhs, level + 1);
             } else if constexpr (std::is_same_v<N, TyFieldAccess>) {
                 indent(out, level);
-                out << "TyFieldAccess(." << node.field.as_str() << "): " << expr->ty.display()
-                    << "\n";
+                out << "TyFieldAccess(." << node.field.as_str() << ")"
+                    << use_kind_suffix(node.use_kind) << ": " << expr->ty.display() << "\n";
                 print_ty_expr(out, node.base, level + 1);
             } else if constexpr (std::is_same_v<N, TyCall>) {
                 indent(out, level);

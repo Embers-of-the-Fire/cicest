@@ -33,7 +33,7 @@ static void test_const_str() {
     const LirConst c = LirConst::str(s);
     assert(c.kind == LirConst::Kind::Str);
     assert(c.symbol == s);
-    assert(c.ty() == ty::str());
+    assert(c.ty() == ty::ref(ty::str()));
     assert(c.display() == "\"hello\"");
 }
 

@@ -53,6 +53,8 @@ using TyBlockPtr = std::shared_ptr<TyBlock>;
 
 /// Kind of a fully-resolved type.
 enum class TyKind {
+    /// Shared immutable reference type `&T`.
+    Ref,
     /// Built-in unit type `()`.
     Unit,
     /// Built-in numeric type `num`.
@@ -68,6 +70,26 @@ enum class TyKind {
     Never,
 };
 
+/// Ownership / duplication behavior of a resolved type.
+enum class ValueSemantics {
+    /// Values of this type are copied on by-value use.
+    Copy,
+    /// Values of this type are move-only and participate in drop.
+    Move,
+    /// Values of this type are shared references.
+    Ref,
+};
+
+/// How a local or field expression is used at a specific TyIR node.
+enum class ValueUseKind {
+    /// The value is copied.
+    Copy,
+    /// The value is moved.
+    Move,
+    /// The expression is used as a borrowed place.
+    Borrow,
+};
+
 /// A fully-resolved type annotation attached to every TyIR expression.
 struct Ty {
     /// Category of this type.
@@ -76,13 +98,28 @@ struct Ty {
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Human-facing type name used in diagnostics.
     cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
+    /// Referenced pointee when `kind == TyKind::Ref`.
+    std::shared_ptr<Ty> pointee;
+    /// Ownership behavior attached to this resolved type.
+    ValueSemantics semantics = ValueSemantics::Copy;
 
     [[nodiscard]] constexpr bool is_unit() const { return kind == TyKind::Unit; }
     [[nodiscard]] constexpr bool is_never() const { return kind == TyKind::Never; }
     [[nodiscard]] constexpr bool is_named() const { return kind == TyKind::Named; }
+    [[nodiscard]] constexpr bool is_ref() const { return kind == TyKind::Ref; }
+    [[nodiscard]] constexpr bool is_copy() const {
+        return semantics == ValueSemantics::Copy || semantics == ValueSemantics::Ref;
+    }
+    [[nodiscard]] constexpr bool is_move_only() const { return semantics == ValueSemantics::Move; }
 
     friend constexpr bool operator==(const Ty& lhs, const Ty& rhs) {
-        return lhs.kind == rhs.kind && lhs.name == rhs.name;
+        if (lhs.kind != rhs.kind || lhs.name != rhs.name)
+            return false;
+        if (lhs.kind != TyKind::Ref)
+            return true;
+        if (lhs.pointee == nullptr || rhs.pointee == nullptr)
+            return lhs.pointee == rhs.pointee;
+        return *lhs.pointee == *rhs.pointee;
     }
 
     /// Returns a human-readable display string (e.g. `"num"`, `"MyStruct"`, `"!"`).
@@ -90,6 +127,10 @@ struct Ty {
     /// Requires an active `SymbolSession` for `Named` types.
     [[nodiscard]] std::string display() const {
         switch (kind) {
+        case TyKind::Ref:
+            if (pointee != nullptr)
+                return "&" + pointee->display();
+            return "&<unknown>";
         case TyKind::Unit: return "Unit";
         case TyKind::Num: return "num";
         case TyKind::Str: return "str";
@@ -107,29 +148,55 @@ struct Ty {
 /// Factory helpers for the well-known primitive types.
 namespace ty {
 /// Unit type `()`.
-constexpr Ty unit() {
-    return {TyKind::Unit, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+inline Ty unit() {
+    return {
+        TyKind::Unit, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
+        nullptr,      ValueSemantics::Copy,
+    };
 }
 /// Numeric type `num`.
-constexpr Ty num() {
-    return {TyKind::Num, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+inline Ty num() {
+    return {
+        TyKind::Num, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
+        nullptr,     ValueSemantics::Copy,
+    };
 }
 /// String type `str`.
-constexpr Ty str() {
-    return {TyKind::Str, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+inline Ty str() {
+    return {
+        TyKind::Str, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
+        nullptr,     ValueSemantics::Move,
+    };
 }
 /// Boolean type `bool`.
-constexpr Ty bool_() {
-    return {TyKind::Bool, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+inline Ty bool_() {
+    return {
+        TyKind::Bool, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
+        nullptr,      ValueSemantics::Copy,
+    };
 }
 /// Never / bottom type (diverging expression).
-constexpr Ty never() {
-    return {TyKind::Never, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol};
+inline Ty never() {
+    return {
+        TyKind::Never, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
+        nullptr,       ValueSemantics::Copy,
+    };
 }
 /// User-defined named type (struct or enum).
 inline Ty named(
-    cstc::symbol::Symbol sym, cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol) {
-    return {TyKind::Named, sym, display_name};
+    cstc::symbol::Symbol sym, cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol,
+    ValueSemantics semantics = ValueSemantics::Move) {
+    return {TyKind::Named, sym, display_name, nullptr, semantics};
+}
+/// Shared immutable reference type `&T`.
+inline Ty ref(const Ty& pointee) {
+    return {
+        TyKind::Ref,
+        cstc::symbol::kInvalidSymbol,
+        cstc::symbol::kInvalidSymbol,
+        std::make_shared<Ty>(pointee),
+        ValueSemantics::Ref,
+    };
 }
 } // namespace ty
 
@@ -164,6 +231,13 @@ struct TyLiteral {
 struct LocalRef {
     /// Interned name of the local binding.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Whether this read copies, moves, or merely borrows the local place.
+    ValueUseKind use_kind = ValueUseKind::Copy;
+
+    LocalRef() = default;
+    explicit LocalRef(cstc::symbol::Symbol name, ValueUseKind use_kind = ValueUseKind::Copy)
+        : name(name)
+        , use_kind(use_kind) {}
 };
 
 /// Reference to a fieldless enum variant (`EnumType::Variant`).
@@ -200,6 +274,12 @@ struct TyUnary {
     TyExprPtr rhs;
 };
 
+/// Typed shared borrow expression (`&expr`).
+struct TyBorrow {
+    /// Borrowed place or value expression.
+    TyExprPtr rhs;
+};
+
 /// Typed binary operation expression.
 struct TyBinary {
     /// Binary operator.
@@ -216,6 +296,15 @@ struct TyFieldAccess {
     TyExprPtr base;
     /// Accessed field name.
     cstc::symbol::Symbol field = cstc::symbol::kInvalidSymbol;
+    /// Whether the field access copies a value or denotes a borrowed place.
+    ValueUseKind use_kind = ValueUseKind::Copy;
+
+    TyFieldAccess() = default;
+    TyFieldAccess(
+        TyExprPtr base, cstc::symbol::Symbol field, ValueUseKind use_kind = ValueUseKind::Copy)
+        : base(std::move(base))
+        , field(field)
+        , use_kind(use_kind) {}
 };
 
 /// Typed direct function call expression.
@@ -305,8 +394,9 @@ struct TyReturn {
 struct TyExpr {
     /// Variant payload for all typed expression forms.
     using Node = std::variant<
-        TyLiteral, LocalRef, EnumVariantRef, TyStructInit, TyUnary, TyBinary, TyFieldAccess, TyCall,
-        TyBlockPtr, TyIf, TyLoop, TyWhile, TyFor, TyBreak, TyContinue, TyReturn>;
+        TyLiteral, LocalRef, EnumVariantRef, TyStructInit, TyBorrow, TyUnary, TyBinary,
+        TyFieldAccess, TyCall, TyBlockPtr, TyIf, TyLoop, TyWhile, TyFor, TyBreak, TyContinue,
+        TyReturn>;
 
     /// Concrete expression node payload.
     Node node;

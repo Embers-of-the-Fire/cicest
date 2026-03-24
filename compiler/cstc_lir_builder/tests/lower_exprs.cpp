@@ -54,14 +54,15 @@ static void test_num_literal_return() {
 // ─── String literal ───────────────────────────────────────────────────────────
 
 static void test_str_literal_return() {
-    const LirProgram prog = must_lower("fn f() -> str { \"hello\" }");
+    const LirProgram prog = must_lower("fn f() { let s: &str = \"hello\"; }");
     const LirFnDef& fn = first_fn(prog);
-    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
-    assert(ret.value.has_value());
-    assert(ret.value->kind == LirOperand::Kind::Const);
-    assert(ret.value->constant.kind == LirConst::Kind::Str);
+    assert(!fn.blocks[0].stmts.empty());
+    const auto& assign = fn.blocks[0].stmts[0];
+    const auto& use = std::get<LirUse>(assign.rhs.node);
+    assert(use.operand.kind == LirOperand::Kind::Const);
+    assert(use.operand.constant.kind == LirConst::Kind::Str);
     // The lexer stores the string token including its surrounding quotes.
-    assert(ret.value->constant.symbol == Symbol::intern("\"hello\""));
+    assert(use.operand.constant.symbol == Symbol::intern("\"hello\""));
 }
 
 // ─── Bool literal ─────────────────────────────────────────────────────────────

@@ -40,14 +40,14 @@ static void must_fail_with_message(const char* source, const char* expected_mess
 
 static void test_extern_fn_basic() {
     SymbolSession session;
-    const auto prog = must_lower(R"(extern "lang" fn print(value: str);)");
+    const auto prog = must_lower(R"(extern "lang" fn print(value: &str);)");
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
     assert(decl.abi == Symbol::intern("lang"));
     assert(decl.name == Symbol::intern("print"));
     assert(decl.params.size() == 1);
     assert(decl.params[0].name == Symbol::intern("value"));
-    assert(decl.params[0].ty == ty::str());
+    assert(decl.params[0].ty == ty::ref(ty::str()));
     assert(decl.return_ty == ty::unit());
 }
 
@@ -65,13 +65,13 @@ static void test_extern_fn_with_return() {
 
 static void test_extern_fn_multiple_params() {
     SymbolSession session;
-    const auto prog = must_lower(R"(extern "lang" fn concat(a: str, b: str) -> str;)");
+    const auto prog = must_lower(R"(extern "lang" fn concat(a: &str, b: &str) -> str;)");
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
     assert(decl.link_name == Symbol::intern("concat"));
     assert(decl.params.size() == 2);
-    assert(decl.params[0].ty == ty::str());
-    assert(decl.params[1].ty == ty::str());
+    assert(decl.params[0].ty == ty::ref(ty::str()));
+    assert(decl.params[1].ty == ty::ref(ty::str()));
     assert(decl.return_ty == ty::str());
 }
 
@@ -79,7 +79,7 @@ static void test_extern_fn_lang_attribute_overrides_link_name() {
     SymbolSession session;
     const auto prog = must_lower(R"(
 [[lang = "cstc_std_print"]]
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 )");
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
@@ -92,7 +92,7 @@ extern "lang" fn print(value: str);
 static void test_extern_fn_callable() {
     SymbolSession session;
     const auto prog = must_lower(R"(
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 fn main() { print("hello"); }
 )");
     assert(prog.items.size() == 2);
@@ -119,6 +119,11 @@ fn main() {
     assert(fn.body->stmts.size() == 1);
     const auto& let_stmt = std::get<TyLetStmt>(fn.body->stmts[0]);
     assert(let_stmt.ty == ty::str());
+}
+
+static void test_extern_fn_ref_return_rejected() {
+    SymbolSession session;
+    must_fail_with_message(R"(extern "lang" fn borrow() -> &str;)", "reference return types");
 }
 
 // ─── Extern struct lowering ──────────────────────────────────────────────────
@@ -150,8 +155,8 @@ static void test_duplicate_extern_fn_name() {
     SymbolSession session;
     must_fail_with_message(
         R"(
-extern "lang" fn print(value: str);
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
+extern "lang" fn print(value: &str);
 )",
         "duplicate function name");
 }
@@ -181,7 +186,7 @@ struct Foo;
 static void test_extern_fn_wrong_arg_type() {
     SymbolSession session;
     must_fail(R"(
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 fn main() { print(42); }
 )");
 }
@@ -189,7 +194,7 @@ fn main() { print(42); }
 static void test_extern_fn_wrong_arg_count() {
     SymbolSession session;
     must_fail(R"(
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 fn main() { print(); }
 )");
 }
@@ -199,8 +204,8 @@ fn main() { print(); }
 static void test_multiple_extern_items() {
     SymbolSession session;
     const auto prog = must_lower(R"(
-extern "lang" fn print(value: str);
-extern "lang" fn println(value: str);
+extern "lang" fn print(value: &str);
+extern "lang" fn println(value: &str);
 extern "lang" fn to_str(value: num) -> str;
 extern "lang" struct Handle;
 )");
@@ -225,7 +230,7 @@ static void test_unsupported_abi_struct() {
 
 static void test_c_abi_accepted() {
     SymbolSession session;
-    const auto prog = must_lower(R"(extern "c" fn puts(s: str);)");
+    const auto prog = must_lower(R"(extern "c" fn puts(s: &str);)");
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
     assert(decl.abi == Symbol::intern("c"));
@@ -237,7 +242,7 @@ static void test_lang_attribute_requires_lang_abi() {
     must_fail_with_message(
         R"(
 [[lang = "puts"]]
-extern "c" fn puts(s: str);
+extern "c" fn puts(s: &str);
 )",
         "attribute `lang` is only supported");
 }
@@ -247,7 +252,7 @@ static void test_lang_attribute_requires_value() {
     must_fail_with_message(
         R"(
 [[lang]]
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 )",
         "attribute `lang` requires a string value");
 }
@@ -258,7 +263,7 @@ static void test_lang_attribute_rejects_duplicates() {
         R"(
 [[lang = "print"]]
 [[lang = "println"]]
-extern "lang" fn print(value: str);
+extern "lang" fn print(value: &str);
 )",
         "duplicate `lang` attribute");
 }
@@ -292,6 +297,7 @@ int main() {
     test_extern_fn_lang_attribute_overrides_link_name();
     test_extern_fn_callable();
     test_extern_fn_call_with_return();
+    test_extern_fn_ref_return_rejected();
     test_extern_struct_basic();
     test_extern_struct_usable_as_type();
     test_duplicate_extern_fn_name();

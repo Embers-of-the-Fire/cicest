@@ -3,6 +3,6 @@ fn main() {
     let world = "World!";
     let result = str_concat(hello, world);
 
-    println(result);
+    println(&result);
     str_free(result);
 }
