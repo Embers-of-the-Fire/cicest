@@ -78,6 +78,7 @@ struct ModuleInfo {
     ResolveState state = ResolveState::Loaded;
     std::unordered_map<Symbol, BindingSet, SymbolHash> local_bindings;
     std::unordered_map<Symbol, BindingSet, SymbolHash> visible_bindings;
+    std::unordered_map<Symbol, BindingSet, SymbolHash> fallback_bindings;
     std::unordered_map<Symbol, BindingSet, SymbolHash> exports;
 };
 
@@ -373,7 +374,8 @@ private:
         return {};
     }
 
-    [[nodiscard]] std::expected<void, ModuleError> add_implicit_prelude(ModuleInfo& module) {
+    [[nodiscard]] std::expected<void, ModuleError>
+        add_implicit_prelude_fallback(ModuleInfo& module) {
         if (module.is_prelude)
             return {};
 
@@ -384,19 +386,7 @@ private:
         if (!resolved.has_value())
             return std::unexpected(resolved.error());
 
-        for (const auto& [name, binding_set] : modules_[prelude_index_].exports) {
-            cstc::span::SourceSpan binding_span;
-            if (binding_set.type_binding.has_value()) {
-                binding_span = binding_set.type_binding->span;
-            } else if (binding_set.value_binding.has_value()) {
-                binding_span = binding_set.value_binding->span;
-            }
-
-            auto inserted =
-                insert_binding_set(module.visible_bindings, name, binding_set, binding_span);
-            if (!inserted.has_value())
-                return inserted;
-        }
+        module.fallback_bindings = modules_[prelude_index_].exports;
 
         return {};
     }
@@ -476,11 +466,8 @@ private:
 
         modules_[module_index].state = ResolveState::Resolving;
         modules_[module_index].visible_bindings.clear();
+        modules_[module_index].fallback_bindings.clear();
         modules_[module_index].exports.clear();
-
-        auto prelude = add_implicit_prelude(modules_[module_index]);
-        if (!prelude.has_value())
-            return prelude;
 
         auto locals = add_local_bindings_to_scope(modules_[module_index]);
         if (!locals.has_value())
@@ -489,6 +476,10 @@ private:
         auto imports = resolve_imports(module_index);
         if (!imports.has_value())
             return imports;
+
+        auto prelude = add_implicit_prelude_fallback(modules_[module_index]);
+        if (!prelude.has_value())
+            return prelude;
 
         modules_[module_index].state = ResolveState::Resolved;
         return {};
@@ -507,9 +498,13 @@ private:
     private:
         [[nodiscard]] const BindingSet* lookup_visible(Symbol name) const {
             const auto it = module_.visible_bindings.find(name);
-            if (it == module_.visible_bindings.end())
+            if (it != module_.visible_bindings.end())
+                return &it->second;
+
+            const auto fallback = module_.fallback_bindings.find(name);
+            if (fallback == module_.fallback_bindings.end())
                 return nullptr;
-            return &it->second;
+            return &fallback->second;
         }
 
         [[nodiscard]] const BindingSet* lookup_local(Symbol name) const {

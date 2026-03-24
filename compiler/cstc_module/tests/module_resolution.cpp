@@ -103,6 +103,30 @@ const cstc::tyir::TyExternFnDecl*
     return nullptr;
 }
 
+const cstc::tyir::TyFnDecl*
+    find_ty_fn_decl(const cstc::tyir::TyProgram& program, std::string_view name) {
+    for (const cstc::tyir::TyItem& item : program.items) {
+        const auto* decl = std::get_if<cstc::tyir::TyFnDecl>(&item);
+        if (decl == nullptr)
+            continue;
+        if (decl->name.as_str() == name)
+            return decl;
+    }
+
+    return nullptr;
+}
+
+std::vector<const cstc::tyir::TyFnDecl*> collect_ty_fn_decls(const cstc::tyir::TyProgram& program) {
+    std::vector<const cstc::tyir::TyFnDecl*> decls;
+    for (const cstc::tyir::TyItem& item : program.items) {
+        const auto* decl = std::get_if<cstc::tyir::TyFnDecl>(&item);
+        if (decl != nullptr)
+            decls.push_back(decl);
+    }
+
+    return decls;
+}
+
 void test_private_helpers_do_not_collide_across_modules() {
     cstc::symbol::SymbolSession session;
     const TempDir temp = make_temp_dir();
@@ -165,17 +189,60 @@ void test_std_path_import_resolves_relative_to_std_root() {
     must_lower(temp.path / "root.cst", temp.path / "std");
 }
 
-void test_prelude_is_implicit_and_duplicates_are_rejected() {
+void test_local_item_shadows_prelude() {
     cstc::symbol::SymbolSession session;
     const TempDir temp = make_temp_dir();
 
     write_file(temp.path / "std" / "prelude.cst", "pub fn print() { }\n");
     write_file(
         temp.path / "root.cst", "fn print() { }\n"
-                                "fn main() { }\n");
+                                "fn main() { print(); }\n");
 
-    must_fail_with_message(
-        temp.path / "root.cst", temp.path / "std", "duplicate function name 'print'");
+    const auto lowered = must_lower(temp.path / "root.cst", temp.path / "std");
+    const cstc::tyir::TyFnDecl* main_fn = find_ty_fn_decl(lowered, "main");
+    assert(main_fn != nullptr);
+    assert(main_fn->body->stmts.size() == 1);
+    const auto& call_stmt = std::get<cstc::tyir::TyExprStmt>(main_fn->body->stmts[0]);
+    const auto& call = std::get<cstc::tyir::TyCall>(call_stmt.expr->node);
+    assert(call.fn_name == cstc::symbol::Symbol::intern("print"));
+}
+
+void test_explicit_import_shadows_prelude_fallback() {
+    cstc::symbol::SymbolSession session;
+    const TempDir temp = make_temp_dir();
+
+    write_file(temp.path / "std" / "prelude.cst", "pub fn print() { }\n");
+    write_file(temp.path / "lib.cst", "pub fn print() { }\n");
+    write_file(
+        temp.path / "root.cst", "import { print } from \"lib.cst\";\n"
+                                "fn main() { print(); }\n");
+
+    const auto lowered = must_lower(temp.path / "root.cst", temp.path / "std");
+    const cstc::tyir::TyFnDecl* main_fn = find_ty_fn_decl(lowered, "main");
+    assert(main_fn != nullptr);
+    assert(main_fn->body->stmts.size() == 1);
+    const auto& call_stmt = std::get<cstc::tyir::TyExprStmt>(main_fn->body->stmts[0]);
+    const auto& call = std::get<cstc::tyir::TyCall>(call_stmt.expr->node);
+    const auto fn_decls = collect_ty_fn_decls(lowered);
+    assert(fn_decls.size() == 3);
+    assert(fn_decls[0]->name.as_str().starts_with("__cst_mod_"));
+    assert(fn_decls[1]->name.as_str().starts_with("__cst_mod_"));
+    assert(fn_decls[2]->name == cstc::symbol::Symbol::intern("main"));
+    assert(call.fn_name == fn_decls[1]->name);
+    assert(call.fn_name != fn_decls[0]->name);
+}
+
+void test_pub_import_can_reexport_prelude_item() {
+    cstc::symbol::SymbolSession session;
+    const TempDir temp = make_temp_dir();
+
+    write_file(temp.path / "std" / "prelude.cst", "pub fn print() { }\n");
+    write_file(temp.path / "bridge.cst", "pub import { print } from \"@std/prelude.cst\";\n");
+    write_file(
+        temp.path / "root.cst", "import { print } from \"bridge.cst\";\n"
+                                "fn main() { print(); }\n");
+
+    must_lower(temp.path / "root.cst", temp.path / "std");
 }
 
 void test_imported_fn_rewrite_preserves_display_name() {
@@ -237,7 +304,9 @@ int main() {
     test_private_import_is_rejected();
     test_pub_import_reexports_bindings();
     test_std_path_import_resolves_relative_to_std_root();
-    test_prelude_is_implicit_and_duplicates_are_rejected();
+    test_local_item_shadows_prelude();
+    test_explicit_import_shadows_prelude_fallback();
+    test_pub_import_can_reexport_prelude_item();
     test_imported_fn_rewrite_preserves_display_name();
     test_imported_fn_diagnostics_use_source_name();
     test_imported_extern_link_name_uses_source_name();
