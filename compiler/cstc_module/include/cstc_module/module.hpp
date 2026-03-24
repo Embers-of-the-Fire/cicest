@@ -519,6 +519,21 @@ private:
             return &it->second;
         }
 
+        void rewrite_decl_name(
+            Symbol& name, Symbol& display_name, const BindingSet* binding, bool type_namespace) {
+            if (binding == nullptr)
+                return;
+
+            const std::optional<Binding>& resolved_binding =
+                type_namespace ? binding->type_binding : binding->value_binding;
+            if (!resolved_binding.has_value())
+                return;
+
+            if (!display_name.is_valid())
+                display_name = resolved_binding->source_name;
+            name = resolved_binding->internal_name;
+        }
+
         [[nodiscard]] bool is_local_name(Symbol name) const {
             for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
                 if (it->count(name) > 0)
@@ -677,20 +692,18 @@ private:
                 [&](auto& node) {
                     using Node = std::decay_t<decltype(node)>;
                     if constexpr (std::is_same_v<Node, cstc::ast::StructDecl>) {
-                        const BindingSet* binding = lookup_local(node.name);
-                        if (binding != nullptr && binding->type_binding.has_value())
-                            node.name = binding->type_binding->internal_name;
+                        rewrite_decl_name(
+                            node.name, node.display_name, lookup_local(node.name), true);
                         for (cstc::ast::FieldDecl& field : node.fields)
                             rewrite_type(field.type);
-                    } else if constexpr (std::is_same_v<Node, cstc::ast::EnumDecl>) {
-                        const BindingSet* binding = lookup_local(node.name);
-                        if (binding != nullptr && binding->type_binding.has_value())
-                            node.name = binding->type_binding->internal_name;
+                    } else if constexpr (
+                        std::is_same_v<Node, cstc::ast::EnumDecl>
+                        || std::is_same_v<Node, cstc::ast::ExternStructDecl>) {
+                        rewrite_decl_name(
+                            node.name, node.display_name, lookup_local(node.name), true);
                     } else if constexpr (std::is_same_v<Node, cstc::ast::FnDecl>) {
-                        const Symbol original_name = node.name;
-                        const BindingSet* binding = lookup_local(original_name);
-                        if (binding != nullptr && binding->value_binding.has_value())
-                            node.name = binding->value_binding->internal_name;
+                        rewrite_decl_name(
+                            node.name, node.display_name, lookup_local(node.name), false);
                         for (cstc::ast::Param& param : node.params)
                             rewrite_type(param.type);
                         if (node.return_type.has_value())
@@ -701,17 +714,12 @@ private:
                         rewrite_block(node.body);
                         pop_scope();
                     } else if constexpr (std::is_same_v<Node, cstc::ast::ExternFnDecl>) {
-                        const BindingSet* binding = lookup_local(node.name);
-                        if (binding != nullptr && binding->value_binding.has_value())
-                            node.name = binding->value_binding->internal_name;
+                        rewrite_decl_name(
+                            node.name, node.display_name, lookup_local(node.name), false);
                         for (cstc::ast::Param& param : node.params)
                             rewrite_type(param.type);
                         if (node.return_type.has_value())
                             rewrite_type(*node.return_type);
-                    } else if constexpr (std::is_same_v<Node, cstc::ast::ExternStructDecl>) {
-                        const BindingSet* binding = lookup_local(node.name);
-                        if (binding != nullptr && binding->type_binding.has_value())
-                            node.name = binding->type_binding->internal_name;
                     } else {
                         return;
                     }

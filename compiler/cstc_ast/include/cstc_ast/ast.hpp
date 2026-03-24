@@ -75,6 +75,8 @@ struct StructDecl {
     bool is_public = false;
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing type name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Declared named fields.
     std::vector<FieldDecl> fields;
     /// True when declared as `struct Name;`.
@@ -101,6 +103,8 @@ struct EnumDecl {
     bool is_public = false;
     /// Enum type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing type name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Declared variant list.
     std::vector<EnumVariant> variants;
     /// Source location for the full item.
@@ -367,6 +371,8 @@ struct FnDecl {
     bool is_public = false;
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing function name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Function parameter list.
     std::vector<Param> params;
     /// Optional explicit return type.
@@ -387,6 +393,8 @@ struct ExternFnDecl {
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing function name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Function parameter list.
     std::vector<Param> params;
     /// Optional explicit return type.
@@ -405,6 +413,8 @@ struct ExternStructDecl {
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Human-facing type name used in diagnostics after module rewriting.
+    cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
     /// Attributes attached to the declaration.

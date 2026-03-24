@@ -262,6 +262,18 @@ struct LowerCtx {
     return "<invalid-symbol>";
 }
 
+[[nodiscard]] inline cstc::symbol::Symbol
+    source_symbol(cstc::symbol::Symbol display_name, cstc::symbol::Symbol fallback) {
+    if (display_name.is_valid())
+        return display_name;
+    return fallback;
+}
+
+template <typename Decl>
+[[nodiscard]] inline std::string display_decl_name(const Decl& decl) {
+    return display_symbol(decl.display_name, decl.name);
+}
+
 /// Returns true if the ABI string is a recognised extern ABI.
 [[nodiscard]] inline bool is_supported_abi(cstc::symbol::Symbol abi) {
     const auto sv = abi.as_str();
@@ -308,7 +320,7 @@ struct LowerCtx {
         link_name = *attr.value;
     }
 
-    return link_name.value_or(decl.name);
+    return link_name.value_or(source_symbol(decl.display_name, decl.name));
 }
 
 // ─── Type resolution ─────────────────────────────────────────────────────────
@@ -783,8 +795,7 @@ struct LowerCtx {
                 if (!field_ty)
                     return make_error(
                         expr->span, "no field '" + std::string(node.field.as_str())
-                                        + "' in struct '" + std::string((*base)->ty.name.as_str())
-                                        + "'");
+                                        + "' in struct '" + (*base)->ty.display() + "'");
 
                 return tyir::make_ty_expr(
                     expr->span, tyir::TyFieldAccess{std::move(*base), node.field}, *field_ty);
@@ -1175,7 +1186,7 @@ struct LowerCtx {
     // Check that body type matches declared return type (when a tail is present)
     if (body->tail.has_value() && !compatible(body->ty, sig.return_ty))
         return make_error(
-            fn.body->span, "function '" + std::string(fn.name.as_str()) + "' body has type '"
+            fn.body->span, "function '" + display_decl_name(fn) + "' body has type '"
                                + body->ty.display() + "' but return type is '"
                                + sig.return_ty.display() + "'");
 
@@ -1184,7 +1195,7 @@ struct LowerCtx {
     if (!body->tail.has_value() && block_can_fallthrough(*body)
         && !compatible(tyir::ty::unit(), sig.return_ty))
         return make_error(
-            fn.body->span, "function '" + std::string(fn.name.as_str())
+            fn.body->span, "function '" + display_decl_name(fn)
                                + "' may fall through without returning a value of type '"
                                + sig.return_ty.display() + "'");
 
@@ -1208,27 +1219,27 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 || env.extern_struct_names.count(struct_decl->name) > 0)
                 return detail::make_error(
                     struct_decl->span,
-                    "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
+                    "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
 
             const auto insert_result =
                 env.struct_fields.emplace(struct_decl->name, std::vector<tyir::TyFieldDecl>{});
             if (!insert_result.second)
                 return detail::make_error(
                     struct_decl->span,
-                    "duplicate struct name '" + std::string(struct_decl->name.as_str()) + "'");
+                    "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
         } else if (const auto* enum_decl = std::get_if<ast::EnumDecl>(&item)) {
             if (env.struct_fields.count(enum_decl->name) > 0
                 || env.extern_struct_names.count(enum_decl->name) > 0)
                 return detail::make_error(
                     enum_decl->span,
-                    "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
+                    "duplicate enum name '" + detail::display_decl_name(*enum_decl) + "'");
 
             const auto insert_result =
                 env.enum_variants.emplace(enum_decl->name, std::vector<tyir::TyEnumVariant>{});
             if (!insert_result.second)
                 return detail::make_error(
                     enum_decl->span,
-                    "duplicate enum name '" + std::string(enum_decl->name.as_str()) + "'");
+                    "duplicate enum name '" + detail::display_decl_name(*enum_decl) + "'");
         } else if (const auto* extern_struct = std::get_if<ast::ExternStructDecl>(&item)) {
             // Validate the ABI string.
             if (auto err = detail::validate_abi(extern_struct->abi, extern_struct->span))
@@ -1238,7 +1249,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 || env.extern_struct_names.count(extern_struct->name) > 0)
                 return detail::make_error(
                     extern_struct->span,
-                    "duplicate type name '" + std::string(extern_struct->name.as_str()) + "'");
+                    "duplicate type name '" + detail::display_decl_name(*extern_struct) + "'");
 
             env.extern_struct_names.insert(extern_struct->name);
         }
@@ -1270,7 +1281,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
             if (!insert_result.second)
                 return detail::make_error(
-                    fn->span, "duplicate function name '" + std::string(fn->name.as_str()) + "'");
+                    fn->span, "duplicate function name '" + detail::display_decl_name(*fn) + "'");
         } else if (const auto* ext_fn = std::get_if<ast::ExternFnDecl>(&item)) {
             // Validate the ABI string.
             if (auto err = detail::validate_abi(ext_fn->abi, ext_fn->span))
@@ -1287,7 +1298,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             if (!insert_result.second)
                 return detail::make_error(
                     ext_fn->span,
-                    "duplicate function name '" + std::string(ext_fn->name.as_str()) + "'");
+                    "duplicate function name '" + detail::display_decl_name(*ext_fn) + "'");
         }
     }
 
