@@ -200,6 +200,17 @@ struct ModuleInfo {
     return {};
 }
 
+[[nodiscard]] inline BindingSet
+    binding_set_for_decl(const ModuleInfo& module, Symbol visible_name, bool type_namespace) {
+    const BindingSet& binding = module.local_bindings.at(visible_name);
+    BindingSet decl_binding;
+    if (type_namespace)
+        decl_binding.type_binding = binding.type_binding;
+    else
+        decl_binding.value_binding = binding.value_binding;
+    return decl_binding;
+}
+
 class Resolver {
 public:
     Resolver(
@@ -302,72 +313,44 @@ private:
     }
 
     [[nodiscard]] std::expected<void, ModuleError> add_local_bindings_to_scope(ModuleInfo& module) {
+        const auto add_decl = [&](Symbol name, cstc::span::SourceSpan span, bool is_public,
+                                  bool type_namespace) -> std::expected<void, ModuleError> {
+            const BindingSet binding_set = binding_set_for_decl(module, name, type_namespace);
+            auto inserted = insert_binding_set(module.visible_bindings, name, binding_set, span);
+            if (!inserted.has_value())
+                return inserted;
+
+            if (!is_public)
+                return {};
+
+            auto exported = insert_binding_set(module.exports, name, binding_set, span);
+            if (!exported.has_value())
+                return exported;
+
+            return {};
+        };
+
         for (const cstc::ast::Item& item : module.program.items) {
             if (const auto* decl = std::get_if<cstc::ast::StructDecl>(&item)) {
-                auto inserted = insert_binding_set(
-                    module.visible_bindings, decl->name, module.local_bindings.at(decl->name),
-                    decl->span);
-                if (!inserted.has_value())
-                    return inserted;
-                if (decl->is_public) {
-                    auto exported = insert_binding_set(
-                        module.exports, decl->name, module.local_bindings.at(decl->name),
-                        decl->span);
-                    if (!exported.has_value())
-                        return exported;
-                }
+                auto added = add_decl(decl->name, decl->span, decl->is_public, true);
+                if (!added.has_value())
+                    return added;
             } else if (const auto* decl = std::get_if<cstc::ast::EnumDecl>(&item)) {
-                auto inserted = insert_binding_set(
-                    module.visible_bindings, decl->name, module.local_bindings.at(decl->name),
-                    decl->span);
-                if (!inserted.has_value())
-                    return inserted;
-                if (decl->is_public) {
-                    auto exported = insert_binding_set(
-                        module.exports, decl->name, module.local_bindings.at(decl->name),
-                        decl->span);
-                    if (!exported.has_value())
-                        return exported;
-                }
+                auto added = add_decl(decl->name, decl->span, decl->is_public, true);
+                if (!added.has_value())
+                    return added;
             } else if (const auto* decl = std::get_if<cstc::ast::FnDecl>(&item)) {
-                auto inserted = insert_binding_set(
-                    module.visible_bindings, decl->name, module.local_bindings.at(decl->name),
-                    decl->span);
-                if (!inserted.has_value())
-                    return inserted;
-                if (decl->is_public) {
-                    auto exported = insert_binding_set(
-                        module.exports, decl->name, module.local_bindings.at(decl->name),
-                        decl->span);
-                    if (!exported.has_value())
-                        return exported;
-                }
+                auto added = add_decl(decl->name, decl->span, decl->is_public, false);
+                if (!added.has_value())
+                    return added;
             } else if (const auto* decl = std::get_if<cstc::ast::ExternFnDecl>(&item)) {
-                auto inserted = insert_binding_set(
-                    module.visible_bindings, decl->name, module.local_bindings.at(decl->name),
-                    decl->span);
-                if (!inserted.has_value())
-                    return inserted;
-                if (decl->is_public) {
-                    auto exported = insert_binding_set(
-                        module.exports, decl->name, module.local_bindings.at(decl->name),
-                        decl->span);
-                    if (!exported.has_value())
-                        return exported;
-                }
+                auto added = add_decl(decl->name, decl->span, decl->is_public, false);
+                if (!added.has_value())
+                    return added;
             } else if (const auto* decl = std::get_if<cstc::ast::ExternStructDecl>(&item)) {
-                auto inserted = insert_binding_set(
-                    module.visible_bindings, decl->name, module.local_bindings.at(decl->name),
-                    decl->span);
-                if (!inserted.has_value())
-                    return inserted;
-                if (decl->is_public) {
-                    auto exported = insert_binding_set(
-                        module.exports, decl->name, module.local_bindings.at(decl->name),
-                        decl->span);
-                    if (!exported.has_value())
-                        return exported;
-                }
+                auto added = add_decl(decl->name, decl->span, decl->is_public, true);
+                if (!added.has_value())
+                    return added;
             }
         }
 

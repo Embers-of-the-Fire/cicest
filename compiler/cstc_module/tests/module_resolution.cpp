@@ -204,6 +204,37 @@ void test_import_alias_duplicate_value_binding_is_rejected_by_resolver() {
         temp.path / "root.cst", temp.path / "std", "duplicate function name 'foo'");
 }
 
+void test_pub_items_can_share_export_name_across_type_and_value_namespaces() {
+    cstc::symbol::SymbolSession session;
+    const TempDir temp = make_temp_dir();
+
+    write_file(temp.path / "std" / "prelude.cst", "");
+    write_file(
+        temp.path / "lib.cst", "pub struct Foo;\n"
+                               "pub fn Foo() -> Foo { Foo { } }\n");
+    write_file(
+        temp.path / "root.cst", "import { Foo } from \"lib.cst\";\n"
+                                "fn main() { let value: Foo = Foo(); }\n");
+
+    must_lower(temp.path / "root.cst", temp.path / "std");
+}
+
+void test_pub_type_does_not_export_private_value_binding_with_same_name() {
+    cstc::symbol::SymbolSession session;
+    const TempDir temp = make_temp_dir();
+
+    write_file(temp.path / "std" / "prelude.cst", "");
+    write_file(
+        temp.path / "lib.cst", "pub struct Foo;\n"
+                               "fn Foo() -> Foo { Foo { } }\n");
+    write_file(
+        temp.path / "root.cst", "import { Foo } from \"lib.cst\";\n"
+                                "fn main() { let value: Foo = Foo(); }\n");
+
+    must_fail_lower_with_message(
+        temp.path / "root.cst", temp.path / "std", "undefined function 'Foo'");
+}
+
 void test_std_path_import_resolves_relative_to_std_root() {
     cstc::symbol::SymbolSession session;
     const TempDir temp = make_temp_dir();
@@ -336,6 +367,8 @@ int main() {
     test_pub_import_reexports_bindings();
     test_import_alias_can_share_name_across_type_and_value_namespaces();
     test_import_alias_duplicate_value_binding_is_rejected_by_resolver();
+    test_pub_items_can_share_export_name_across_type_and_value_namespaces();
+    test_pub_type_does_not_export_private_value_binding_with_same_name();
     test_std_path_import_resolves_relative_to_std_root();
     test_local_item_shadows_prelude();
     test_explicit_import_shadows_prelude_fallback();
