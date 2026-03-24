@@ -8,21 +8,21 @@ available in every cicest program through the **prelude**.
 ## Prelude
 
 The prelude (`prelude.cst`) is compiled as a normal module whose `pub` items
-are implicitly imported into every module. Additional std modules can be loaded
-explicitly through `@std/...` import paths.
+are implicitly imported into every non-prelude module. Additional std modules
+can be loaded explicitly through `@std/...` import paths.
 
 ### Available Functions
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `print` | `fn print(value: str)` | Prints a string to standard output. |
-| `println` | `fn println(value: str)` | Prints a string followed by a newline. |
-| `to_str` | `fn to_str(value: num) -> str` | Converts a number to its string representation. |
-| `str_concat` | `fn str_concat(a: str, b: str) -> str` | Concatenates two strings. |
-| `str_len` | `fn str_len(value: str) -> num` | Returns the length of a string. |
-| `str_free` | `fn str_free(value: str)` | Frees a heap-allocated string. |
-| `assert` | `fn assert(condition: bool)` | Aborts the program with `assertion failed` on standard error when `condition` is `false`. |
-| `assert_eq` | `fn assert_eq(a: num, b: num)` | Aborts the program when two numbers differ by more than `1e-9`, printing both values on standard error. |
+| Function     | Signature                              | Description                                                                                             |
+| ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `print`      | `fn print(value: str)`                 | Prints a string to standard output.                                                                     |
+| `println`    | `fn println(value: str)`               | Prints a string followed by a newline.                                                                  |
+| `to_str`     | `fn to_str(value: num) -> str`         | Converts a number to its string representation.                                                         |
+| `str_concat` | `fn str_concat(a: str, b: str) -> str` | Concatenates two strings.                                                                               |
+| `str_len`    | `fn str_len(value: str) -> num`        | Returns the length of a string.                                                                         |
+| `str_free`   | `fn str_free(value: str)`              | Frees a heap-allocated string.                                                                          |
+| `assert`     | `fn assert(condition: bool)`           | Aborts the program with `assertion failed` on standard error when `condition` is `false`.               |
+| `assert_eq`  | `fn assert_eq(a: num, b: num)`         | Aborts the program when two numbers differ by more than `1e-9`, printing both values on standard error. |
 
 ## Architecture
 
@@ -56,16 +56,16 @@ is compiled into a static library (`libcicest_rt.a` on GNU-like toolchains,
 `cicest_rt.lib` on MSVC) by CMake and automatically
 linked into every executable produced by the compiler.
 
-| Cicest declaration | C signature |
-|--------------------|-------------|
-| `fn print(value: str)` | `void cstc_std_print(const char*)` |
-| `fn println(value: str)` | `void cstc_std_println(const char*)` |
-| `fn to_str(value: num) -> str` | `char* cstc_std_to_str(double)` |
+| Cicest declaration                     | C signature                                           |
+| -------------------------------------- | ----------------------------------------------------- |
+| `fn print(value: str)`                 | `void cstc_std_print(const char*)`                    |
+| `fn println(value: str)`               | `void cstc_std_println(const char*)`                  |
+| `fn to_str(value: num) -> str`         | `char* cstc_std_to_str(double)`                       |
 | `fn str_concat(a: str, b: str) -> str` | `char* cstc_std_str_concat(const char*, const char*)` |
-| `fn str_len(value: str) -> num` | `double cstc_std_str_len(const char*)` |
-| `fn str_free(value: str)` | `void cstc_std_str_free(const char*)` |
-| `fn assert(condition: bool)` | `void cstc_std_assert(int)` |
-| `fn assert_eq(a: num, b: num)` | `void cstc_std_assert_eq(double, double)` |
+| `fn str_len(value: str) -> num`        | `double cstc_std_str_len(const char*)`                |
+| `fn str_free(value: str)`              | `void cstc_std_str_free(const char*)`                 |
+| `fn assert(condition: bool)`           | `void cstc_std_assert(int)`                           |
+| `fn assert_eq(a: num, b: num)`         | `void cstc_std_assert_eq(double, double)`             |
 
 ### String Ownership
 
