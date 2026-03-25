@@ -33,7 +33,7 @@ struct Options {
     return input.substr(start, end - start);
 }
 
-[[nodiscard]] std::string usage() { return "Usage: cstc_repl [--linker <linker>]"; }
+[[nodiscard]] std::string usage() { return "Usage: cstc_repl [-h|--help] [--linker <linker>]"; }
 
 [[nodiscard]] Options parse_options(int argc, char** argv) {
     Options options;

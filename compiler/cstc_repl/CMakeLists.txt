@@ -55,4 +55,10 @@ if(CICEST_BUILD_TESTS)
     )
 
     add_test(NAME cstc_repl_session COMMAND cstc_repl_session)
+
+    add_test(NAME cstc_repl_help
+        COMMAND ${CMAKE_COMMAND}
+            -DREPL_BINARY=$<TARGET_FILE:cstc_repl>
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_help.cmake
+    )
 endif()
