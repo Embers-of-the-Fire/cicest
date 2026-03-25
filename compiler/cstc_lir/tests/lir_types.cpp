@@ -61,6 +61,15 @@ static void test_type_display() {
     assert(ty::ref(ty::str()).display() == "&str");
 }
 
+static void test_runtime_type_display() {
+    SymbolSession session;
+    const Symbol handle = Symbol::intern("Handle");
+    assert(
+        ty::named(handle, kInvalidSymbol, ValueSemantics::Move, true).display()
+        == "runtime Handle");
+    assert(ty::ref(ty::str(true)).display() == "&runtime str");
+}
+
 static void test_const_ty_consistency() {
     SymbolSession session;
     const Symbol s42 = Symbol::intern("42");
@@ -97,6 +106,7 @@ int main() {
     test_type_equality();
     test_type_predicates();
     test_type_display();
+    test_runtime_type_display();
     test_const_ty_consistency();
     test_local_decl_various_types();
     return 0;

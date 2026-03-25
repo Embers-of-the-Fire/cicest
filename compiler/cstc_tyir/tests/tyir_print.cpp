@@ -80,6 +80,43 @@ static void test_print_enum_with_discriminant() {
     assert(contains(out, "Error = 1"));
 }
 
+static void test_print_runtime_items() {
+    TyFnDecl fn;
+    fn.name = Symbol::intern("dispatch");
+    fn.is_runtime = true;
+    fn.params = {
+        TyParam{
+                Symbol::intern("job"),
+                ty::named(Symbol::intern("Job"), kInvalidSymbol, ValueSemantics::Move, true),
+                {},
+                },
+    };
+    fn.return_ty = ty::named(Symbol::intern("Job"), kInvalidSymbol, ValueSemantics::Move, true);
+    fn.body = std::make_shared<TyBlock>();
+    fn.body->ty = fn.return_ty;
+
+    TyExternFnDecl ext;
+    ext.abi = Symbol::intern("lang");
+    ext.name = Symbol::intern("poll");
+    ext.is_runtime = true;
+    ext.params = {
+        TyParam{
+                Symbol::intern("value"),
+                ty::ref(ty::str(true)),
+                {},
+                },
+    };
+    ext.return_ty = ty::unit();
+
+    TyProgram prog;
+    prog.items.push_back(std::move(fn));
+    prog.items.push_back(std::move(ext));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "Runtime TyFnDecl dispatch(job: runtime Job) -> runtime Job"));
+    assert(contains(out, "Runtime TyExternFnDecl \"lang\" poll(value: &runtime str) -> Unit"));
+}
+
 // ─── Literal expressions ─────────────────────────────────────────────────────
 
 static void test_print_literals() {
@@ -458,6 +495,7 @@ int main() {
     test_print_zst_struct();
     test_print_enum();
     test_print_enum_with_discriminant();
+    test_print_runtime_items();
     test_print_literals();
     test_print_local_ref();
     test_print_enum_variant_ref();

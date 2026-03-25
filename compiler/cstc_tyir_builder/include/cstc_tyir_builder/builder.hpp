@@ -465,20 +465,21 @@ template <typename Decl>
             auto pointee = lower_type_shape(*ref.pointee, env, span);
             if (!pointee)
                 return std::unexpected(std::move(pointee.error()));
-            return tyir::ty::ref(*pointee);
+            return tyir::ty::ref(*pointee, ref.is_runtime);
         }
-    case ast::TypeKind::Unit: return tyir::ty::unit();
-    case ast::TypeKind::Num: return tyir::ty::num();
-    case ast::TypeKind::Str: return tyir::ty::str();
-    case ast::TypeKind::Bool: return tyir::ty::bool_();
-    case ast::TypeKind::Never: return tyir::ty::never();
+    case ast::TypeKind::Unit: return tyir::ty::unit(ref.is_runtime);
+    case ast::TypeKind::Num: return tyir::ty::num(ref.is_runtime);
+    case ast::TypeKind::Str: return tyir::ty::str(ref.is_runtime);
+    case ast::TypeKind::Bool: return tyir::ty::bool_(ref.is_runtime);
+    case ast::TypeKind::Never: return tyir::ty::never(ref.is_runtime);
     case ast::TypeKind::Named:
         if (!ref.symbol.is_valid())
             return make_error(span, "invalid named type reference");
         if (!env.is_named_type(ref.symbol))
             return make_error(
                 span, "undefined type '" + display_symbol(ref.display_name, ref.symbol) + "'");
-        return tyir::ty::named(ref.symbol, ref.display_name);
+        return tyir::ty::named(
+            ref.symbol, ref.display_name, tyir::ValueSemantics::Move, ref.is_runtime);
     }
     assert(false && "unhandled ast::TypeKind in lower_type_shape");
     __builtin_unreachable();
@@ -1685,8 +1686,8 @@ inline std::expected<void, LowerError> merge_loop_break_types(
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
 
-    return tyir::TyFnDecl{
-        fn.name, std::move(ty_params), sig.return_ty, std::move(body_ptr), fn.span};
+    return tyir::TyFnDecl{fn.name, std::move(ty_params), sig.return_ty, std::move(body_ptr),
+                          fn.span, fn.is_runtime};
 }
 
 } // namespace detail
@@ -1839,6 +1840,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             ty_decl.link_name = *link_name;
             ty_decl.return_ty = sig.return_ty;
             ty_decl.span = ext_fn->span;
+            ty_decl.is_runtime = ext_fn->is_runtime;
             for (std::size_t i = 0; i < ext_fn->params.size(); ++i) {
                 ty_decl.params.push_back(
                     tyir::TyParam{

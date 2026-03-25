@@ -140,6 +140,36 @@ static void test_print_fn_with_params() {
     assert(contains(out, "return copy(_%2)"));
 }
 
+static void test_print_runtime_items() {
+    SymbolSession session;
+    LirProgram prog;
+
+    LirFnDef fn;
+    fn.name = Symbol::intern("dispatch");
+    fn.is_runtime = true;
+    fn.return_ty = ty::named(Symbol::intern("Job"), kInvalidSymbol, ValueSemantics::Move, true);
+    fn.locals.push_back({0, fn.return_ty, Symbol::intern("job")});
+    fn.params.push_back({0, Symbol::intern("job"), fn.return_ty, {}});
+
+    LirBasicBlock entry;
+    entry.id = kEntryBlock;
+    entry.terminator = LirTerminator{LirReturn{LirOperand::copy(LirPlace::local(0))}, {}};
+    fn.blocks.push_back(std::move(entry));
+    prog.fns.push_back(std::move(fn));
+
+    LirExternFnDecl ext;
+    ext.abi = Symbol::intern("lang");
+    ext.name = Symbol::intern("poll");
+    ext.is_runtime = true;
+    ext.return_ty = ty::unit();
+    ext.params.push_back({0, Symbol::intern("value"), ty::ref(ty::str(true)), {}});
+    prog.extern_fns.push_back(std::move(ext));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "runtime fn dispatch(job: runtime Job) -> runtime Job"));
+    assert(contains(out, "runtime extern \"lang\" fn poll(value: &runtime str) -> Unit"));
+}
+
 static void test_print_fn_locals_table() {
     SymbolSession session;
     LirProgram prog;
@@ -328,6 +358,7 @@ int main() {
 
     test_print_empty_fn();
     test_print_fn_with_params();
+    test_print_runtime_items();
     test_print_fn_locals_table();
     test_print_switch_bool();
     test_print_call_rvalue();

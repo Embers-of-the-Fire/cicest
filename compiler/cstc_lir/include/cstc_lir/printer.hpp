@@ -188,6 +188,8 @@ inline void
 
 inline void print_fn_def(std::ostringstream& out, const LirFnDef& fn, std::size_t level) {
     indent(out, level);
+    if (fn.is_runtime)
+        out << "runtime ";
     out << "fn ";
     out << (fn.name.is_valid() ? std::string(fn.name.as_str()) : "<fn>");
     out << "(";
@@ -249,6 +251,8 @@ inline void print_enum_decl(std::ostringstream& out, const LirEnumDecl& e, std::
 inline void
     print_extern_fn_decl(std::ostringstream& out, const LirExternFnDecl& fn, std::size_t level) {
     indent(out, level);
+    if (fn.is_runtime)
+        out << "runtime ";
     out << "extern \"" << fn.abi.as_str() << "\" fn ";
     out << (fn.name.is_valid() ? std::string(fn.name.as_str()) : "<fn>");
     out << "(";
