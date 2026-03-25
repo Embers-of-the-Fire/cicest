@@ -36,12 +36,11 @@
 #elif defined(__unix__) || defined(__APPLE__)
 # ifdef __APPLE__
 #  include <crt_externs.h>
-# else
-#  include <unistd.h>
 # endif
 # include <fcntl.h>
 # include <spawn.h>
 # include <sys/wait.h>
+# include <unistd.h>
 #endif
 
 namespace cstc::repl {
@@ -357,6 +356,25 @@ void append_snippet(std::ostringstream& output, std::string_view snippet) {
     return result;
 }
 
+[[nodiscard]] std::string normalize_line_endings(std::string text) {
+    std::string normalized;
+    normalized.reserve(text.size());
+
+    for (std::size_t index = 0; index < text.size(); ++index) {
+        const char ch = text[index];
+        if (ch == '\r') {
+            if (index + 1 < text.size() && text[index + 1] == '\n')
+                ++index;
+            normalized.push_back('\n');
+            continue;
+        }
+
+        normalized.push_back(ch);
+    }
+
+    return normalized;
+}
+
 [[nodiscard]] std::string read_file_or_empty(const fs::path& path) {
     std::ifstream file(path, std::ios::binary);
     if (!file)
@@ -364,7 +382,7 @@ void append_snippet(std::ostringstream& output, std::string_view snippet) {
 
     std::ostringstream buffer;
     buffer << file.rdbuf();
-    return buffer.str();
+    return normalize_line_endings(buffer.str());
 }
 
 #ifdef _WIN32

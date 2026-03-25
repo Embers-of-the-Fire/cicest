@@ -162,6 +162,7 @@ void make_executable(const fs::path& path) {
     return std::nullopt;
 }
 
+#if defined(__unix__) || defined(__APPLE__)
 [[nodiscard]] fs::path resolve_test_linker_program() {
     if (const char* cxx = std::getenv("CXX"); cxx != nullptr && cxx[0] != '\0') {
         std::string_view cxx_program = cxx;
@@ -180,6 +181,7 @@ void make_executable(const fs::path& path) {
 
     throw std::runtime_error("failed to locate a C++ linker for REPL tests");
 }
+#endif
 
 [[nodiscard]] bool contains(std::string_view haystack, std::string_view needle) {
     return haystack.find(needle) != std::string_view::npos;
