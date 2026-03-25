@@ -243,10 +243,13 @@ void test_commands_and_reset_clear_persisted_state() {
     const auto help = expect_success(session, ":help");
     assert(contains(help.info_message, ":reset"));
     assert(contains(help.info_message, ":show"));
+    assert(contains(help.info_message, ":state"));
 
     (void)expect_success(session, "let x: num = 42;");
     const auto show = expect_success(session, ":show");
     assert(contains(show.info_message, "let x: num = 42;"));
+    const auto state = expect_success(session, ":state");
+    assert(state.info_message == show.info_message);
 
     const auto reset = expect_success(session, ":reset");
     assert(contains(reset.info_message, "reset"));

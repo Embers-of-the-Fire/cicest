@@ -1447,6 +1447,7 @@ std::string help_text() {
     return "Commands:\n"
            "  :help   show this help\n"
            "  :show   print persisted items and let bindings\n"
+           "  :state  alias for :show\n"
            "  :reset  clear persisted items and bindings\n"
            "  :quit   exit the REPL\n"
            "  :exit   exit the REPL\n"

@@ -48,7 +48,7 @@ int main() {
 
 `Session::submit(...)` accepts:
 
-- REPL commands: `:help`, `:show`, `:reset`, `:quit`, `:exit`
+- REPL commands: `:help`, `:show`, `:state`, `:reset`, `:quit`, `:exit`
 - top-level items: `import`, `struct`, `enum`, `fn`, `extern`
 - function-body fragments: statements and/or a trailing expression
 
@@ -82,6 +82,7 @@ The REPL provides a small built-in command set:
 
 - `:help` prints the command summary
 - `:show` prints persisted top-level items and replayed `let` bindings
+- `:state` is an alias for `:show`
 - `:reset` clears persisted state
 - `:quit` / `:exit` leave the REPL
 
