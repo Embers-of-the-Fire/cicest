@@ -68,6 +68,8 @@ enum class TokenKind {
     KwBool,
     /// `extern` keyword.
     KwExtern,
+    /// `runtime` keyword.
+    KwRuntime,
     /// `pub` keyword.
     KwPub,
     /// `import` keyword.
@@ -182,6 +184,7 @@ struct Token {
     case TokenKind::KwStr: return "KwStr";
     case TokenKind::KwBool: return "KwBool";
     case TokenKind::KwExtern: return "KwExtern";
+    case TokenKind::KwRuntime: return "KwRuntime";
     case TokenKind::KwPub: return "KwPub";
     case TokenKind::KwImport: return "KwImport";
     case TokenKind::KwFrom: return "KwFrom";
