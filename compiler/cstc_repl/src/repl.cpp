@@ -1583,6 +1583,8 @@ private:
         }
     }
 
+    // Keeps the thread-local symbol interner active for parsing and IR lowering across the
+    // REPL session lifetime.
     cstc::symbol::SymbolSession symbols_;
     SessionOptions options_;
     TemporaryDirectory scratch_dir_;
