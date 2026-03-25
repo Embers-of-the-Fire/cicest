@@ -14,6 +14,7 @@ This directory contains the scoped Cicest compiler packages:
 - `cstc_cli_support`: shared CLI helpers for module loading and diagnostics
 - `cstc`: compiler CLI that emits `.s` / `.o` artifacts
 - `cstc_inspect`: inspection CLI
+- `cstc_repl`: interactive REPL CLI + session engine
 
 Packages with a public developer-facing surface include a `README.md` with API
 and test details.
