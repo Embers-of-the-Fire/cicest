@@ -535,9 +535,10 @@ private:
         }
 
         if (match(TokenKind::KwStruct)) {
+            const Token struct_keyword = previous();
             if (is_runtime) {
-                return std::unexpected(
-                    make_error_here("expected `fn` after `runtime extern` ABI string"));
+                return std::unexpected(make_error_token(
+                    struct_keyword, "expected `fn` after `runtime extern` ABI string"));
             }
             auto decl = parse_extern_struct_decl(lead_token, abi, std::move(attributes), is_public);
             if (!decl.has_value())

@@ -27,6 +27,16 @@ bool must_fail_with_message(std::string_view source, std::string_view expected_s
     return result.error().message.find(expected_substring) != std::string::npos;
 }
 
+bool must_fail_with_message_at(
+    std::string_view source, std::string_view expected_substring, std::size_t expected_start) {
+    const auto result = cstc::parser::parse_source(source);
+    if (result.has_value())
+        return false;
+    if (result.error().message.find(expected_substring) == std::string::npos)
+        return false;
+    return result.error().span.start == expected_start;
+}
+
 // ---------------------------------------------------------------------------
 // Extern function declarations
 // ---------------------------------------------------------------------------
@@ -223,8 +233,16 @@ void test_error_extern_without_fn_or_struct() {
 
 void test_error_runtime_extern_struct() {
     cstc::symbol::SymbolSession session;
-    assert(must_fail_with_message(
-        R"(runtime extern "lang" struct Foo;)", "expected `fn` after `runtime extern`"));
+    constexpr std::string_view source = R"(runtime extern "lang" struct Foo;)";
+    assert(must_fail_with_message_at(
+        source, "expected `fn` after `runtime extern`", source.find("struct")));
+}
+
+void test_error_runtime_extern_enum() {
+    cstc::symbol::SymbolSession session;
+    constexpr std::string_view source = R"(runtime extern "lang" enum Foo { Bar })";
+    assert(must_fail_with_message_at(
+        source, "expected `fn` after `runtime extern`", source.find("enum")));
 }
 
 void test_error_extern_fn_with_body() {
@@ -267,6 +285,7 @@ int main() {
     test_error_extern_without_string();
     test_error_extern_without_fn_or_struct();
     test_error_runtime_extern_struct();
+    test_error_runtime_extern_enum();
     test_error_extern_fn_with_body();
     test_error_extern_fn_missing_semicolon();
     test_error_extern_struct_missing_semicolon();
