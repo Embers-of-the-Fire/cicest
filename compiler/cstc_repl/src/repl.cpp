@@ -1109,6 +1109,20 @@ void write_text_file(const fs::path& path, std::string_view source) {
     return rendered.str();
 }
 
+void append_command_streams(std::ostringstream& message, const CommandResult& result) {
+    if (!result.stderr_output.empty())
+        message << "\nStderr:\n" << result.stderr_output;
+    if (!result.stdout_output.empty())
+        message << "\nStdout:\n" << result.stdout_output;
+}
+
+[[nodiscard]] std::string invocation_failure_message(const CommandResult& result) {
+    std::ostringstream message;
+    message << result.status_message;
+    append_command_streams(message, result);
+    return message.str();
+}
+
 [[nodiscard]] std::string
     linker_failure_message(std::string_view linker_program, const CommandResult& result) {
     std::ostringstream message;
@@ -1116,10 +1130,7 @@ void write_text_file(const fs::path& path, std::string_view source) {
     if (!result.status_message.empty())
         message << " (" << result.status_message << ")";
     message << " with exit code " << result.exit_code;
-    if (!result.stderr_output.empty())
-        message << "\nStderr:\n" << result.stderr_output;
-    if (!result.stdout_output.empty())
-        message << "\nStdout:\n" << result.stdout_output;
+    append_command_streams(message, result);
     return message.str();
 }
 
@@ -1314,6 +1325,12 @@ public:
                 SubmissionStatus::Error, false, false, {}, {}, {}, run_result.error());
 
         const CommandResult& executed = *run_result;
+        if (executed.invocation_failed) {
+            return make_result(
+                SubmissionStatus::Error, false, false, executed.stdout_output,
+                executed.stderr_output, {}, invocation_failure_message(executed));
+        }
+
         if (!executed.succeeded()) {
             return make_result(
                 SubmissionStatus::RuntimeError, false, true, executed.stdout_output,
@@ -1525,6 +1542,8 @@ private:
             linker_command.push_back(output_stem.string());
 
             const CommandResult linker_result = execute_command(linker_command);
+            if (linker_result.invocation_failed)
+                return std::unexpected(invocation_failure_message(linker_result));
 
             if (!linker_result.succeeded()) {
                 return std::unexpected(linker_failure_message(

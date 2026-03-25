@@ -362,6 +362,42 @@ void test_missing_linker_reports_process_start_failure() {
     const auto result = expect_error(session, "1");
     assert(contains(result.error_message, "failed to start process"));
     assert(contains(result.error_message, "cstc-repl-test-missing-linker"));
+    assert(!contains(result.error_message, "with exit code -1"));
+}
+
+void test_generated_program_invocation_failure_is_reported_as_error() {
+#if defined(__unix__) || defined(__APPLE__)
+    TemporaryDirectory root("cstc-repl-test");
+    TemporaryDirectory tools("cstc-repl-tools");
+    const fs::path fake_linker = tools.path() / "fake-linker";
+
+    write_file(
+        fake_linker, "#!/bin/sh\n"
+                     "output=\"\"\n"
+                     "while [ \"$#\" -gt 0 ]; do\n"
+                     "    if [ \"$1\" = \"-o\" ]; then\n"
+                     "        shift\n"
+                     "        output=\"$1\"\n"
+                     "        break\n"
+                     "    fi\n"
+                     "    shift\n"
+                     "done\n"
+                     "if [ -z \"$output\" ]; then\n"
+                     "    exit 1\n"
+                     "fi\n"
+                     ": > \"$output\"\n");
+    make_executable(fake_linker);
+
+    cstc::repl::Session session({
+        .session_root_dir = root.path(),
+        .linker = fake_linker.string(),
+    });
+
+    const auto result = expect_error(session, "1");
+    assert(!result.executed);
+    assert(contains(result.error_message, "failed to start process"));
+    assert(!contains(result.error_message, "program exited with code -1"));
+#endif
 }
 
 void test_custom_linker_path_with_spaces_is_supported() {
@@ -454,6 +490,7 @@ int main() {
     test_startup_text_mentions_help_and_quit();
     test_runtime_errors_do_not_commit_new_state();
     test_missing_linker_reports_process_start_failure();
+    test_generated_program_invocation_failure_is_reported_as_error();
     test_custom_linker_path_with_spaces_is_supported();
     test_cxx_environment_command_with_wrapper_and_flags_is_supported();
     test_invalid_cxx_environment_command_falls_back_to_discovered_linker();
