@@ -1,3 +1,4 @@
+#include <array>
 #include <cassert>
 #include <cstdlib>
 #include <filesystem>
@@ -152,14 +153,61 @@ void make_executable(const fs::path& path) {
     return fs::exists(path, error) && !error;
 }
 
+[[nodiscard]] const std::array<std::string_view, 3>& host_linker_candidates() {
+#ifdef _WIN32
+# ifdef _MSC_VER
+    static constexpr std::array<std::string_view, 3> candidates{"clang++", "c++", "g++"};
+# else
+    static constexpr std::array<std::string_view, 3> candidates{"c++", "g++", "clang++"};
+# endif
+#else
+    static constexpr std::array<std::string_view, 3> candidates{"c++", "clang++", "g++"};
+#endif
+
+    return candidates;
+}
+
+[[nodiscard]] std::vector<std::string> executable_name_candidates(std::string_view program) {
+#ifdef _WIN32
+    const fs::path path(program);
+    if (path.has_extension())
+        return {std::string(program)};
+
+    std::vector<std::string> candidates;
+    const char* pathext = std::getenv("PATHEXT");
+    std::string_view extensions = ".COM;.EXE;.BAT;.CMD";
+    if (pathext != nullptr && pathext[0] != '\0')
+        extensions = pathext;
+
+    std::size_t start = 0;
+    while (start <= extensions.size()) {
+        const std::size_t end = extensions.find(';', start);
+        const std::string_view extension = extensions.substr(start, end - start);
+        if (!extension.empty())
+            candidates.push_back(std::string(program) + std::string(extension));
+        if (end == std::string_view::npos)
+            break;
+        start = end + 1;
+    }
+
+    candidates.push_back(std::string(program));
+    return candidates;
+#else
+    return {std::string(program)};
+#endif
+}
+
 [[nodiscard]] std::optional<fs::path> find_program_on_path(std::string_view program) {
     if (program.empty())
         return std::nullopt;
 
-    const fs::path candidate_path(program);
-    if ((candidate_path.is_absolute() || candidate_path.has_parent_path())
-        && fs_exists(candidate_path))
-        return fs::absolute(candidate_path);
+    for (const std::string& candidate : executable_name_candidates(program)) {
+        const fs::path candidate_path(candidate);
+        if ((candidate_path.is_absolute() || candidate_path.has_parent_path())
+            && fs_exists(candidate_path)) {
+            return fs::absolute(candidate_path);
+        }
+    }
 
     const char* path_env = std::getenv("PATH");
     if (path_env == nullptr || path_env[0] == '\0')
@@ -177,13 +225,24 @@ void make_executable(const fs::path& path) {
         const std::size_t end = entries.find(path_separator, start);
         const std::string_view entry = entries.substr(start, end - start);
         const fs::path directory = entry.empty() ? fs::current_path() : fs::path(entry);
-        const fs::path candidate = directory / candidate_path;
-        if (fs_exists(candidate))
-            return fs::absolute(candidate);
+        for (const std::string& candidate : executable_name_candidates(program)) {
+            const fs::path candidate_path = directory / candidate;
+            if (fs_exists(candidate_path))
+                return fs::absolute(candidate_path);
+        }
 
         if (end == std::string_view::npos)
             break;
         start = end + 1;
+    }
+
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<fs::path> resolve_discovered_test_linker_program() {
+    for (const std::string_view candidate : host_linker_candidates()) {
+        if (const auto resolved = find_program_on_path(candidate); resolved.has_value())
+            return resolved;
     }
 
     return std::nullopt;
@@ -497,6 +556,9 @@ void test_cxx_environment_command_with_wrapper_and_flags_is_supported() {
 }
 
 void test_invalid_cxx_environment_command_falls_back_to_discovered_linker() {
+    if (!resolve_discovered_test_linker_program().has_value())
+        return;
+
     TemporaryDirectory root("cstc-repl-test");
     const ScopedEnvironmentVariable scoped_cxx("CXX", "cstc-repl-test-missing-linker -bad-flag");
 
