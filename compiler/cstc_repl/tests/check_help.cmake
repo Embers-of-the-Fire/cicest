@@ -5,7 +5,7 @@ execute_process(
     ERROR_VARIABLE stderr
 )
 
-if(NOT result EQUAL 0)
+if(NOT "${result}" STREQUAL "0")
     message(FATAL_ERROR "cstc_repl --help exited with code ${result}\nstderr:\n${stderr}")
 endif()
 
