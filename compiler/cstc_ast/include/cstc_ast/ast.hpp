@@ -55,6 +55,8 @@ struct TypeRef {
     cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
     /// Referenced inner type when `kind == TypeKind::Ref`.
     TypeRefPtr pointee;
+    /// True when this type is prefixed with the inert `runtime` qualifier.
+    bool is_runtime = false;
 };
 
 /// Declaration attribute attached to an item.
@@ -393,6 +395,8 @@ struct FnDecl {
     cstc::span::SourceSpan span;
     /// Attributes attached to the declaration.
     std::vector<Attribute> attributes;
+    /// True when the declaration is prefixed with `runtime`.
+    bool is_runtime = false;
 };
 
 /// Extern function declaration (no body).
@@ -413,6 +417,8 @@ struct ExternFnDecl {
     cstc::span::SourceSpan span;
     /// Attributes attached to the declaration.
     std::vector<Attribute> attributes;
+    /// True when the declaration is prefixed with `runtime`.
+    bool is_runtime = false;
 };
 
 /// Extern struct declaration (opaque, no fields).

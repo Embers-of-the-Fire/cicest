@@ -225,12 +225,45 @@ void test_pub_fn() {
     assert(fn.name.as_str() == "exported");
 }
 
+void test_runtime_fn() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("runtime fn exported() { }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.is_runtime);
+    assert(fn.name.as_str() == "exported");
+}
+
+void test_pub_runtime_fn() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("pub runtime fn exported() { }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.is_public);
+    assert(fn.is_runtime);
+    assert(fn.name.as_str() == "exported");
+}
+
 void test_pub_extern_fn() {
     cstc::symbol::SymbolSession session;
     const auto prog = must_parse("pub extern \"c\" fn puts(value: str);");
     const auto& fn = std::get<cstc::ast::ExternFnDecl>(prog.items[0]);
     assert(fn.is_public);
     assert(fn.name.as_str() == "puts");
+}
+
+void test_runtime_type_prefixes() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("fn view(value: runtime Handle) -> &runtime Handle { value }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.params.size() == 1);
+    assert(fn.params[0].type.kind == cstc::ast::TypeKind::Named);
+    assert(fn.params[0].type.is_runtime);
+    assert(fn.params[0].type.symbol.as_str() == "Handle");
+    assert(fn.return_type.has_value());
+    assert(fn.return_type->kind == cstc::ast::TypeKind::Ref);
+    assert(fn.return_type->pointee);
+    assert(fn.return_type->pointee->kind == cstc::ast::TypeKind::Named);
+    assert(fn.return_type->pointee->is_runtime);
+    assert(fn.return_type->pointee->symbol.as_str() == "Handle");
 }
 
 void test_import_decl() {
@@ -383,7 +416,10 @@ int main() {
     test_fn_ref_param_and_return_type();
     test_fn_with_attributes();
     test_pub_fn();
+    test_runtime_fn();
+    test_pub_runtime_fn();
     test_pub_extern_fn();
+    test_runtime_type_prefixes();
     test_import_decl();
     test_pub_import_decl();
     test_fn_never_return_type();

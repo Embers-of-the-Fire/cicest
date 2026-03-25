@@ -90,27 +90,31 @@ inline void print_attributes(
 }
 
 [[nodiscard]] inline std::string type_name(const TypeRef& type) {
+    std::string rendered;
     if (type.kind == TypeKind::Ref) {
         if (!type.pointee)
-            return "&<invalid-type>";
-        return "&" + type_name(*type.pointee);
+            rendered = "&<invalid-type>";
+        else
+            rendered = "&" + type_name(*type.pointee);
+    } else if (type.display_name.is_valid()) {
+        rendered = std::string(type.display_name.as_str());
+    } else if (type.symbol.is_valid()) {
+        rendered = std::string(type.symbol.as_str());
+    } else {
+        switch (type.kind) {
+        case TypeKind::Ref: rendered = "&<invalid-type>"; break;
+        case TypeKind::Unit: rendered = "Unit"; break;
+        case TypeKind::Num: rendered = "num"; break;
+        case TypeKind::Str: rendered = "str"; break;
+        case TypeKind::Bool: rendered = "bool"; break;
+        case TypeKind::Named: rendered = "<named>"; break;
+        case TypeKind::Never: rendered = "!"; break;
+        }
     }
 
-    if (type.display_name.is_valid())
-        return std::string(type.display_name.as_str());
-    if (type.symbol.is_valid())
-        return std::string(type.symbol.as_str());
-
-    switch (type.kind) {
-    case TypeKind::Ref: return "&<invalid-type>";
-    case TypeKind::Unit: return "Unit";
-    case TypeKind::Num: return "num";
-    case TypeKind::Str: return "str";
-    case TypeKind::Bool: return "bool";
-    case TypeKind::Named: return "<named>";
-    case TypeKind::Never: return "!";
-    }
-    return "<unknown-type>";
+    if (type.is_runtime)
+        return "runtime " + rendered;
+    return rendered;
 }
 
 [[nodiscard]] inline std::string_view
@@ -372,6 +376,8 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                 indent(output, level);
                 if (node.is_public)
                     output << "Pub ";
+                if (node.is_runtime)
+                    output << "Runtime ";
                 output << "FnDecl " << render_name(node.display_name, node.name) << "(";
                 for (std::size_t index = 0; index < node.params.size(); ++index) {
                     if (index > 0)
@@ -389,6 +395,8 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                 indent(output, level);
                 if (node.is_public)
                     output << "Pub ";
+                if (node.is_runtime)
+                    output << "Runtime ";
                 output << "ExternFnDecl \"" << node.abi.as_str() << "\" "
                        << render_name(node.display_name, node.name) << "(";
                 for (std::size_t index = 0; index < node.params.size(); ++index) {

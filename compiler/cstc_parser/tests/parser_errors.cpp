@@ -54,6 +54,11 @@ void test_error_pub_without_item() {
     expect_error("pub", "expected item after `pub`");
 }
 
+void test_error_runtime_without_supported_item() {
+    cstc::symbol::SymbolSession session;
+    expect_error("runtime struct Foo;", "expected `fn` or `extern` after `runtime`");
+}
+
 void test_error_single_bracket_between_attributes_and_item() {
     cstc::symbol::SymbolSession session;
     expect_error("[[a]] [b] fn f() { }", "expected second `[` to start attribute");
@@ -242,6 +247,7 @@ int main() {
     test_error_attribute_non_string_value();
     test_error_attribute_without_item();
     test_error_pub_without_item();
+    test_error_runtime_without_supported_item();
     test_error_single_bracket_between_attributes_and_item();
     test_error_attributes_on_import();
     test_error_struct_missing_name();
