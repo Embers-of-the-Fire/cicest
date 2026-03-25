@@ -1,4 +1,5 @@
 #include <cassert>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -60,6 +61,67 @@ void write_file(const fs::path& path, std::string_view contents) {
     assert(file);
     file << contents;
     assert(file);
+}
+
+[[nodiscard]] bool fs_exists(const fs::path& path) {
+    std::error_code error;
+    return fs::exists(path, error) && !error;
+}
+
+[[nodiscard]] std::optional<fs::path> find_program_on_path(std::string_view program) {
+    if (program.empty())
+        return std::nullopt;
+
+    const fs::path candidate_path(program);
+    if ((candidate_path.is_absolute() || candidate_path.has_parent_path())
+        && fs_exists(candidate_path))
+        return fs::absolute(candidate_path);
+
+    const char* path_env = std::getenv("PATH");
+    if (path_env == nullptr || path_env[0] == '\0')
+        return std::nullopt;
+
+#ifdef _WIN32
+    constexpr char path_separator = ';';
+#else
+    constexpr char path_separator = ':';
+#endif
+
+    const std::string_view entries = path_env;
+    std::size_t start = 0;
+    while (start <= entries.size()) {
+        const std::size_t end = entries.find(path_separator, start);
+        const std::string_view entry = entries.substr(start, end - start);
+        const fs::path directory = entry.empty() ? fs::current_path() : fs::path(entry);
+        const fs::path candidate = directory / candidate_path;
+        if (fs_exists(candidate))
+            return fs::absolute(candidate);
+
+        if (end == std::string_view::npos)
+            break;
+        start = end + 1;
+    }
+
+    return std::nullopt;
+}
+
+[[nodiscard]] fs::path resolve_test_linker_program() {
+    if (const char* cxx = std::getenv("CXX"); cxx != nullptr && cxx[0] != '\0') {
+        std::string_view cxx_program = cxx;
+        const std::size_t separator = cxx_program.find_first_of(" \t");
+        if (separator != std::string_view::npos)
+            cxx_program = cxx_program.substr(0, separator);
+
+        if (const auto resolved = find_program_on_path(cxx_program); resolved.has_value())
+            return *resolved;
+    }
+
+    for (const std::string_view candidate : {"clang++", "g++", "c++"}) {
+        if (const auto resolved = find_program_on_path(candidate); resolved.has_value())
+            return *resolved;
+    }
+
+    throw std::runtime_error("failed to locate a C++ linker for REPL tests");
 }
 
 [[nodiscard]] bool contains(std::string_view haystack, std::string_view needle) {
@@ -231,6 +293,39 @@ void test_runtime_errors_do_not_commit_new_state() {
     assert(value.stdout_output == "1\n");
 }
 
+void test_missing_linker_reports_process_start_failure() {
+    TemporaryDirectory root("cstc-repl-test");
+    cstc::repl::Session session({
+        .session_root_dir = root.path(),
+        .linker = std::string("cstc-repl-test-missing-linker"),
+    });
+
+    const auto result = expect_error(session, "1");
+    assert(contains(result.error_message, "failed to start process"));
+    assert(contains(result.error_message, "cstc-repl-test-missing-linker"));
+}
+
+void test_custom_linker_path_with_spaces_is_supported() {
+#if defined(__unix__) || defined(__APPLE__)
+    TemporaryDirectory root("cstc-repl-test");
+    TemporaryDirectory tools("cstc-repl-tools");
+    const fs::path linker_path = resolve_test_linker_program();
+    const fs::path spaced_linker = tools.path() / "linker with spaces";
+
+    std::error_code error;
+    fs::create_symlink(linker_path, spaced_linker, error);
+    assert(!error);
+
+    cstc::repl::Session session({
+        .session_root_dir = root.path(),
+        .linker = spaced_linker.string(),
+    });
+
+    const auto result = expect_success(session, "1");
+    assert(result.stdout_output == "1\n");
+#endif
+}
+
 void test_needs_continuation_uses_structural_heuristics() {
     TemporaryDirectory root("cstc-repl-test");
     cstc::repl::Session session({.session_root_dir = root.path(), .linker = std::nullopt});
@@ -266,6 +361,8 @@ int main() {
     test_dot_commands_are_rejected();
     test_startup_text_mentions_help_and_quit();
     test_runtime_errors_do_not_commit_new_state();
+    test_missing_linker_reports_process_start_failure();
+    test_custom_linker_path_with_spaces_is_supported();
     test_needs_continuation_uses_structural_heuristics();
     test_reserved_names_are_rejected();
     return 0;

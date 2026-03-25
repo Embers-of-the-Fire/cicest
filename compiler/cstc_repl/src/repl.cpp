@@ -14,7 +14,9 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
 #include <cstdlib>
+#include <cstring>
 #include <expected>
 #include <filesystem>
 #include <fstream>
@@ -29,7 +31,16 @@
 #include <system_error>
 #include <vector>
 
-#if defined(__unix__) || defined(__APPLE__)
+#ifdef _WIN32
+# include <windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
+# ifdef __APPLE__
+#  include <crt_externs.h>
+# else
+#  include <unistd.h>
+# endif
+# include <fcntl.h>
+# include <spawn.h>
 # include <sys/wait.h>
 #endif
 
@@ -193,7 +204,9 @@ private:
     return input.substr(start, end - start);
 }
 
-[[nodiscard]] std::string trim_copy(std::string_view input) { return std::string(trim_view(input)); }
+[[nodiscard]] std::string trim_copy(std::string_view input) {
+    return std::string(trim_view(input));
+}
 
 [[nodiscard]] bool ends_with_newline(std::string_view input) {
     return !input.empty() && input.back() == '\n';
@@ -246,66 +259,10 @@ void append_snippet(std::ostringstream& output, std::string_view snippet) {
         output << '\n';
 }
 
-[[nodiscard]] std::string quote_shell_argument(const std::string& value) {
-#ifdef _WIN32
-    std::string quoted = "\"";
-    for (const char ch : value) {
-        if (ch == '"')
-            quoted += "\"\"";
-        else
-            quoted += ch;
-    }
-    quoted += '"';
-    return quoted;
-#else
-    std::string quoted = "'";
-    for (const char ch : value) {
-        if (ch == '\'')
-            quoted += "'\\''";
-        else
-            quoted += ch;
-    }
-    quoted += '\'';
-    return quoted;
-#endif
-}
-
-[[nodiscard]] std::string join_command_arguments(const std::vector<std::string>& arguments) {
-    std::ostringstream command;
-    bool first = true;
-    for (const std::string& argument : arguments) {
-        if (!first)
-            command << ' ';
-        first = false;
-        command << quote_shell_argument(argument);
-    }
-    return command.str();
-}
-
-[[nodiscard]] CommandResult interpret_exit_status(int raw_status) {
+[[nodiscard]] CommandResult make_invocation_failed_result(std::string status_message) {
     CommandResult result;
-
-    if (raw_status == -1) {
-        result.invocation_failed = true;
-        result.status_message = "failed to invoke the system shell";
-        return result;
-    }
-
-#ifdef _WIN32
-    result.completed_normally = true;
-    result.exit_code = raw_status;
-#else
-    if (WIFEXITED(raw_status)) {
-        result.completed_normally = true;
-        result.exit_code = WEXITSTATUS(raw_status);
-    } else if (WIFSIGNALED(raw_status)) {
-        result.exit_code = 128 + WTERMSIG(raw_status);
-        result.status_message = "terminated by signal " + std::to_string(WTERMSIG(raw_status));
-    } else {
-        result.status_message = "terminated abnormally";
-    }
-#endif
-
+    result.invocation_failed = true;
+    result.status_message = std::move(status_message);
     return result;
 }
 
@@ -319,16 +276,347 @@ void append_snippet(std::ostringstream& output, std::string_view snippet) {
     return buffer.str();
 }
 
+#ifdef _WIN32
+
+class UniqueHandle {
+public:
+    UniqueHandle() = default;
+
+    explicit UniqueHandle(HANDLE handle)
+        : handle_(handle) {}
+
+    UniqueHandle(const UniqueHandle&) = delete;
+    UniqueHandle& operator=(const UniqueHandle&) = delete;
+
+    UniqueHandle(UniqueHandle&& other) noexcept
+        : handle_(other.release()) {}
+
+    UniqueHandle& operator=(UniqueHandle&& other) noexcept {
+        if (this == &other)
+            return *this;
+
+        reset(other.release());
+        return *this;
+    }
+
+    ~UniqueHandle() { reset(); }
+
+    [[nodiscard]] HANDLE get() const { return handle_; }
+
+    [[nodiscard]] HANDLE release() {
+        HANDLE released = handle_;
+        handle_ = nullptr;
+        return released;
+    }
+
+    void reset(HANDLE handle = nullptr) {
+        if (handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE)
+            CloseHandle(handle_);
+        handle_ = handle;
+    }
+
+    [[nodiscard]] explicit operator bool() const {
+        return handle_ != nullptr && handle_ != INVALID_HANDLE_VALUE;
+    }
+
+private:
+    HANDLE handle_ = nullptr;
+};
+
+[[nodiscard]] std::optional<std::wstring>
+    decode_wide(std::string_view value, UINT code_page, DWORD flags) {
+    if (value.empty())
+        return std::wstring();
+
+    const int required = MultiByteToWideChar(
+        code_page, flags, value.data(), static_cast<int>(value.size()), nullptr, 0);
+    if (required <= 0)
+        return std::nullopt;
+
+    std::wstring converted(static_cast<std::size_t>(required), L'\0');
+    if (MultiByteToWideChar(
+            code_page, flags, value.data(), static_cast<int>(value.size()), converted.data(),
+            required)
+        <= 0) {
+        return std::nullopt;
+    }
+
+    return converted;
+}
+
+[[nodiscard]] std::wstring widen_string(std::string_view value) {
+    if (auto converted = decode_wide(value, CP_UTF8, MB_ERR_INVALID_CHARS); converted.has_value())
+        return *converted;
+    if (auto converted = decode_wide(value, CP_ACP, 0); converted.has_value())
+        return *converted;
+    return std::wstring(value.begin(), value.end());
+}
+
+[[nodiscard]] std::string narrow_string(const std::wstring& value) {
+    if (value.empty())
+        return "";
+
+    const int required = WideCharToMultiByte(
+        CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (required <= 0)
+        return std::string(value.begin(), value.end());
+
+    std::string converted(static_cast<std::size_t>(required), '\0');
+    if (WideCharToMultiByte(
+            CP_UTF8, 0, value.data(), static_cast<int>(value.size()), converted.data(), required,
+            nullptr, nullptr)
+        <= 0) {
+        return std::string(value.begin(), value.end());
+    }
+
+    return converted;
+}
+
+[[nodiscard]] std::string format_windows_error(DWORD error_code) {
+    wchar_t* message_buffer = nullptr;
+    const DWORD flags =
+        FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS;
+    const DWORD message_size = FormatMessageW(
+        flags, nullptr, error_code, 0, reinterpret_cast<LPWSTR>(&message_buffer), 0, nullptr);
+    if (message_size == 0 || message_buffer == nullptr)
+        return "Win32 error " + std::to_string(error_code);
+
+    std::wstring message(message_buffer, message_size);
+    LocalFree(message_buffer);
+
+    while (!message.empty()
+           && (message.back() == L'\r' || message.back() == L'\n' || message.back() == L' ')) {
+        message.pop_back();
+    }
+
+    return narrow_string(message);
+}
+
+[[nodiscard]] bool windows_argument_needs_quotes(std::wstring_view value) {
+    return value.empty() || value.find_first_of(L" \t\n\v\"") != std::wstring_view::npos;
+}
+
+[[nodiscard]] std::wstring quote_windows_command_argument(std::wstring_view value) {
+    if (!windows_argument_needs_quotes(value))
+        return std::wstring(value);
+
+    std::wstring quoted;
+    quoted.push_back(L'"');
+
+    std::size_t backslash_count = 0;
+    for (const wchar_t ch : value) {
+        if (ch == L'\\') {
+            ++backslash_count;
+            continue;
+        }
+
+        if (ch == L'"') {
+            quoted.append(backslash_count * 2 + 1, L'\\');
+            quoted.push_back(L'"');
+            backslash_count = 0;
+            continue;
+        }
+
+        quoted.append(backslash_count, L'\\');
+        backslash_count = 0;
+        quoted.push_back(ch);
+    }
+
+    quoted.append(backslash_count * 2, L'\\');
+    quoted.push_back(L'"');
+    return quoted;
+}
+
+[[nodiscard]] std::wstring build_windows_command_line(const std::vector<std::string>& arguments) {
+    std::wstring command_line;
+    bool first = true;
+    for (const std::string& argument : arguments) {
+        if (!first)
+            command_line.push_back(L' ');
+        first = false;
+        command_line += quote_windows_command_argument(widen_string(argument));
+    }
+    return command_line;
+}
+
+[[nodiscard]] CommandResult execute_spawned_command(
+    const std::vector<std::string>& arguments, const fs::path& stdout_path,
+    const fs::path& stderr_path) {
+    SECURITY_ATTRIBUTES security_attributes{};
+    security_attributes.nLength = sizeof(security_attributes);
+    security_attributes.bInheritHandle = TRUE;
+
+    UniqueHandle stdout_handle(CreateFileW(
+        stdout_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        &security_attributes, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!stdout_handle) {
+        return make_invocation_failed_result(
+            "failed to open stdout capture file: " + stdout_path.string() + " ("
+            + format_windows_error(GetLastError()) + ")");
+    }
+
+    UniqueHandle stderr_handle(CreateFileW(
+        stderr_path.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        &security_attributes, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr));
+    if (!stderr_handle) {
+        return make_invocation_failed_result(
+            "failed to open stderr capture file: " + stderr_path.string() + " ("
+            + format_windows_error(GetLastError()) + ")");
+    }
+
+    std::wstring command_line = build_windows_command_line(arguments);
+    std::vector<wchar_t> mutable_command_line(command_line.begin(), command_line.end());
+    mutable_command_line.push_back(L'\0');
+
+    STARTUPINFOW startup_info{};
+    startup_info.cb = sizeof(startup_info);
+    startup_info.dwFlags = STARTF_USESTDHANDLES;
+    startup_info.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
+    startup_info.hStdOutput = stdout_handle.get();
+    startup_info.hStdError = stderr_handle.get();
+
+    PROCESS_INFORMATION process_info{};
+    if (!CreateProcessW(
+            nullptr, mutable_command_line.data(), nullptr, nullptr, TRUE, 0, nullptr, nullptr,
+            &startup_info, &process_info)) {
+        return make_invocation_failed_result(
+            "failed to start process '" + arguments.front()
+            + "': " + format_windows_error(GetLastError()));
+    }
+
+    UniqueHandle process_handle(process_info.hProcess);
+    UniqueHandle thread_handle(process_info.hThread);
+    (void)thread_handle;
+    stdout_handle.reset();
+    stderr_handle.reset();
+
+    const DWORD wait_result = WaitForSingleObject(process_handle.get(), INFINITE);
+    if (wait_result == WAIT_FAILED) {
+        return make_invocation_failed_result(
+            "failed waiting for process '" + arguments.front()
+            + "': " + format_windows_error(GetLastError()));
+    }
+
+    DWORD exit_code = 0;
+    if (!GetExitCodeProcess(process_handle.get(), &exit_code)) {
+        return make_invocation_failed_result(
+            "failed reading exit code for process '" + arguments.front()
+            + "': " + format_windows_error(GetLastError()));
+    }
+
+    CommandResult result;
+    result.completed_normally = true;
+    result.exit_code = static_cast<int>(exit_code);
+    return result;
+}
+
+#elif defined(__unix__) || defined(__APPLE__)
+
+[[nodiscard]] char** process_environment() {
+# ifdef __APPLE__
+    return *_NSGetEnviron();
+# else
+    return ::environ;
+# endif
+}
+
+[[nodiscard]] CommandResult interpret_wait_status(int raw_status) {
+    CommandResult result;
+
+    if (WIFEXITED(raw_status)) {
+        result.completed_normally = true;
+        result.exit_code = WEXITSTATUS(raw_status);
+    } else if (WIFSIGNALED(raw_status)) {
+        result.exit_code = 128 + WTERMSIG(raw_status);
+        result.status_message = "terminated by signal " + std::to_string(WTERMSIG(raw_status));
+    } else {
+        result.status_message = "terminated abnormally";
+    }
+
+    return result;
+}
+
+[[nodiscard]] CommandResult execute_spawned_command(
+    const std::vector<std::string>& arguments, const fs::path& stdout_path,
+    const fs::path& stderr_path) {
+    posix_spawn_file_actions_t file_actions;
+    const int init_error = posix_spawn_file_actions_init(&file_actions);
+    if (init_error != 0) {
+        return make_invocation_failed_result(
+            "failed to prepare process launch for '" + arguments.front()
+            + "': " + std::strerror(init_error));
+    }
+
+    const auto add_open =
+        [&file_actions](int fd, const fs::path& path) -> std::optional<CommandResult> {
+        const int open_error = posix_spawn_file_actions_addopen(
+            &file_actions, fd, path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (open_error == 0)
+            return std::nullopt;
+
+        return make_invocation_failed_result(
+            "failed to redirect fd " + std::to_string(fd) + " to '" + path.string()
+            + "': " + std::strerror(open_error));
+    };
+
+    if (auto stdout_error = add_open(STDOUT_FILENO, stdout_path); stdout_error.has_value()) {
+        posix_spawn_file_actions_destroy(&file_actions);
+        return *stdout_error;
+    }
+
+    if (auto stderr_error = add_open(STDERR_FILENO, stderr_path); stderr_error.has_value()) {
+        posix_spawn_file_actions_destroy(&file_actions);
+        return *stderr_error;
+    }
+
+    std::vector<std::string> mutable_arguments = arguments;
+    std::vector<char*> argv;
+    argv.reserve(mutable_arguments.size() + 1);
+    for (std::string& argument : mutable_arguments)
+        argv.push_back(argument.data());
+    argv.push_back(nullptr);
+
+    pid_t child_pid = 0;
+    const int spawn_error = posix_spawnp(
+        &child_pid, mutable_arguments.front().c_str(), &file_actions, nullptr, argv.data(),
+        process_environment());
+    posix_spawn_file_actions_destroy(&file_actions);
+    if (spawn_error != 0) {
+        return make_invocation_failed_result(
+            "failed to start process '" + arguments.front() + "': " + std::strerror(spawn_error));
+    }
+
+    int status = 0;
+    while (waitpid(child_pid, &status, 0) < 0) {
+        if (errno == EINTR)
+            continue;
+
+        return make_invocation_failed_result(
+            "failed waiting for process '" + arguments.front() + "': " + std::strerror(errno));
+    }
+
+    return interpret_wait_status(status);
+}
+
+#else
+
+[[nodiscard]] CommandResult execute_spawned_command(
+    const std::vector<std::string>& arguments, const fs::path&, const fs::path&) {
+    return make_invocation_failed_result(
+        "process execution is not supported on this platform for '" + arguments.front() + "'");
+}
+
+#endif
+
 [[nodiscard]] CommandResult execute_command(const std::vector<std::string>& arguments) {
+    if (arguments.empty())
+        return make_invocation_failed_result("no process arguments were provided");
+
     TemporaryDirectory command_dir("cstc-repl-command");
     const fs::path stdout_path = command_dir.path() / "stdout.txt";
     const fs::path stderr_path = command_dir.path() / "stderr.txt";
 
-    const std::string command = join_command_arguments(arguments);
-    const std::string full_command = command + " >" + quote_shell_argument(stdout_path.string())
-                                   + " 2>" + quote_shell_argument(stderr_path.string());
-
-    CommandResult result = interpret_exit_status(std::system(full_command.c_str()));
+    CommandResult result = execute_spawned_command(arguments, stdout_path, stderr_path);
     result.stdout_output = read_file_or_empty(stdout_path);
     result.stderr_output = read_file_or_empty(stderr_path);
     return result;
@@ -411,7 +699,8 @@ void append_snippet(std::ostringstream& output, std::string_view snippet) {
     return false;
 }
 
-[[nodiscard]] std::string resolve_linker_program(const std::optional<std::string>& override_program) {
+[[nodiscard]] std::string
+    resolve_linker_program(const std::optional<std::string>& override_program) {
     if (override_program.has_value() && !override_program->empty())
         return *override_program;
 
@@ -509,7 +798,8 @@ void write_text_file(const fs::path& path, std::string_view source) {
 
     cstc::span::SourceMap source_map;
     const cstc::span::SourceFileId file_id = source_map.add_file("<repl>", std::string(input));
-    const std::optional<cstc::span::SourceSpan> span = source_map.make_span(file_id, local_start, local_end);
+    const std::optional<cstc::span::SourceSpan> span =
+        source_map.make_span(file_id, local_start, local_end);
     if (!span.has_value()) {
         return "parse error <repl>:1:1: " + error.message;
     }
@@ -583,8 +873,9 @@ void write_text_file(const fs::path& path, std::string_view source) {
             continue;
 
         for (const cstc::ast::ImportItem& import_item : decl->items) {
-            const std::string_view visible_name =
-                import_item.alias.has_value() ? import_item.alias->as_str() : import_item.name.as_str();
+            const std::string_view visible_name = import_item.alias.has_value()
+                                                    ? import_item.alias->as_str()
+                                                    : import_item.name.as_str();
             auto validated = validate_reserved_name(visible_name, "imported name", true);
             if (!validated.has_value())
                 return validated;
@@ -694,8 +985,8 @@ void write_text_file(const fs::path& path, std::string_view source) {
     return message.str();
 }
 
-[[nodiscard]] std::string linker_failure_message(
-    std::string_view linker_program, const CommandResult& result) {
+[[nodiscard]] std::string
+    linker_failure_message(std::string_view linker_program, const CommandResult& result) {
     std::ostringstream message;
     message << "linker '" << linker_program << "' failed";
     if (!result.status_message.empty())
@@ -725,7 +1016,8 @@ public:
                 + "': " + error.message());
         }
 
-        write_text_file(session_source_path_, build_program_source(items_, persisted_lets_, std::nullopt));
+        write_text_file(
+            session_source_path_, build_program_source(items_, persisted_lets_, std::nullopt));
     }
 
     ~Impl() {
@@ -773,8 +1065,9 @@ public:
 
         return parse_error_at_end(input, top_level.error(), 0)
             || parse_error_at_end(
-                input, body_level.error(),
-                std::string("fn ").size() + kBodyProbeName.size() + std::string("() {\n").size());
+                   input, body_level.error(),
+                   std::string("fn ").size() + kBodyProbeName.size()
+                       + std::string("() {\n").size());
     }
 
     [[nodiscard]] SubmissionResult submit(std::string_view input) {
@@ -789,7 +1082,8 @@ public:
         if (top_level.has_value()) {
             auto validated = validate_program_items(*top_level);
             if (!validated.has_value())
-                return make_result(SubmissionStatus::Error, false, false, {}, {}, {}, validated.error());
+                return make_result(
+                    SubmissionStatus::Error, false, false, {}, {}, {}, validated.error());
 
             const std::vector<std::string> new_items = extract_item_snippets(input, *top_level);
             if (new_items.empty())
@@ -838,7 +1132,8 @@ public:
 
         auto validated = validate_body_bindings(*probe_fn->body);
         if (!validated.has_value())
-            return make_result(SubmissionStatus::Error, false, false, {}, {}, {}, validated.error());
+            return make_result(
+                SubmissionStatus::Error, false, false, {}, {}, {}, validated.error());
 
         const ParsedBodySnippet snippet = extract_body_snippet(wrapper_source, *body_level);
         if (snippet.statement_snippets.empty() && !snippet.tail_expr_snippet.has_value())
@@ -849,7 +1144,8 @@ public:
             build_program_source(items_, persisted_lets_, analysis_body);
         const auto typed_program = lower_to_tyir(analysis_source);
         if (!typed_program.has_value())
-            return make_result(SubmissionStatus::Error, false, false, {}, {}, {}, typed_program.error());
+            return make_result(
+                SubmissionStatus::Error, false, false, {}, {}, {}, typed_program.error());
 
         DisplayKind display_kind = DisplayKind::None;
         std::string tail_type_name;
@@ -878,17 +1174,20 @@ public:
 
         const auto rendered_body = build_execution_body(snippet, display_kind);
         if (!rendered_body.has_value())
-            return make_result(SubmissionStatus::Error, false, false, {}, {}, {}, rendered_body.error());
+            return make_result(
+                SubmissionStatus::Error, false, false, {}, {}, {}, rendered_body.error());
 
         const std::string execution_source =
             build_program_source(items_, persisted_lets_, *rendered_body);
         const auto lir_program = lower_to_lir(execution_source);
         if (!lir_program.has_value())
-            return make_result(SubmissionStatus::Error, false, false, {}, {}, {}, lir_program.error());
+            return make_result(
+                SubmissionStatus::Error, false, false, {}, {}, {}, lir_program.error());
 
         const auto run_result = build_and_run(*lir_program);
         if (!run_result.has_value())
-            return make_result(SubmissionStatus::Error, false, false, {}, {}, {}, run_result.error());
+            return make_result(
+                SubmissionStatus::Error, false, false, {}, {}, {}, run_result.error());
 
         const CommandResult& executed = *run_result;
         if (!executed.succeeded()) {
@@ -898,10 +1197,10 @@ public:
         }
 
         persisted_lets_.insert(
-            persisted_lets_.end(),
-            snippet.persisted_let_snippets.begin(),
+            persisted_lets_.end(), snippet.persisted_let_snippets.begin(),
             snippet.persisted_let_snippets.end());
-        write_text_file(session_source_path_, build_program_source(items_, persisted_lets_, std::nullopt));
+        write_text_file(
+            session_source_path_, build_program_source(items_, persisted_lets_, std::nullopt));
 
         SubmissionResult result = make_result(
             SubmissionStatus::Success, !snippet.persisted_let_snippets.empty(), true,
@@ -918,7 +1217,8 @@ public:
     void reset() {
         items_.clear();
         persisted_lets_.clear();
-        write_text_file(session_source_path_, build_program_source(items_, persisted_lets_, std::nullopt));
+        write_text_file(
+            session_source_path_, build_program_source(items_, persisted_lets_, std::nullopt));
     }
 
     [[nodiscard]] std::string persisted_source() const {
@@ -944,11 +1244,13 @@ private:
         if (canonical == "reset") {
             const bool had_state = !items_.empty() || !persisted_lets_.empty();
             reset();
-            return make_result(SubmissionStatus::Success, had_state, false, {}, {}, "session reset");
+            return make_result(
+                SubmissionStatus::Success, had_state, false, {}, {}, "session reset");
         }
 
         if (canonical == "show")
-            return make_result(SubmissionStatus::Success, false, false, {}, {}, user_state_source());
+            return make_result(
+                SubmissionStatus::Success, false, false, {}, {}, user_state_source());
 
         return make_result(
             SubmissionStatus::Error, false, false, {}, {}, {},
@@ -1007,27 +1309,13 @@ private:
         const std::string_view tail = *snippet.tail_expr_snippet;
         switch (display_kind) {
         case DisplayKind::None: break;
-        case DisplayKind::Num:
-            body << kPrintNumName << "(" << tail << ");\n";
-            break;
-        case DisplayKind::Str:
-            body << kPrintStrName << "(" << tail << ");\n";
-            break;
-        case DisplayKind::RefStr:
-            body << kPrintRefStrName << "(" << tail << ");\n";
-            break;
-        case DisplayKind::Bool:
-            body << kPrintBoolName << "(" << tail << ");\n";
-            break;
-        case DisplayKind::Unit:
-            body << kPrintUnitName << "(" << tail << ");\n";
-            break;
-        case DisplayKind::Unsupported:
-            body << tail << ";\n";
-            break;
-        case DisplayKind::Diverges:
-            append_snippet(body, tail);
-            break;
+        case DisplayKind::Num: body << kPrintNumName << "(" << tail << ");\n"; break;
+        case DisplayKind::Str: body << kPrintStrName << "(" << tail << ");\n"; break;
+        case DisplayKind::RefStr: body << kPrintRefStrName << "(" << tail << ");\n"; break;
+        case DisplayKind::Bool: body << kPrintBoolName << "(" << tail << ");\n"; break;
+        case DisplayKind::Unit: body << kPrintUnitName << "(" << tail << ");\n"; break;
+        case DisplayKind::Unsupported: body << tail << ";\n"; break;
+        case DisplayKind::Diverges: append_snippet(body, tail); break;
         }
 
         return body.str();
@@ -1076,11 +1364,13 @@ private:
             const auto loaded =
                 cstc::module::load_program(source_map, session_source_path_, CICEST_STD_PATH);
             if (!loaded.has_value())
-                return std::unexpected(cstc::module::format_module_error(source_map, loaded.error()));
+                return std::unexpected(
+                    cstc::module::format_module_error(source_map, loaded.error()));
 
             const auto typed = cstc::tyir_builder::lower_program(*loaded);
             if (!typed.has_value())
-                return std::unexpected(cstc::cli_support::format_type_error(source_map, typed.error()));
+                return std::unexpected(
+                    cstc::cli_support::format_type_error(source_map, typed.error()));
 
             return *typed;
         } catch (const std::exception& error) {

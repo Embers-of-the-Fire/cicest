@@ -133,6 +133,8 @@ The implementation is intentionally conservative:
   `cstc_codegen` for every successful turn.
 - Links against the standard runtime archive the same way the compiler CLI
   does.
+- Spawns the linker and generated executable directly with explicit
+  stdout/stderr redirection instead of shelling out through `std::system`.
 
 ## CMake
 
