@@ -50,10 +50,11 @@ static void test_runtime_ty() {
     const Symbol handle = Symbol::intern("Handle");
     const Ty runtime_handle = ty::named(handle, kInvalidSymbol, ValueSemantics::Move, true);
     assert(runtime_handle.display() == "runtime Handle");
-    assert(runtime_handle == ty::named(handle));
+    assert(runtime_handle != ty::named(handle));
 
     const Ty borrowed_runtime_handle = ty::ref(runtime_handle);
     assert(borrowed_runtime_handle.display() == "&runtime Handle");
+    assert(borrowed_runtime_handle != ty::ref(ty::named(handle)));
 }
 
 // ─── TyExpr construction ─────────────────────────────────────────────────────

@@ -102,7 +102,7 @@ struct Ty {
     std::shared_ptr<Ty> pointee;
     /// Ownership behavior attached to this resolved type.
     ValueSemantics semantics = ValueSemantics::Copy;
-    /// True when this type is prefixed with the inert `runtime` qualifier.
+    /// True when this type carries the `runtime` qualifier.
     bool is_runtime = false;
 
     [[nodiscard]] constexpr bool is_unit() const { return kind == TyKind::Unit; }
@@ -115,7 +115,7 @@ struct Ty {
     [[nodiscard]] constexpr bool is_move_only() const { return semantics == ValueSemantics::Move; }
 
     friend constexpr bool operator==(const Ty& lhs, const Ty& rhs) {
-        if (lhs.kind != rhs.kind || lhs.name != rhs.name)
+        if (lhs.kind != rhs.kind || lhs.name != rhs.name || lhs.is_runtime != rhs.is_runtime)
             return false;
         if (lhs.kind != TyKind::Ref)
             return true;

@@ -182,6 +182,12 @@ static void test_runtime_fn_preserves_runtime_markers() {
     assert(fn.body->ty.is_runtime);
 }
 
+static void test_runtime_return_type_mismatch_rejected() {
+    must_fail_with_message(
+        "struct Job; fn unwrap(job: runtime Job) -> Job { job }",
+        "body has type 'runtime Job' but return type is 'Job'");
+}
+
 static void test_duplicate_function_name_error() {
     must_fail_with_message("fn noop() { } fn noop() { }", "duplicate function name 'noop'");
 }
@@ -322,6 +328,7 @@ int main() {
     test_fn_str_return();
     test_fn_ref_return_rejected();
     test_runtime_fn_preserves_runtime_markers();
+    test_runtime_return_type_mismatch_rejected();
     test_duplicate_function_name_error();
     test_item_order();
     test_return_type_mismatch();
