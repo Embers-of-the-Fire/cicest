@@ -769,6 +769,9 @@ private:
 
     [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() {
         if (match(TokenKind::KwRuntime)) {
+            if (check(TokenKind::KwRuntime)) {
+                return std::unexpected(make_error_here("duplicate `runtime` type qualifier"));
+            }
             auto inner = parse_type();
             if (!inner.has_value())
                 return std::unexpected(inner.error());

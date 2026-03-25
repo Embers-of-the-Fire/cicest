@@ -147,6 +147,14 @@ void test_error_fn_duplicate_param() {
     expect_error("fn f(x: num, x: num) { }", "duplicate parameter");
 }
 
+void test_error_duplicate_runtime_type_qualifier() {
+    cstc::symbol::SymbolSession session;
+    constexpr std::string_view source = "fn f(x: runtime runtime num) { }";
+    expect_error_at(
+        source, "duplicate `runtime` type qualifier",
+        source.find("runtime runtime") + std::string_view{"runtime "}.size());
+}
+
 void test_error_fn_missing_body() {
     cstc::symbol::SymbolSession session;
     expect_error("fn f()", "expected `{` to start block");
@@ -263,6 +271,7 @@ int main() {
     test_error_fn_missing_open_paren();
     test_error_fn_missing_close_paren();
     test_error_fn_duplicate_param();
+    test_error_duplicate_runtime_type_qualifier();
     test_error_fn_missing_body();
     test_error_import_missing_brace();
     test_error_import_star_not_supported();
