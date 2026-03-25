@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <optional>
 #include <random>
 #include <stdexcept>
@@ -478,23 +479,31 @@ void test_reserved_names_are_rejected() {
 } // namespace
 
 int main() {
-    test_let_bindings_persist_across_turns();
-    test_expression_statements_are_not_persisted();
-    test_item_definitions_persist_without_running_previous_turns();
-    test_relative_imports_resolve_from_session_root();
-    test_supported_result_types_are_rendered();
-    test_unsupported_result_types_report_a_notice();
-    test_commands_and_reset_clear_persisted_state();
-    test_quit_command_requests_exit();
-    test_dot_commands_are_rejected();
-    test_startup_text_mentions_help_and_quit();
-    test_runtime_errors_do_not_commit_new_state();
-    test_missing_linker_reports_process_start_failure();
-    test_generated_program_invocation_failure_is_reported_as_error();
-    test_custom_linker_path_with_spaces_is_supported();
-    test_cxx_environment_command_with_wrapper_and_flags_is_supported();
-    test_invalid_cxx_environment_command_falls_back_to_discovered_linker();
-    test_needs_continuation_uses_structural_heuristics();
-    test_reserved_names_are_rejected();
-    return 0;
+    try {
+        test_let_bindings_persist_across_turns();
+        test_expression_statements_are_not_persisted();
+        test_item_definitions_persist_without_running_previous_turns();
+        test_relative_imports_resolve_from_session_root();
+        test_supported_result_types_are_rendered();
+        test_unsupported_result_types_report_a_notice();
+        test_commands_and_reset_clear_persisted_state();
+        test_quit_command_requests_exit();
+        test_dot_commands_are_rejected();
+        test_startup_text_mentions_help_and_quit();
+        test_runtime_errors_do_not_commit_new_state();
+        test_missing_linker_reports_process_start_failure();
+        test_generated_program_invocation_failure_is_reported_as_error();
+        test_custom_linker_path_with_spaces_is_supported();
+        test_cxx_environment_command_with_wrapper_and_flags_is_supported();
+        test_invalid_cxx_environment_command_falls_back_to_discovered_linker();
+        test_needs_continuation_uses_structural_heuristics();
+        test_reserved_names_are_rejected();
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << "cstc_repl_session failed: " << error.what() << '\n';
+        return 1;
+    } catch (...) {
+        std::cerr << "cstc_repl_session failed: unknown exception\n";
+        return 1;
+    }
 }
