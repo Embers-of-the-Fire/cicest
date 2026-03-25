@@ -8,12 +8,18 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include <cstc_repl/repl.hpp>
 
 namespace {
 
 namespace fs = std::filesystem;
+
+static_assert(!std::is_copy_constructible_v<cstc::repl::Session>);
+static_assert(!std::is_copy_assignable_v<cstc::repl::Session>);
+static_assert(!std::is_move_constructible_v<cstc::repl::Session>);
+static_assert(!std::is_move_assignable_v<cstc::repl::Session>);
 
 class TemporaryDirectory {
 public:

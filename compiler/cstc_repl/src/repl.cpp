@@ -1595,9 +1595,9 @@ private:
 };
 
 Session::Session(SessionOptions options)
-    : impl_(new Impl(std::move(options))) {}
+    : impl_(std::make_unique<Impl>(std::move(options))) {}
 
-Session::~Session() { delete impl_; }
+Session::~Session() = default;
 
 bool Session::needs_continuation(std::string_view input) const {
     return impl_->needs_continuation(input);
@@ -1605,7 +1605,7 @@ bool Session::needs_continuation(std::string_view input) const {
 
 SubmissionResult Session::submit(std::string_view input) { return impl_->submit(input); }
 
-void Session::reset() { impl_->reset(); }
+void Session::reset() { (*impl_).reset(); }
 
 std::string Session::persisted_source() const { return impl_->persisted_source(); }
 

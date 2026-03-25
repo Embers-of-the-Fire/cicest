@@ -2,6 +2,7 @@
 #define CICEST_COMPILER_CSTC_REPL_REPL_HPP
 
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -98,7 +99,7 @@ public:
 
 private:
     class Impl;
-    Impl* impl_;
+    std::unique_ptr<Impl> impl_;
 };
 
 /// Returns the text printed by the `:help` command.
