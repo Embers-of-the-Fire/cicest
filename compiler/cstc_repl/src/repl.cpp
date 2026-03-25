@@ -208,6 +208,97 @@ private:
     return std::string(trim_view(input));
 }
 
+// Parse $CXX as an argv-style command so wrapper programs and extra flags survive execution.
+[[nodiscard]] std::optional<std::vector<std::string>>
+    split_command_arguments(std::string_view command) {
+    enum class QuoteMode {
+        None,
+        Single,
+        Double,
+    };
+
+    std::vector<std::string> arguments;
+    std::string current;
+    bool token_started = false;
+    QuoteMode quote_mode = QuoteMode::None;
+
+    for (std::size_t index = 0; index < command.size(); ++index) {
+        const char ch = command[index];
+
+        if (quote_mode == QuoteMode::Single) {
+            if (ch == '\'') {
+                quote_mode = QuoteMode::None;
+                continue;
+            }
+
+            current += ch;
+            continue;
+        }
+
+        if (quote_mode == QuoteMode::Double) {
+            if (ch == '"') {
+                quote_mode = QuoteMode::None;
+                continue;
+            }
+
+            if (ch == '\\' && index + 1 < command.size()) {
+                const char next = command[index + 1];
+                if (next == '"' || next == '\\') {
+                    current += next;
+                    ++index;
+                    continue;
+                }
+            }
+
+            current += ch;
+            continue;
+        }
+
+        if (std::isspace(static_cast<unsigned char>(ch)) != 0) {
+            if (token_started) {
+                arguments.push_back(current);
+                current.clear();
+                token_started = false;
+            }
+            continue;
+        }
+
+        if (ch == '\'') {
+            quote_mode = QuoteMode::Single;
+            token_started = true;
+            continue;
+        }
+
+        if (ch == '"') {
+            quote_mode = QuoteMode::Double;
+            token_started = true;
+            continue;
+        }
+
+        if (ch == '\\' && index + 1 < command.size()) {
+            const char next = command[index + 1];
+            if (std::isspace(static_cast<unsigned char>(next)) != 0 || next == '\\' || next == '"'
+                || next == '\'') {
+                current += next;
+                token_started = true;
+                ++index;
+                continue;
+            }
+        }
+
+        current += ch;
+        token_started = true;
+    }
+
+    if (quote_mode != QuoteMode::None)
+        return std::nullopt;
+
+    if (token_started)
+        arguments.push_back(std::move(current));
+
+    return arguments;
+}
+
 [[nodiscard]] bool ends_with_newline(std::string_view input) {
     return !input.empty() && input.back() == '\n';
 }
@@ -699,21 +790,24 @@ private:
     return false;
 }
 
-[[nodiscard]] std::string
+[[nodiscard]] std::vector<std::string>
     resolve_linker_program(const std::optional<std::string>& override_program) {
     if (override_program.has_value() && !override_program->empty())
-        return *override_program;
+        return {*override_program};
 
-    if (const char* cxx = std::getenv("CXX"); cxx != nullptr && cxx[0] != '\0')
-        return cxx;
+    if (const char* cxx = std::getenv("CXX"); cxx != nullptr && cxx[0] != '\0') {
+        const auto parsed = split_command_arguments(cxx);
+        if (parsed.has_value() && !parsed->empty() && is_program_available(parsed->front()))
+            return *parsed;
+    }
 
     const cstc::cli::LinkerFlavor flavor = cstc::cli::host_linker_flavor();
     for (const std::string_view candidate : cstc::cli::linker_candidates(flavor)) {
         if (is_program_available(candidate))
-            return std::string(candidate);
+            return {std::string(candidate)};
     }
 
-    return std::string(cstc::cli::fallback_linker_program(flavor));
+    return {std::string(cstc::cli::fallback_linker_program(flavor))};
 }
 
 [[nodiscard]] std::optional<fs::path> resolve_executable_path(const fs::path& output_stem) {
@@ -983,6 +1077,36 @@ void write_text_file(const fs::path& path, std::string_view source) {
     if (!result.status_message.empty())
         message << " (" << result.status_message << ")";
     return message.str();
+}
+
+[[nodiscard]] std::string format_command_for_display(const std::vector<std::string>& arguments) {
+    std::ostringstream rendered;
+
+    for (std::size_t index = 0; index < arguments.size(); ++index) {
+        if (index != 0)
+            rendered << ' ';
+
+        const std::string_view argument = arguments[index];
+        const bool needs_quotes =
+            argument.empty() || std::any_of(argument.begin(), argument.end(), [](unsigned char ch) {
+                return std::isspace(ch) != 0 || ch == '"' || ch == '\\';
+            });
+
+        if (!needs_quotes) {
+            rendered << argument;
+            continue;
+        }
+
+        rendered << '"';
+        for (const char ch : argument) {
+            if (ch == '"' || ch == '\\')
+                rendered << '\\';
+            rendered << ch;
+        }
+        rendered << '"';
+    }
+
+    return rendered.str();
 }
 
 [[nodiscard]] std::string
@@ -1394,17 +1518,17 @@ private:
             const fs::path output_stem = scratch_dir_.path() / "repl_step";
             cstc::codegen::emit_native_object(program, object_path, "cstc_repl_session");
 
-            const std::string linker_program = resolve_linker_program(options_.linker);
-            const CommandResult linker_result = execute_command({
-                linker_program,
-                object_path.string(),
-                cstc::resource_path::resolve_rt_path(CICEST_RT_PATH).string(),
-                "-o",
-                output_stem.string(),
-            });
+            std::vector<std::string> linker_command = resolve_linker_program(options_.linker);
+            linker_command.push_back(object_path.string());
+            linker_command.push_back(cstc::resource_path::resolve_rt_path(CICEST_RT_PATH).string());
+            linker_command.push_back("-o");
+            linker_command.push_back(output_stem.string());
+
+            const CommandResult linker_result = execute_command(linker_command);
 
             if (!linker_result.succeeded()) {
-                return std::unexpected(linker_failure_message(linker_program, linker_result));
+                return std::unexpected(linker_failure_message(
+                    format_command_for_display(linker_command), linker_result));
             }
 
             const auto executable_path = resolve_executable_path(output_stem);

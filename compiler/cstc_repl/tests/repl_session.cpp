@@ -56,11 +56,67 @@ private:
     fs::path path_;
 };
 
+class ScopedEnvironmentVariable {
+public:
+    ScopedEnvironmentVariable(std::string name, std::string_view value)
+        : name_(std::move(name))
+        , previous_value_(read(name_)) {
+        set(value);
+    }
+
+    ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
+    ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
+
+    ~ScopedEnvironmentVariable() {
+        if (previous_value_.has_value())
+            set(*previous_value_);
+        else
+            unset();
+    }
+
+private:
+    [[nodiscard]] static std::optional<std::string> read(const std::string& name) {
+        if (const char* value = std::getenv(name.c_str()); value != nullptr)
+            return std::string(value);
+        return std::nullopt;
+    }
+
+    void set(std::string_view value) const {
+        const std::string rendered(value);
+#ifdef _WIN32
+        const int result = _putenv_s(name_.c_str(), rendered.c_str());
+#else
+        const int result = setenv(name_.c_str(), rendered.c_str(), 1);
+#endif
+        assert(result == 0);
+    }
+
+    void unset() const {
+#ifdef _WIN32
+        const int result = _putenv_s(name_.c_str(), "");
+#else
+        const int result = unsetenv(name_.c_str());
+#endif
+        assert(result == 0);
+    }
+
+    std::string name_;
+    std::optional<std::string> previous_value_;
+};
+
 void write_file(const fs::path& path, std::string_view contents) {
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
     assert(file);
     file << contents;
     assert(file);
+}
+
+void make_executable(const fs::path& path) {
+    std::error_code error;
+    fs::permissions(
+        path, fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec,
+        fs::perm_options::replace, error);
+    assert(!error);
 }
 
 [[nodiscard]] bool fs_exists(const fs::path& path) {
@@ -329,6 +385,39 @@ void test_custom_linker_path_with_spaces_is_supported() {
 #endif
 }
 
+void test_cxx_environment_command_with_wrapper_and_flags_is_supported() {
+#if defined(__unix__) || defined(__APPLE__)
+    TemporaryDirectory root("cstc-repl-test");
+    TemporaryDirectory tools("cstc-repl-tools");
+    const fs::path linker_path = resolve_test_linker_program();
+    const fs::path spaced_linker = tools.path() / "linker with spaces";
+    const fs::path wrapper = tools.path() / "linker-wrapper";
+
+    std::error_code error;
+    fs::create_symlink(linker_path, spaced_linker, error);
+    assert(!error);
+
+    write_file(wrapper, "#!/bin/sh\nexec \"$@\"\n");
+    make_executable(wrapper);
+
+    const std::string cxx = "\"" + wrapper.string() + "\" \"" + spaced_linker.string() + "\" -v";
+    const ScopedEnvironmentVariable scoped_cxx("CXX", cxx);
+
+    cstc::repl::Session session({.session_root_dir = root.path(), .linker = std::nullopt});
+    const auto result = expect_success(session, "1");
+    assert(result.stdout_output == "1\n");
+#endif
+}
+
+void test_invalid_cxx_environment_command_falls_back_to_discovered_linker() {
+    TemporaryDirectory root("cstc-repl-test");
+    const ScopedEnvironmentVariable scoped_cxx("CXX", "cstc-repl-test-missing-linker -bad-flag");
+
+    cstc::repl::Session session({.session_root_dir = root.path(), .linker = std::nullopt});
+    const auto result = expect_success(session, "1");
+    assert(result.stdout_output == "1\n");
+}
+
 void test_needs_continuation_uses_structural_heuristics() {
     TemporaryDirectory root("cstc-repl-test");
     cstc::repl::Session session({.session_root_dir = root.path(), .linker = std::nullopt});
@@ -366,6 +455,8 @@ int main() {
     test_runtime_errors_do_not_commit_new_state();
     test_missing_linker_reports_process_start_failure();
     test_custom_linker_path_with_spaces_is_supported();
+    test_cxx_environment_command_with_wrapper_and_flags_is_supported();
+    test_invalid_cxx_environment_command_falls_back_to_discovered_linker();
     test_needs_continuation_uses_structural_heuristics();
     test_reserved_names_are_rejected();
     return 0;
