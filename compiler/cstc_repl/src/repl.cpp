@@ -139,7 +139,9 @@ public:
     TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
 
     TemporaryDirectory(TemporaryDirectory&& other) noexcept
-        : path_(std::move(other.path_)) {}
+        : path_(std::move(other.path_)) {
+        other.path_.clear();
+    }
 
     TemporaryDirectory& operator=(TemporaryDirectory&& other) noexcept {
         if (this == &other)
@@ -147,6 +149,7 @@ public:
 
         cleanup();
         path_ = std::move(other.path_);
+        other.path_.clear();
         return *this;
     }
 

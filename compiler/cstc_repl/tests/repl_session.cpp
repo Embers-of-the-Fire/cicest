@@ -23,10 +23,22 @@ public:
     TemporaryDirectory(const TemporaryDirectory&) = delete;
     TemporaryDirectory& operator=(const TemporaryDirectory&) = delete;
 
-    ~TemporaryDirectory() {
-        std::error_code error;
-        fs::remove_all(path_, error);
+    TemporaryDirectory(TemporaryDirectory&& other) noexcept
+        : path_(std::move(other.path_)) {
+        other.path_.clear();
     }
+
+    TemporaryDirectory& operator=(TemporaryDirectory&& other) noexcept {
+        if (this == &other)
+            return *this;
+
+        cleanup();
+        path_ = std::move(other.path_);
+        other.path_.clear();
+        return *this;
+    }
+
+    ~TemporaryDirectory() { cleanup(); }
 
     [[nodiscard]] const fs::path& path() const { return path_; }
 
@@ -52,6 +64,15 @@ private:
         }
 
         throw std::runtime_error("failed to create temporary directory");
+    }
+
+    void cleanup() {
+        if (path_.empty())
+            return;
+
+        std::error_code error;
+        fs::remove_all(path_, error);
+        path_.clear();
     }
 
     fs::path path_;
@@ -265,6 +286,27 @@ void test_relative_imports_resolve_from_session_root() {
 
     const auto value_result = expect_success(session, "answer()");
     assert(value_result.stdout_output == "42\n");
+}
+
+void test_temporary_directory_move_operations_transfer_ownership() {
+    std::optional<TemporaryDirectory> moved;
+    fs::path moved_constructed_path;
+    {
+        TemporaryDirectory source("cstc-repl-test");
+        moved_constructed_path = source.path();
+        moved.emplace(std::move(source));
+    }
+    assert(fs_exists(moved_constructed_path));
+
+    TemporaryDirectory destination("cstc-repl-test");
+    fs::path moved_assigned_path;
+    {
+        TemporaryDirectory source("cstc-repl-test");
+        moved_assigned_path = source.path();
+        destination = std::move(source);
+    }
+    assert(fs_exists(moved_assigned_path));
+    assert(destination.path() == moved_assigned_path);
 }
 
 void test_supported_result_types_are_rendered() {
@@ -486,6 +528,7 @@ int main() {
         test_expression_statements_are_not_persisted();
         test_item_definitions_persist_without_running_previous_turns();
         test_relative_imports_resolve_from_session_root();
+        test_temporary_directory_move_operations_transfer_ownership();
         test_supported_result_types_are_rendered();
         test_unsupported_result_types_report_a_notice();
         test_commands_and_reset_clear_persisted_state();
