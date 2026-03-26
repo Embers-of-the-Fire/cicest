@@ -46,6 +46,17 @@ static void test_ty_named() {
     assert(t != ty::named(Symbol::intern("Color")));
 }
 
+static void test_runtime_ty() {
+    const Symbol handle = Symbol::intern("Handle");
+    const Ty runtime_handle = ty::named(handle, kInvalidSymbol, ValueSemantics::Move, true);
+    assert(runtime_handle.display() == "runtime Handle");
+    assert(runtime_handle != ty::named(handle));
+
+    const Ty borrowed_runtime_handle = ty::ref(runtime_handle);
+    assert(borrowed_runtime_handle.display() == "&runtime Handle");
+    assert(borrowed_runtime_handle != ty::ref(ty::named(handle)));
+}
+
 // ─── TyExpr construction ─────────────────────────────────────────────────────
 
 static void test_make_literal() {
@@ -124,6 +135,7 @@ int main() {
     test_ty_primitives();
     test_ty_ref();
     test_ty_named();
+    test_runtime_ty();
     test_make_literal();
     test_make_local_ref();
     test_make_binary();

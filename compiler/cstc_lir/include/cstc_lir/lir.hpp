@@ -409,6 +409,8 @@ struct LirFnDef {
     std::vector<LirBasicBlock> blocks;
     /// Source location.
     cstc::span::SourceSpan span;
+    /// True when the declaration is prefixed with `runtime`.
+    bool is_runtime = false;
 };
 
 // ─── Type declarations ───────────────────────────────────────────────────────
@@ -461,6 +463,8 @@ struct LirExternFnDecl {
     Ty return_ty;
     /// Source location.
     cstc::span::SourceSpan span;
+    /// True when the declaration is prefixed with `runtime`.
+    bool is_runtime = false;
 };
 
 /// An extern struct declaration (opaque foreign type, no fields).

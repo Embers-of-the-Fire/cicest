@@ -102,6 +102,8 @@ struct Ty {
     std::shared_ptr<Ty> pointee;
     /// Ownership behavior attached to this resolved type.
     ValueSemantics semantics = ValueSemantics::Copy;
+    /// True when this type carries the `runtime` qualifier.
+    bool is_runtime = false;
 
     [[nodiscard]] constexpr bool is_unit() const { return kind == TyKind::Unit; }
     [[nodiscard]] constexpr bool is_never() const { return kind == TyKind::Never; }
@@ -113,7 +115,7 @@ struct Ty {
     [[nodiscard]] constexpr bool is_move_only() const { return semantics == ValueSemantics::Move; }
 
     friend constexpr bool operator==(const Ty& lhs, const Ty& rhs) {
-        if (lhs.kind != rhs.kind || lhs.name != rhs.name)
+        if (lhs.kind != rhs.kind || lhs.name != rhs.name || lhs.is_runtime != rhs.is_runtime)
             return false;
         if (lhs.kind != TyKind::Ref)
             return true;
@@ -126,76 +128,84 @@ struct Ty {
     ///
     /// Requires an active `SymbolSession` for `Named` types.
     [[nodiscard]] std::string display() const {
+        std::string rendered;
         switch (kind) {
         case TyKind::Ref:
             if (pointee != nullptr)
-                return "&" + pointee->display();
-            return "&<unknown>";
-        case TyKind::Unit: return "Unit";
-        case TyKind::Num: return "num";
-        case TyKind::Str: return "str";
-        case TyKind::Bool: return "bool";
-        case TyKind::Never: return "!";
+                rendered = "&" + pointee->display();
+            else
+                rendered = "&<unknown>";
+            break;
+        case TyKind::Unit: rendered = "Unit"; break;
+        case TyKind::Num: rendered = "num"; break;
+        case TyKind::Str: rendered = "str"; break;
+        case TyKind::Bool: rendered = "bool"; break;
+        case TyKind::Never: rendered = "!"; break;
         case TyKind::Named:
             if (display_name.is_valid())
-                return std::string(display_name.as_str());
-            return name.is_valid() ? std::string(name.as_str()) : "<named>";
+                rendered = std::string(display_name.as_str());
+            else
+                rendered = name.is_valid() ? std::string(name.as_str()) : "<named>";
+            break;
         }
-        return "<unknown-type>";
+        if (is_runtime)
+            return "runtime " + rendered;
+        return rendered;
     }
 };
 
 /// Factory helpers for the well-known primitive types.
 namespace ty {
 /// Unit type `()`.
-inline Ty unit() {
+inline Ty unit(bool is_runtime = false) {
     return {
         TyKind::Unit, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,      ValueSemantics::Copy,
+        nullptr,      ValueSemantics::Copy,         is_runtime,
     };
 }
 /// Numeric type `num`.
-inline Ty num() {
+inline Ty num(bool is_runtime = false) {
     return {
         TyKind::Num, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,     ValueSemantics::Copy,
+        nullptr,     ValueSemantics::Copy,         is_runtime,
     };
 }
 /// String type `str`.
-inline Ty str() {
+inline Ty str(bool is_runtime = false) {
     return {
         TyKind::Str, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,     ValueSemantics::Move,
+        nullptr,     ValueSemantics::Move,         is_runtime,
     };
 }
 /// Boolean type `bool`.
-inline Ty bool_() {
+inline Ty bool_(bool is_runtime = false) {
     return {
         TyKind::Bool, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,      ValueSemantics::Copy,
+        nullptr,      ValueSemantics::Copy,         is_runtime,
     };
 }
 /// Never / bottom type (diverging expression).
-inline Ty never() {
+inline Ty never(bool is_runtime = false) {
     return {
         TyKind::Never, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,       ValueSemantics::Copy,
+        nullptr,       ValueSemantics::Copy,         is_runtime,
     };
 }
 /// User-defined named type (struct or enum).
 inline Ty named(
     cstc::symbol::Symbol sym, cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol,
-    ValueSemantics semantics = ValueSemantics::Move) {
-    return {TyKind::Named, sym, display_name, nullptr, semantics};
+    ValueSemantics semantics = ValueSemantics::Move, bool is_runtime = false) {
+    return {TyKind::Named, sym, display_name, nullptr, semantics, is_runtime};
 }
 /// Shared immutable reference type `&T`.
-inline Ty ref(const Ty& pointee) {
+inline Ty ref(const Ty& pointee, bool is_runtime = false) {
     return {
         TyKind::Ref,
         cstc::symbol::kInvalidSymbol,
         cstc::symbol::kInvalidSymbol,
         std::make_shared<Ty>(pointee),
         ValueSemantics::Ref,
+        is_runtime,
     };
 }
 } // namespace ty
@@ -525,6 +535,8 @@ struct TyFnDecl {
     TyBlockPtr body;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// True when the declaration is prefixed with `runtime`.
+    bool is_runtime = false;
 };
 
 /// Typed extern function declaration (no body).
@@ -541,6 +553,8 @@ struct TyExternFnDecl {
     Ty return_ty;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// True when the declaration is prefixed with `runtime`.
+    bool is_runtime = false;
 };
 
 /// Typed extern struct declaration (opaque foreign type, no fields).

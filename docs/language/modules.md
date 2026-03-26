@@ -21,6 +21,7 @@ Any top-level item can be exported from its module by prefixing it with `pub`:
 pub struct File;
 pub enum Mode { Read, Write }
 pub fn open() -> File { File { } }
+pub runtime fn open_runtime() -> File { File { } }
 pub extern "lang" fn println(value: &str);
 ```
 
@@ -79,7 +80,10 @@ For the std prelude and runtime declarations, see [std](../library/std.md).
 Cicest uses Rust-like type and value namespaces:
 
 - Type namespace: `struct`, `enum`, `extern struct`
-- Value namespace: `fn`, `extern fn`
+- Value namespace: `fn`, `runtime fn`, `extern fn`, `runtime extern fn`
+
+The `runtime` keyword does not create a separate namespace. It is an inert
+modifier on function declarations today.
 
 Imported names enter the same namespaces as local declarations. Because of
 that:

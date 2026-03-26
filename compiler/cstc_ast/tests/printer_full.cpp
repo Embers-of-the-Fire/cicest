@@ -311,6 +311,68 @@ void test_extern_fn_attributes_rendered() {
     assert(out.find("ExternFnDecl \"c\" puts(s: str)") != std::string::npos);
 }
 
+void test_runtime_fn_rendered() {
+    cstc::symbol::SymbolSession session;
+    cstc::ast::Program prog;
+    cstc::ast::FnDecl fn;
+    fn.name = cstc::symbol::Symbol::intern("dispatch");
+    fn.is_runtime = true;
+    fn.params.push_back({
+        .name = cstc::symbol::Symbol::intern("job"),
+        .type =
+            {
+                   cstc::ast::TypeKind::Named,
+                   cstc::symbol::Symbol::intern("Job"),
+                   {},
+                   nullptr, true,
+                   },
+        .span = {},
+    });
+    fn.return_type = cstc::ast::TypeRef{
+        cstc::ast::TypeKind::Ref,
+        cstc::symbol::kInvalidSymbol,
+        {},
+        std::make_shared<cstc::ast::TypeRef>(cstc::ast::TypeRef{
+            cstc::ast::TypeKind::Named,
+            cstc::symbol::Symbol::intern("Job"),
+            {},
+            nullptr,
+            true,
+        }),
+        false,
+    };
+    fn.body = empty_block();
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = cstc::ast::format_program(prog);
+    assert(
+        out.find("Runtime FnDecl dispatch(job: runtime Job) -> &runtime Job") != std::string::npos);
+}
+
+void test_runtime_extern_fn_rendered() {
+    cstc::symbol::SymbolSession session;
+    cstc::ast::Program prog;
+    cstc::ast::ExternFnDecl fn;
+    fn.abi = cstc::symbol::Symbol::intern("lang");
+    fn.name = cstc::symbol::Symbol::intern("poll");
+    fn.is_runtime = true;
+    fn.params.push_back({
+        .name = cstc::symbol::Symbol::intern("value"),
+        .type =
+            {
+                   cstc::ast::TypeKind::Str,
+                   cstc::symbol::Symbol::intern("str"),
+                   {},
+                   nullptr, true,
+                   },
+        .span = {},
+    });
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = cstc::ast::format_program(prog);
+    assert(out.find("Runtime ExternFnDecl \"lang\" poll(value: runtime str)") != std::string::npos);
+}
+
 void test_literals_rendered() {
     cstc::symbol::SymbolSession session;
     cstc::ast::Program prog;
@@ -680,6 +742,8 @@ int main() {
     test_fn_decl_no_params_no_return();
     test_fn_decl_with_params_and_return();
     test_extern_fn_attributes_rendered();
+    test_runtime_fn_rendered();
+    test_runtime_extern_fn_rendered();
     test_literals_rendered();
     test_path_expr_rendered();
     test_unary_ops_rendered();

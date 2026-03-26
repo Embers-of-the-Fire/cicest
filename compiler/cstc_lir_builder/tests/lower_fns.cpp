@@ -142,6 +142,17 @@ static void test_return_ty_num_has_value() {
     assert(ret.value.has_value());
 }
 
+static void test_runtime_fn_preserved() {
+    const LirProgram prog =
+        must_lower("struct Job; runtime fn dispatch(job: runtime Job) -> runtime Job { job }");
+    const LirFnDef& fn = prog.fns[0];
+    assert(fn.is_runtime);
+    assert(fn.params.size() == 1);
+    assert(fn.params[0].ty.is_runtime);
+    assert(fn.return_ty.is_runtime);
+    assert(output_contains(prog, "runtime fn dispatch(job: runtime Job) -> runtime Job"));
+}
+
 // ─── Multiple functions ───────────────────────────────────────────────────────
 
 static void test_two_functions() {
@@ -208,6 +219,7 @@ int main() {
     test_single_block_simple_fn();
     test_return_ty_unit_no_value();
     test_return_ty_num_has_value();
+    test_runtime_fn_preserved();
 
     test_two_functions();
     test_mutually_calling_fns();

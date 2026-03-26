@@ -42,6 +42,7 @@ void test_all_keywords() {
         {     "str",      cstc::lexer::TokenKind::KwStr},
         {    "bool",     cstc::lexer::TokenKind::KwBool},
         {  "extern",   cstc::lexer::TokenKind::KwExtern},
+        { "runtime",  cstc::lexer::TokenKind::KwRuntime},
         {     "pub",      cstc::lexer::TokenKind::KwPub},
         {  "import",   cstc::lexer::TokenKind::KwImport},
         {    "from",     cstc::lexer::TokenKind::KwFrom},

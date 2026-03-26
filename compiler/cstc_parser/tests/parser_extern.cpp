@@ -27,6 +27,16 @@ bool must_fail_with_message(std::string_view source, std::string_view expected_s
     return result.error().message.find(expected_substring) != std::string::npos;
 }
 
+bool must_fail_with_message_at(
+    std::string_view source, std::string_view expected_substring, std::size_t expected_start) {
+    const auto result = cstc::parser::parse_source(source);
+    if (result.has_value())
+        return false;
+    if (result.error().message.find(expected_substring) == std::string::npos)
+        return false;
+    return result.error().span.start == expected_start;
+}
+
 // ---------------------------------------------------------------------------
 // Extern function declarations
 // ---------------------------------------------------------------------------
@@ -97,6 +107,19 @@ void test_extern_fn_trailing_comma() {
     assert(prog.items.size() == 1);
     const auto& fn = std::get<cstc::ast::ExternFnDecl>(prog.items[0]);
     assert(fn.params.size() == 1);
+}
+
+void test_runtime_extern_fn() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse(R"(runtime extern "lang" fn print(value: &runtime str);)");
+    assert(prog.items.size() == 1);
+    const auto& fn = std::get<cstc::ast::ExternFnDecl>(prog.items[0]);
+    assert(fn.is_runtime);
+    assert(fn.params.size() == 1);
+    assert(fn.params[0].type.kind == cstc::ast::TypeKind::Ref);
+    assert(fn.params[0].type.pointee);
+    assert(fn.params[0].type.pointee->kind == cstc::ast::TypeKind::Str);
+    assert(fn.params[0].type.pointee->is_runtime);
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +231,20 @@ void test_error_extern_without_fn_or_struct() {
     assert(must_fail_with_message(R"(extern "lang" let x = 1;)", "expected `fn` or `struct`"));
 }
 
+void test_error_runtime_extern_struct() {
+    cstc::symbol::SymbolSession session;
+    constexpr std::string_view source = R"(runtime extern "lang" struct Foo;)";
+    assert(must_fail_with_message_at(
+        source, "expected `fn` after `runtime extern`", source.find("struct")));
+}
+
+void test_error_runtime_extern_enum() {
+    cstc::symbol::SymbolSession session;
+    constexpr std::string_view source = R"(runtime extern "lang" enum Foo { Bar })";
+    assert(must_fail_with_message_at(
+        source, "expected `fn` after `runtime extern`", source.find("enum")));
+}
+
 void test_error_extern_fn_with_body() {
     cstc::symbol::SymbolSession session;
     // An extern fn should be terminated with `;`, not a body block.
@@ -238,6 +275,7 @@ int main() {
     test_extern_fn_with_return_type();
     test_extern_fn_multiple_params();
     test_extern_fn_trailing_comma();
+    test_runtime_extern_fn();
     test_extern_struct();
     test_extern_items_with_attributes();
     test_multiple_extern_items();
@@ -246,6 +284,8 @@ int main() {
     test_extern_fn_span();
     test_error_extern_without_string();
     test_error_extern_without_fn_or_struct();
+    test_error_runtime_extern_struct();
+    test_error_runtime_extern_enum();
     test_error_extern_fn_with_body();
     test_error_extern_fn_missing_semicolon();
     test_error_extern_struct_missing_semicolon();

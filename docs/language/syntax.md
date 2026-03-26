@@ -19,8 +19,9 @@ Supported top-level items:
 - `import` declarations.
 - `struct` declarations.
 - `enum` declarations (scoped variants, similar in spirit to C++ `enum class`).
-- `fn` declarations.
-- `extern` declarations (external function and opaque struct declarations).
+- `fn` declarations, including the inert `runtime fn` form.
+- `extern` declarations (external function and opaque struct declarations),
+  including the inert `runtime extern ... fn` form.
 
 Explicitly out of scope:
 
@@ -59,7 +60,7 @@ Reserved keywords:
 
 ```text
 struct enum fn let if else for while loop break continue return
-true false Unit num str bool extern pub import from as
+true false Unit num str bool extern runtime pub import from as
 ```
 
 ### 2.4 Literals
@@ -101,7 +102,14 @@ It is not an assignment expression operator.
 ```ebnf
 Program            = { Item } , EOF ;
 
-Item               = [ "pub" ] , ( ImportDecl | StructDecl | EnumDecl | FnDecl | ExternDecl ) ;
+Item               = [ "pub" ] ,
+                   ( ImportDecl
+                   | StructDecl
+                   | EnumDecl
+                   | FnDecl
+                   | ExternDecl
+                   | RuntimeFnDecl
+                   | RuntimeExternFnDecl ) ;
 
 ImportDecl         = "import" , "{" , [ ImportItemList ] , "}" , "from" , STR_LIT , ";" ;
 ImportItemList     = ImportItem , { "," , ImportItem } , [ "," ] ;
@@ -120,10 +128,12 @@ FnDecl             = "fn" , IDENT , "(" , [ ParamList ] , ")" , [ ReturnType ] ,
 ParamList          = Param , { "," , Param } , [ "," ] ;
 Param              = IDENT , ":" , Type ;
 ReturnType         = "->" , Type ;
+RuntimeFnDecl      = "runtime" , FnDecl ;
 
 ExternDecl         = "extern" , STR_LIT , ( ExternFnDecl | ExternStructDecl ) ;
 ExternFnDecl       = "fn" , IDENT , "(" , [ ParamList ] , ")" , [ ReturnType ] , ";" ;
 ExternStructDecl   = "struct" , IDENT , ";" ;
+RuntimeExternFnDecl = "runtime" , "extern" , STR_LIT , ExternFnDecl ;
 ```
 
 Notes:
@@ -133,6 +143,8 @@ Notes:
 - Enums are fieldless (C++ enum-class-like), i.e., no payload variants.
 - `extern` declarations use a string literal for the ABI (e.g., `"lang"`, `"c"`).
 - `extern` functions have no body; `extern` structs are opaque (no fields).
+- `runtime` is currently accepted only on `fn`, `extern ... fn`, and type
+  annotations. It has no semantic effect yet.
 - `pub` marks a top-level item or import as exportable from its module.
 - `import *` is intentionally unavailable in source code. The compiler uses an
   internal equivalent only for the std prelude.
@@ -142,7 +154,8 @@ Notes:
 ### 3.2 Types
 
 ```ebnf
-Type               = RefType | BuiltinType | NeverType | UserType ;
+Type               = RuntimeType | RefType | BuiltinType | NeverType | UserType ;
+RuntimeType        = "runtime" , Type ;
 RefType            = "&" , Type ;
 BuiltinType        = "Unit" | "num" | "str" | "bool" ;
 NeverType          = "!" ;
@@ -153,6 +166,10 @@ UserType           = IDENT ;
 > expressions (`return`, `break`, `continue`, and body-less `loop`). It can
 > also be used as an explicit return type annotation (e.g., `fn f() -> ! { loop {} }`)
 > to indicate that a function never returns.
+
+> **Note:** The `runtime` type qualifier is currently inert. Forms such as
+> `runtime T` and `&runtime T` are accepted and preserved by the compiler, but
+> they do not change type checking or code generation yet.
 
 No generic parameters are allowed anywhere.
 

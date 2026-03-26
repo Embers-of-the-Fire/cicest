@@ -63,6 +63,18 @@ static void test_extern_fn_with_return() {
     assert(decl.return_ty == ty::str());
 }
 
+static void test_runtime_extern_fn_preserves_runtime_markers() {
+    SymbolSession session;
+    const auto prog = must_lower(R"(runtime extern "lang" fn print(value: &runtime str);)");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
+    assert(decl.is_runtime);
+    assert(decl.params.size() == 1);
+    assert(decl.params[0].ty.is_ref());
+    assert(decl.params[0].ty.pointee != nullptr);
+    assert(decl.params[0].ty.pointee->is_runtime);
+}
+
 static void test_extern_fn_multiple_params() {
     SymbolSession session;
     const auto prog = must_lower(R"(extern "lang" fn concat(a: &str, b: &str) -> str;)");
@@ -293,6 +305,7 @@ fn main() { let h: Handle = Handle { x: 1 }; }
 int main() {
     test_extern_fn_basic();
     test_extern_fn_with_return();
+    test_runtime_extern_fn_preserves_runtime_markers();
     test_extern_fn_multiple_params();
     test_extern_fn_lang_attribute_overrides_link_name();
     test_extern_fn_callable();

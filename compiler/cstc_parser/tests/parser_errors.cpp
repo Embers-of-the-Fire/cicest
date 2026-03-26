@@ -54,6 +54,11 @@ void test_error_pub_without_item() {
     expect_error("pub", "expected item after `pub`");
 }
 
+void test_error_runtime_without_supported_item() {
+    cstc::symbol::SymbolSession session;
+    expect_error("runtime struct Foo;", "expected `fn` or `extern` after `runtime`");
+}
+
 void test_error_single_bracket_between_attributes_and_item() {
     cstc::symbol::SymbolSession session;
     expect_error("[[a]] [b] fn f() { }", "expected second `[` to start attribute");
@@ -140,6 +145,14 @@ void test_error_fn_missing_close_paren() {
 void test_error_fn_duplicate_param() {
     cstc::symbol::SymbolSession session;
     expect_error("fn f(x: num, x: num) { }", "duplicate parameter");
+}
+
+void test_error_duplicate_runtime_type_qualifier() {
+    cstc::symbol::SymbolSession session;
+    constexpr std::string_view source = "fn f(x: runtime runtime num) { }";
+    expect_error_at(
+        source, "duplicate `runtime` type qualifier",
+        source.find("runtime runtime") + std::string_view{"runtime "}.size());
 }
 
 void test_error_fn_missing_body() {
@@ -242,6 +255,7 @@ int main() {
     test_error_attribute_non_string_value();
     test_error_attribute_without_item();
     test_error_pub_without_item();
+    test_error_runtime_without_supported_item();
     test_error_single_bracket_between_attributes_and_item();
     test_error_attributes_on_import();
     test_error_struct_missing_name();
@@ -257,6 +271,7 @@ int main() {
     test_error_fn_missing_open_paren();
     test_error_fn_missing_close_paren();
     test_error_fn_duplicate_param();
+    test_error_duplicate_runtime_type_qualifier();
     test_error_fn_missing_body();
     test_error_import_missing_brace();
     test_error_import_star_not_supported();

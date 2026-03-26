@@ -48,6 +48,18 @@ static void test_extern_fn_with_return() {
     assert(ext.return_ty == cstc::tyir::ty::str());
 }
 
+static void test_runtime_extern_fn_preserved() {
+    SymbolSession session;
+    const auto prog = must_lower(R"(runtime extern "lang" fn print(value: &runtime str);)");
+    assert(prog.extern_fns.size() == 1);
+    const auto& ext = prog.extern_fns[0];
+    assert(ext.is_runtime);
+    assert(ext.params.size() == 1);
+    assert(ext.params[0].ty.is_ref());
+    assert(ext.params[0].ty.pointee != nullptr);
+    assert(ext.params[0].ty.pointee->is_runtime);
+}
+
 static void test_extern_fn_multiple_params() {
     SymbolSession session;
     const auto prog = must_lower(R"(extern "lang" fn concat(a: &str, b: &str) -> str;)");
@@ -177,6 +189,7 @@ fn main() {
 int main() {
     test_extern_fn_basic();
     test_extern_fn_with_return();
+    test_runtime_extern_fn_preserved();
     test_extern_fn_multiple_params();
     test_extern_fn_no_params();
     test_extern_fn_custom_link_name();
