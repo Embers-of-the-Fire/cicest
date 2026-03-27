@@ -173,6 +173,23 @@ static void test_logical() {
     }
 }
 
+static void test_runtime_argument_promotion() {
+    const auto prog = must_lower(
+        "fn main() { let value: runtime num = take(1); }"
+        "fn take(value: runtime num) -> runtime num { value }");
+    const auto& stmt = std::get<TyLetStmt>(first_fn(prog).body->stmts[0]);
+    assert(stmt.ty == ty::num(true));
+    assert(stmt.init->ty == ty::num(true));
+}
+
+static void test_runtime_argument_demotion_error() {
+    must_fail_with_message(
+        "runtime fn source() -> num { 1 }"
+        "fn sink(value: num) -> num { value }"
+        "fn main() -> num { sink(source()) }",
+        "argument 1 of 'sink': expected 'num', found 'runtime num'");
+}
+
 // ─── Unary operators ─────────────────────────────────────────────────────────
 
 static void test_unary_negate() {
@@ -218,6 +235,21 @@ static void test_if_else_both_bare_return_is_never() {
 }
 
 static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if x { } }"); }
+
+static void test_if_else_runtime_join_produces_runtime_type() {
+    const auto prog = must_lower(
+        "fn choose(flag: bool) -> runtime num { if flag { 1 } else { source() } }"
+        "runtime fn source() -> num { 2 }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num(true));
+}
+
+static void test_if_else_runtime_join_prevents_demotion() {
+    must_fail_with_message(
+        "fn choose(flag: bool) -> num { if flag { 1 } else { source() } }"
+        "runtime fn source() -> num { 2 }",
+        "body has type 'runtime num' but return type is 'num'");
+}
 
 // ─── Control flow ─────────────────────────────────────────────────────────────
 
@@ -334,6 +366,29 @@ static void test_loop_break_bare_vs_value_mismatch_error() {
     must_fail_with_message(
         "fn f(b: bool) { loop { if b { break 42; } else { break; } } }",
         "'break' value type mismatch");
+}
+
+static void test_loop_break_runtime_join_produces_runtime_type() {
+    const auto prog = must_lower(
+        "fn choose(flag: bool) -> runtime num {"
+        "  loop {"
+        "    if flag { break 1; } else { break source(); }"
+        "  }"
+        "}"
+        "runtime fn source() -> num { 2 }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num(true));
+}
+
+static void test_loop_break_runtime_join_prevents_demotion() {
+    must_fail_with_message(
+        "fn choose(flag: bool) -> num {"
+        "  loop {"
+        "    if flag { break 1; } else { break source(); }"
+        "  }"
+        "}"
+        "runtime fn source() -> num { 2 }",
+        "body has type 'runtime num' but return type is 'num'");
 }
 
 // ─── Break/continue outside loop ─────────────────────────────────────────────
@@ -785,6 +840,8 @@ int main() {
     test_equality();
     test_equality_type_mismatch_error();
     test_logical();
+    test_runtime_argument_promotion();
+    test_runtime_argument_demotion_error();
     test_unary_negate();
     test_unary_not();
     test_unary_type_errors();
@@ -792,6 +849,8 @@ int main() {
     test_if_else();
     test_if_else_both_bare_return_is_never();
     test_if_condition_must_be_bool();
+    test_if_else_runtime_join_produces_runtime_type();
+    test_if_else_runtime_join_prevents_demotion();
     test_loop_is_unit();
     test_while();
     test_for_loop();
@@ -807,6 +866,8 @@ int main() {
     test_loop_multiple_breaks_same_type();
     test_loop_break_type_mismatch_error();
     test_loop_break_bare_vs_value_mismatch_error();
+    test_loop_break_runtime_join_produces_runtime_type();
+    test_loop_break_runtime_join_prevents_demotion();
 
     // Break/continue outside loop
     test_break_outside_loop_error();

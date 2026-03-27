@@ -293,13 +293,76 @@ struct LowerCtx {
 
 // ─── Type compatibility ──────────────────────────────────────────────────────
 
+/// Returns true when two types share the same non-`runtime` shape.
+[[nodiscard]] inline bool same_type_shape(const tyir::Ty& lhs, const tyir::Ty& rhs) {
+    if (lhs.kind != rhs.kind)
+        return false;
+
+    switch (lhs.kind) {
+    case tyir::TyKind::Ref:
+        if (lhs.pointee == nullptr || rhs.pointee == nullptr)
+            return lhs.pointee == rhs.pointee;
+        return same_type_shape(*lhs.pointee, *rhs.pointee);
+    case tyir::TyKind::Named: return lhs.name == rhs.name;
+    case tyir::TyKind::Unit:
+    case tyir::TyKind::Num:
+    case tyir::TyKind::Str:
+    case tyir::TyKind::Bool:
+    case tyir::TyKind::Never: return true;
+    }
+
+    return false;
+}
+
 /// Returns true when `actual` may appear where `expected` is required.
 ///
-/// `Never` (bottom type) is compatible with any expected type.
+/// `Never` (bottom type) is compatible with any expected type.  Outside of
+/// `Never`, the only implicit conversion is `T -> runtime T`, applied
+/// structurally to the type tree.
 [[nodiscard]] inline bool compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
     if (actual.is_never())
         return true;
-    return actual == expected;
+    if (!same_type_shape(actual, expected))
+        return false;
+    if (actual.is_runtime && !expected.is_runtime)
+        return false;
+    if (actual.kind != tyir::TyKind::Ref)
+        return true;
+    if (actual.pointee == nullptr || expected.pointee == nullptr)
+        return actual.pointee == expected.pointee;
+    return compatible(*actual.pointee, *expected.pointee);
+}
+
+/// Returns the least common supertype of `lhs` and `rhs`, if one exists.
+///
+/// The runtime qualifier joins by promotion: mixing `T` with `runtime T`
+/// yields `runtime T`.
+[[nodiscard]] inline std::optional<tyir::Ty> common_type(const tyir::Ty& lhs, const tyir::Ty& rhs) {
+    if (lhs.is_never())
+        return rhs;
+    if (rhs.is_never())
+        return lhs;
+    if (!same_type_shape(lhs, rhs))
+        return std::nullopt;
+
+    tyir::Ty joined = lhs;
+    joined.is_runtime = lhs.is_runtime || rhs.is_runtime;
+    if (!joined.display_name.is_valid())
+        joined.display_name = rhs.display_name;
+
+    if (joined.kind == tyir::TyKind::Ref) {
+        if (lhs.pointee == nullptr || rhs.pointee == nullptr) {
+            if (lhs.pointee != rhs.pointee)
+                return std::nullopt;
+        } else {
+            auto pointee = common_type(*lhs.pointee, *rhs.pointee);
+            if (!pointee.has_value())
+                return std::nullopt;
+            joined.pointee = std::make_shared<tyir::Ty>(std::move(*pointee));
+        }
+    }
+
+    return joined;
 }
 
 // ─── Error helpers ────────────────────────────────────────────────────────────
@@ -528,18 +591,20 @@ struct LoweredPlace {
 
 [[nodiscard]] inline std::expected<FnSignature, LowerError> resolve_fn_signature(
     const std::vector<ast::Param>& params, const std::optional<ast::TypeRef>& return_type,
-    cstc::span::SourceSpan span, const TypeEnv& env) {
+    cstc::span::SourceSpan span, const TypeEnv& env, bool is_runtime) {
     FnSignature sig;
     sig.span = span;
     if (return_type.has_value()) {
         auto t = lower_type(*return_type, env, span);
         if (!t)
             return std::unexpected(std::move(t.error()));
+        if (is_runtime)
+            t->is_runtime = true;
         if (t->is_ref())
             return make_error(span, "reference return types are not supported");
         sig.return_ty = *t;
     } else {
-        sig.return_ty = tyir::ty::unit();
+        sig.return_ty = tyir::ty::unit(is_runtime);
     }
     for (const ast::Param& p : params) {
         auto pt = lower_type(p.type, env, p.span);
@@ -770,14 +835,12 @@ inline std::expected<void, LowerError> merge_loop_break_types(
 
         const tyir::Ty& existing = *target[i].break_ty;
         const tyir::Ty& incoming = *source[i].break_ty;
-        if (existing.is_never()) {
-            target[i].break_ty = incoming;
-            continue;
-        }
-        if (!compatible(incoming, existing))
+        const auto joined = common_type(existing, incoming);
+        if (!joined.has_value())
             return make_error(
                 span, "'break' value type mismatch: expected '" + existing.display() + "', found '"
                           + incoming.display() + "'");
+        target[i].break_ty = *joined;
     }
     return {};
 }
@@ -1284,16 +1347,14 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                     if (!else_val)
                         return std::unexpected(std::move(else_val.error()));
 
-                    // Unify then / else types (Never unifies with anything)
                     const tyir::Ty& else_ty = else_val->expr->ty;
-                    if (!compatible(then_ptr->ty, else_ty) && !compatible(else_ty, then_ptr->ty))
+                    const auto joined_ty = common_type(then_ptr->ty, else_ty);
+                    if (!joined_ty.has_value())
                         return make_error(
                             expr->span, "'if' then-branch has type '" + then_ptr->ty.display()
                                             + "' but else-branch has type '" + else_ty.display()
                                             + "'");
-
-                    if (then_ptr->ty.is_never())
-                        result_ty = else_ty;
+                    result_ty = *joined_ty;
 
                     if (auto merged =
                             merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
@@ -1550,16 +1611,15 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                     if (!loop_ctx.break_ty.has_value()) {
                         loop_ctx.break_ty = val_ty;
                     } else {
-                        // Unify: Never is compatible with anything
                         const tyir::Ty& prev = *loop_ctx.break_ty;
-                        if (prev.is_never()) {
-                            loop_ctx.break_ty = val_ty;
-                        } else if (!compatible(val_ty, prev)) {
+                        const auto joined = common_type(prev, val_ty);
+                        if (!joined.has_value()) {
                             return make_error(
                                 expr->span, "'break' value type mismatch: expected '"
                                                 + prev.display() + "', found '" + val_ty.display()
                                                 + "'");
                         }
+                        loop_ctx.break_ty = *joined;
                     }
 
                     release_temp_borrows(ctx, val->temp_borrows);
@@ -1579,13 +1639,13 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                         loop_ctx.break_ty = tyir::ty::unit();
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
-                        if (prev.is_never()) {
-                            loop_ctx.break_ty = tyir::ty::unit();
-                        } else if (!compatible(tyir::ty::unit(), prev)) {
+                        const auto joined = common_type(prev, tyir::ty::unit());
+                        if (!joined.has_value()) {
                             return make_error(
                                 expr->span, "'break' value type mismatch: expected '"
                                                 + prev.display() + "', found 'Unit'");
                         }
+                        loop_ctx.break_ty = *joined;
                     }
                 }
                 // Bare break in while/for: no type tracking needed
@@ -1765,7 +1825,8 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
     // ── Phase 3: resolve function signatures ─────────────────────────────
     for (const ast::Item& item : program.items) {
         if (const auto* fn = std::get_if<ast::FnDecl>(&item)) {
-            auto sig = detail::resolve_fn_signature(fn->params, fn->return_type, fn->span, env);
+            auto sig = detail::resolve_fn_signature(
+                fn->params, fn->return_type, fn->span, env, fn->is_runtime);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
@@ -1781,7 +1842,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 return std::unexpected(std::move(link_name.error()));
             // Build a signature from the extern fn declaration.
             auto sig = detail::resolve_fn_signature(
-                ext_fn->params, ext_fn->return_type, ext_fn->span, env);
+                ext_fn->params, ext_fn->return_type, ext_fn->span, env, ext_fn->is_runtime);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(ext_fn->name, std::move(*sig));
@@ -1798,8 +1859,9 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
         const auto it = env.fn_signatures.find(main_sym);
         if (it != env.fn_signatures.end()) {
             const auto& ret = it->second.return_ty;
-            if (ret.kind != tyir::TyKind::Unit && ret.kind != tyir::TyKind::Num
-                && ret.kind != tyir::TyKind::Never) {
+            if (ret.is_runtime
+                || (ret.kind != tyir::TyKind::Unit && ret.kind != tyir::TyKind::Num
+                    && ret.kind != tyir::TyKind::Never)) {
                 return detail::make_error(
                     it->second.span,
                     "'main' function must return 'Unit', 'num', or '!' (never), found '"

@@ -1,0 +1,7 @@
+runtime fn source() -> num { 1 }
+
+fn sink(value: num) -> num { value }
+
+fn main() -> num {
+    sink(source())
+}
