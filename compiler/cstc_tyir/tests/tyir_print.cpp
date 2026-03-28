@@ -122,6 +122,8 @@ static void test_print_literals() {
         make_ty_expr({}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("42"), false}, ty::num());
     auto str_lit = make_ty_expr(
         {}, TyLiteral{TyLiteral::Kind::Str, Symbol::intern("\"hi\""), false}, ty::ref(ty::str()));
+    auto owned_str_lit = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::OwnedStr, Symbol::intern("\"owned\""), false}, ty::str());
     auto bool_true =
         make_ty_expr({}, TyLiteral{TyLiteral::Kind::Bool, kInvalidSymbol, true}, ty::bool_());
     auto bool_false =
@@ -131,11 +133,12 @@ static void test_print_literals() {
 
     auto block = std::make_shared<TyBlock>();
     block->stmts = {
-        TyExprStmt{   num_lit, {}},
-        TyExprStmt{   str_lit, {}},
-        TyExprStmt{ bool_true, {}},
-        TyExprStmt{bool_false, {}},
-        TyExprStmt{  unit_lit, {}},
+        TyExprStmt{      num_lit, {}},
+        TyExprStmt{      str_lit, {}},
+        TyExprStmt{owned_str_lit, {}},
+        TyExprStmt{    bool_true, {}},
+        TyExprStmt{   bool_false, {}},
+        TyExprStmt{     unit_lit, {}},
     };
     block->ty = ty::unit();
 
@@ -151,6 +154,7 @@ static void test_print_literals() {
     assert(contains(out, "TyLiteral(42): num"));
     assert(contains(out, "TyLiteral(\"hi\"): &str"));
     assert(!contains(out, "TyLiteral(\"\"hi\"\"): &str"));
+    assert(contains(out, "TyLiteral(owned \"owned\"): str"));
     assert(contains(out, "TyLiteral(true): bool"));
     assert(contains(out, "TyLiteral(false): bool"));
     assert(contains(out, "TyLiteral(()): Unit"));

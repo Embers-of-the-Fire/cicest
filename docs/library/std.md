@@ -58,9 +58,9 @@ All standard library functions use the `extern` declaration syntax:
 
 ```cicest
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: &str);
+pub runtime extern "lang" fn print(value: &str);
 [[lang = "cstc_std_println"]]
-pub extern "lang" fn println(value: &str);
+pub runtime extern "lang" fn println(value: &str);
 pub extern "lang" struct Handle;
 ```
 
@@ -85,7 +85,7 @@ resolved `link_name`.
 
 ```cicest
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: &str);
+pub runtime extern "lang" fn print(value: &str);
 ```
 
 Declarations that should flow through explicit imports or the implicit prelude
@@ -147,8 +147,8 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 
 | Cicest declaration                     | LLVM IR                                            | C signature                                           |
 | -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
-| `fn print(value: &str)`                | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const char*)`                    |
-| `fn println(value: &str)`              | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const char*)`                  |
+| `runtime fn print(value: &str)`        | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const char*)`                    |
+| `runtime fn println(value: &str)`      | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const char*)`                  |
 | `fn to_str(value: num) -> str`         | `declare ptr @cstc_std_to_str(double)`             | `char* cstc_std_to_str(double)`                       |
 | `fn str_concat(a: &str, b: &str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)`     | `char* cstc_std_str_concat(const char*, const char*)` |
 | `fn str_len(value: &str) -> num`       | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const char*)`                |
@@ -168,8 +168,8 @@ The prelude currently provides the following functions:
 
 | Function  | Signature                | Description                                                    |
 | --------- | ------------------------ | -------------------------------------------------------------- |
-| `print`   | `fn print(value: &str)`   | Prints a borrowed string without a trailing newline. |
-| `println` | `fn println(value: &str)` | Prints a borrowed string followed by a newline.      |
+| `print`   | `runtime fn print(value: &str)`   | Prints a borrowed string without a trailing newline. |
+| `println` | `runtime fn println(value: &str)` | Prints a borrowed string followed by a newline.      |
 
 ### Conversion
 

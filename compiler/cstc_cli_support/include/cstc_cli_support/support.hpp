@@ -5,7 +5,9 @@
 #include <cstc_resource_path/resource_path.hpp>
 #include <cstc_span/span.hpp>
 #include <cstc_tyir_builder/builder.hpp>
+#include <cstc_tyir_interp/interp.hpp>
 
+#include <expected>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
@@ -50,6 +52,44 @@ namespace cstc::cli_support {
     }
 
     return "type error: " + error.message;
+}
+
+[[nodiscard]] inline std::string format_eval_error(
+    const cstc::span::SourceMap& source_map, const cstc::tyir_interp::EvalError& error) {
+    std::ostringstream out;
+    if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
+        out << "const-eval error " << resolved->file_name << ":" << resolved->start.line << ":"
+            << resolved->start.column << ": " << error.message;
+    } else {
+        out << "const-eval error: " << error.message;
+    }
+
+    if (!error.stack.empty()) {
+        out << "\nconst-eval stack:";
+        for (auto it = error.stack.rbegin(); it != error.stack.rend(); ++it) {
+            out << "\n  in "
+                << (it->fn_name.is_valid() ? std::string(it->fn_name.as_str()) : "<unknown>");
+            if (const auto resolved = source_map.resolve_span(it->span); resolved.has_value()) {
+                out << " at " << resolved->file_name << ":" << resolved->start.line << ":"
+                    << resolved->start.column;
+            }
+        }
+    }
+
+    return out.str();
+}
+
+[[nodiscard]] inline std::expected<cstc::tyir::TyProgram, std::string> lower_and_fold_program(
+    const cstc::span::SourceMap& source_map, const cstc::ast::Program& program) {
+    const auto lowered = cstc::tyir_builder::lower_program(program);
+    if (!lowered.has_value())
+        return std::unexpected(format_type_error(source_map, lowered.error()));
+
+    const auto folded = cstc::tyir_interp::fold_program(*lowered);
+    if (!folded.has_value())
+        return std::unexpected(format_eval_error(source_map, folded.error()));
+
+    return *folded;
 }
 
 [[nodiscard]] inline cstc::ast::Program load_module_program(

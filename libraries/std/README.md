@@ -15,11 +15,11 @@ can be loaded explicitly through `@std/...` import paths.
 
 | Function     | Signature                              | Description                                                                                             |
 | ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `print`      | `fn print(value: str)`                 | Prints a string to standard output.                                                                     |
-| `println`    | `fn println(value: str)`               | Prints a string followed by a newline.                                                                  |
+| `print`      | `runtime fn print(value: &str)`        | Prints a borrowed string to standard output.                                                            |
+| `println`    | `runtime fn println(value: &str)`      | Prints a borrowed string followed by a newline.                                                         |
 | `to_str`     | `fn to_str(value: num) -> str`         | Converts a number to its string representation.                                                         |
-| `str_concat` | `fn str_concat(a: str, b: str) -> str` | Concatenates two strings.                                                                               |
-| `str_len`    | `fn str_len(value: str) -> num`        | Returns the length of a string.                                                                         |
+| `str_concat` | `fn str_concat(a: &str, b: &str) -> str` | Concatenates two borrowed strings.                                                                    |
+| `str_len`    | `fn str_len(value: &str) -> num`       | Returns the length of a borrowed string.                                                                |
 | `str_free`   | `fn str_free(value: str)`              | Frees a heap-allocated string.                                                                          |
 | `assert`     | `fn assert(condition: bool)`           | Aborts the program with `assertion failed` on standard error when `condition` is `false`.               |
 | `assert_eq`  | `fn assert_eq(a: num, b: num)`         | Aborts the program when two numbers differ by more than `1e-9`, printing both values on standard error. |
@@ -30,7 +30,7 @@ All standard library functions are declared using the `extern "lang"` syntax:
 
 ```cicest
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: str);
+pub runtime extern "lang" fn print(value: &str);
 ```
 
 The `"lang"` ABI string indicates these functions are provided by the cicest
@@ -42,7 +42,7 @@ resolved `link_name`.
 
 ```cicest
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: str);
+pub runtime extern "lang" fn print(value: &str);
 ```
 
 This is called in Cicest as `print("hello")`, but codegen declares and calls
@@ -58,11 +58,11 @@ linked into every executable produced by the compiler.
 
 | Cicest declaration                     | C signature                                           |
 | -------------------------------------- | ----------------------------------------------------- |
-| `fn print(value: str)`                 | `void cstc_std_print(const char*)`                    |
-| `fn println(value: str)`               | `void cstc_std_println(const char*)`                  |
+| `runtime fn print(value: &str)`        | `void cstc_std_print(const char*)`                    |
+| `runtime fn println(value: &str)`      | `void cstc_std_println(const char*)`                  |
 | `fn to_str(value: num) -> str`         | `char* cstc_std_to_str(double)`                       |
-| `fn str_concat(a: str, b: str) -> str` | `char* cstc_std_str_concat(const char*, const char*)` |
-| `fn str_len(value: str) -> num`        | `double cstc_std_str_len(const char*)`                |
+| `fn str_concat(a: &str, b: &str) -> str` | `char* cstc_std_str_concat(const char*, const char*)` |
+| `fn str_len(value: &str) -> num`       | `double cstc_std_str_len(const char*)`                |
 | `fn str_free(value: str)`              | `void cstc_std_str_free(const char*)`                 |
 | `fn assert(condition: bool)`           | `void cstc_std_assert(int)`                           |
 | `fn assert_eq(a: num, b: num)`         | `void cstc_std_assert_eq(double, double)`             |
@@ -83,6 +83,7 @@ To add a new standard library function:
 1. Add the `pub extern "lang" fn` declaration to `prelude.cst`.
    Add `[[lang = "..."]]` when the runtime symbol name differs from the
    source-level Cicest function name.
+   Mark impure or environment-dependent functions as `runtime`.
 1. Implement the function in `runtime.c`.
 1. Update this README with the new function's documentation.
 1. Add tests in `compiler/cstc_codegen/tests/codegen_integration.cpp`.

@@ -37,6 +37,16 @@ static void test_const_str() {
     assert(c.display() == "\"hello\"");
 }
 
+static void test_const_owned_str() {
+    SymbolSession session;
+    const Symbol s = Symbol::intern("\"hello\"");
+    const LirConst c = LirConst::owned_str(s);
+    assert(c.kind == LirConst::Kind::OwnedStr);
+    assert(c.symbol == s);
+    assert(c.ty() == ty::str());
+    assert(c.display() == "owned \"hello\"");
+}
+
 static void test_const_bool_true() {
     SymbolSession session;
     const LirConst c = LirConst::bool_(true);
@@ -258,6 +268,7 @@ static void test_empty_program() {
 int main() {
     test_const_num();
     test_const_str();
+    test_const_owned_str();
     test_const_bool_true();
     test_const_bool_false();
     test_const_unit();

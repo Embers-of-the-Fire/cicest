@@ -99,8 +99,10 @@ struct TyBlock {
 - `TyEnumDecl`   — fieldless enum
 - `TyFnDecl`     — function with resolved param/return types and typed body
 
-Surface sugar such as `runtime fn` is normalized away in TyIR: the semantic
-signal is carried by the function's `return_ty.is_runtime` tag.
+Surface sugar such as `runtime fn` is normalized into runtime-qualified types,
+and TyIR also preserves the original declaration-level marker on
+`TyFnDecl::is_runtime` / `TyExternFnDecl::is_runtime` so later passes can
+distinguish item-level runtime boundaries from nested type tags.
 
 ## Printer
 

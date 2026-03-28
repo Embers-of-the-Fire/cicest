@@ -10,7 +10,6 @@
 #include <cstc_span/span.hpp>
 #include <cstc_symbol/symbol.hpp>
 #include <cstc_tyir/tyir.hpp>
-#include <cstc_tyir_builder/builder.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -1529,10 +1528,9 @@ private:
                 return std::unexpected(
                     cstc::module::format_module_error(source_map, loaded.error()));
 
-            const auto typed = cstc::tyir_builder::lower_program(*loaded);
+            const auto typed = cstc::cli_support::lower_and_fold_program(source_map, *loaded);
             if (!typed.has_value())
-                return std::unexpected(
-                    cstc::cli_support::format_type_error(source_map, typed.error()));
+                return std::unexpected(typed.error());
 
             return *typed;
         } catch (const std::exception& error) {

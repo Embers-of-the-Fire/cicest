@@ -93,8 +93,10 @@ struct LirConst {
     enum class Kind {
         /// Numeric literal (e.g. `42`, `3.14`).  Text stored in `symbol`.
         Num,
-        /// String literal (e.g. `"hello"`).  Text stored in `symbol`.
+        /// Borrowed string literal (e.g. `"hello"`).  Text stored in `symbol`.
         Str,
+        /// Owned compile-time string.  Text stored in `symbol`.
+        OwnedStr,
         /// Boolean literal.  Value stored in `bool_value`.
         Bool,
         /// Unit literal `()`.
@@ -114,6 +116,8 @@ struct LirConst {
     [[nodiscard]] static LirConst num(cstc::symbol::Symbol sym);
     /// Constructs a string constant from interned text.
     [[nodiscard]] static LirConst str(cstc::symbol::Symbol sym);
+    /// Constructs an owned compile-time string constant from interned text.
+    [[nodiscard]] static LirConst owned_str(cstc::symbol::Symbol sym);
     /// Constructs a boolean constant.
     [[nodiscard]] static LirConst bool_(bool value);
     /// Constructs the unit constant.
@@ -502,6 +506,10 @@ inline LirConst LirConst::num(cstc::symbol::Symbol sym) { return LirConst{Kind::
 
 inline LirConst LirConst::str(cstc::symbol::Symbol sym) { return LirConst{Kind::Str, sym, false}; }
 
+inline LirConst LirConst::owned_str(cstc::symbol::Symbol sym) {
+    return LirConst{Kind::OwnedStr, sym, false};
+}
+
 inline LirConst LirConst::bool_(bool value) {
     return LirConst{Kind::Bool, cstc::symbol::kInvalidSymbol, value};
 }
@@ -514,6 +522,7 @@ inline Ty LirConst::ty() const {
     switch (kind) {
     case Kind::Num: return tyir::ty::num();
     case Kind::Str: return tyir::ty::ref(tyir::ty::str());
+    case Kind::OwnedStr: return tyir::ty::str();
     case Kind::Bool: return tyir::ty::bool_();
     case Kind::Unit: return tyir::ty::unit();
     }
@@ -524,10 +533,16 @@ inline std::string LirConst::display() const {
     switch (kind) {
     case Kind::Num: return symbol.is_valid() ? std::string(symbol.as_str()) : "<num>";
     case Kind::Str: {
-        std::string s = "\"";
-        s += symbol.is_valid() ? std::string(symbol.as_str()) : "";
-        s += "\"";
-        return s;
+        std::string text = symbol.is_valid() ? std::string(symbol.as_str()) : "";
+        if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
+            return text;
+        return "\"" + text + "\"";
+    }
+    case Kind::OwnedStr: {
+        const std::string text = symbol.is_valid() ? std::string(symbol.as_str()) : "";
+        if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
+            return "owned " + text;
+        return "owned \"" + text + "\"";
     }
     case Kind::Bool: return bool_value ? "true" : "false";
     case Kind::Unit: return "()";

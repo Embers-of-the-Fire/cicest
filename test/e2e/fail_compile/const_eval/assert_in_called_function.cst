@@ -1,0 +1,7 @@
+fn check(value: num) {
+    assert_eq(value, 1);
+}
+
+fn main() {
+    check(2);
+}

@@ -289,15 +289,6 @@ void make_executable(const fs::path& path) {
     return result;
 }
 
-[[nodiscard]] cstc::repl::SubmissionResult
-    expect_runtime_error(cstc::repl::Session& session, std::string_view input) {
-    const cstc::repl::SubmissionResult result = session.submit(input);
-    assert(result.status == cstc::repl::SubmissionStatus::RuntimeError);
-    assert(result.executed);
-    assert(!result.error_message.empty());
-    return result;
-}
-
 void test_let_bindings_persist_across_turns() {
     TemporaryDirectory root("cstc-repl-test");
     cstc::repl::Session session({.session_root_dir = root.path(), .linker = std::nullopt});
@@ -450,13 +441,14 @@ void test_startup_text_mentions_help_and_quit() {
     assert(contains(startup, ":quit"));
 }
 
-void test_runtime_errors_do_not_commit_new_state() {
+void test_compile_time_errors_do_not_commit_new_state() {
     TemporaryDirectory root("cstc-repl-test");
     cstc::repl::Session session({.session_root_dir = root.path(), .linker = std::nullopt});
 
     (void)expect_success(session, "let x: num = 1;");
-    const auto failure = expect_runtime_error(session, "assert(false);");
-    assert(contains(failure.stderr_output, "assertion failed"));
+    const auto failure = expect_error(session, "assert(false);");
+    assert(!failure.executed);
+    assert(contains(failure.error_message, "compile-time assertion failed"));
 
     const auto value = expect_success(session, "x");
     assert(value.stdout_output == "1\n");
@@ -603,7 +595,7 @@ int main() {
         test_quit_command_requests_exit();
         test_dot_commands_are_rejected();
         test_startup_text_mentions_help_and_quit();
-        test_runtime_errors_do_not_commit_new_state();
+        test_compile_time_errors_do_not_commit_new_state();
         test_missing_linker_reports_process_start_failure();
         test_generated_program_invocation_failure_is_reported_as_error();
         test_custom_linker_path_with_spaces_is_supported();

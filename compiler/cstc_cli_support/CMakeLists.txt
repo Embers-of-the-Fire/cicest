@@ -13,6 +13,7 @@ target_link_libraries(cstc_cli_support
         cstc_parser
         cstc_resource_path
         cstc_span
+        cstc_tyir_interp
         cstc_tyir_builder
         cicest_options
         cicest_warnings

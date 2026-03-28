@@ -7,7 +7,6 @@
 #include <cstc_resource_path/resource_path.hpp>
 #include <cstc_span/span.hpp>
 #include <cstc_symbol/symbol.hpp>
-#include <cstc_tyir_builder/builder.hpp>
 
 #include <algorithm>
 #include <cerrno>
@@ -377,11 +376,11 @@ void compile_file(const Options& options) {
     const cstc::ast::Program merged =
         cstc::cli_support::load_module_program(source_map, options.input_path, CICEST_STD_PATH);
 
-    const auto lowered = cstc::tyir_builder::lower_program(merged);
-    if (!lowered.has_value())
-        throw std::runtime_error(cstc::cli_support::format_type_error(source_map, lowered.error()));
+    const auto tyir = cstc::cli_support::lower_and_fold_program(source_map, merged);
+    if (!tyir.has_value())
+        throw std::runtime_error(tyir.error());
 
-    const auto lir = cstc::lir_builder::lower_program(*lowered);
+    const auto lir = cstc::lir_builder::lower_program(*tyir);
 
     const std::filesystem::path output_stem = resolve_output_stem(options);
     std::filesystem::path assembly_path = output_stem;

@@ -660,6 +660,14 @@ private:
                 text = text.substr(1, text.size() - 2);
             return builder_.CreateGlobalString(text);
         }
+        case LirConst::Kind::OwnedStr: {
+            std::string text(c.symbol.as_str());
+            if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
+                text = text.substr(1, text.size() - 2);
+            llvm::Value* borrowed = builder_.CreateGlobalString(text);
+            llvm::Value* empty = builder_.CreateGlobalString("");
+            return builder_.CreateCall(ensure_runtime_str_concat(), {empty, borrowed});
+        }
         case LirConst::Kind::Unit:
             // Unit is an empty struct {}
             return llvm::ConstantStruct::get(llvm::StructType::get(context_), {});
@@ -810,6 +818,22 @@ private:
         return runtime_str_free_;
     }
 
+    llvm::Function* ensure_runtime_str_concat() {
+        if (runtime_str_concat_ != nullptr)
+            return runtime_str_concat_;
+
+        if (llvm::Function* existing = module_.getFunction("cstc_std_str_concat")) {
+            runtime_str_concat_ = existing;
+            return runtime_str_concat_;
+        }
+
+        auto* ptr_ty = llvm::PointerType::getUnqual(context_);
+        auto* fn_ty = llvm::FunctionType::get(ptr_ty, {ptr_ty, ptr_ty}, false);
+        runtime_str_concat_ = llvm::Function::Create(
+            fn_ty, llvm::Function::ExternalLinkage, "cstc_std_str_concat", &module_);
+        return runtime_str_concat_;
+    }
+
     void emit_drop_value(const Ty& ty, llvm::Value* value) {
         if (!ty.is_move_only())
             return;
@@ -950,6 +974,7 @@ private:
     std::vector<llvm::AllocaInst*> local_allocas_;
     std::vector<llvm::AllocaInst*> local_drop_flags_;
     std::vector<llvm::BasicBlock*> basic_blocks_;
+    llvm::Function* runtime_str_concat_ = nullptr;
     llvm::Function* runtime_str_free_ = nullptr;
     bool is_built_ = false;
 };

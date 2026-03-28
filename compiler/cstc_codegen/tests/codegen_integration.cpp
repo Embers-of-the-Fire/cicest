@@ -6,6 +6,7 @@
 #include <cstc_parser/parser.hpp>
 #include <cstc_symbol/symbol.hpp>
 #include <cstc_tyir_builder/builder.hpp>
+#include <cstc_tyir_interp/interp.hpp>
 
 using namespace cstc::symbol;
 
@@ -17,6 +18,17 @@ static std::string must_codegen(const char* source) {
     const auto tyir = cstc::tyir_builder::lower_program(*ast);
     assert(tyir.has_value());
     const auto lir = cstc::lir_builder::lower_program(*tyir);
+    return cstc::codegen::emit_llvm_ir(lir);
+}
+
+static std::string must_codegen_folded(const char* source) {
+    const auto ast = cstc::parser::parse_source(source);
+    assert(ast.has_value());
+    const auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+    const auto folded = cstc::tyir_interp::fold_program(*tyir);
+    assert(folded.has_value());
+    const auto lir = cstc::lir_builder::lower_program(*folded);
     return cstc::codegen::emit_llvm_ir(lir);
 }
 
@@ -221,6 +233,25 @@ fn main() {
     assert(ir_contains(ir, "call void @print(ptr"));
 }
 
+static void test_folded_owned_str_avoids_runtime_to_str_call() {
+    SymbolSession session;
+    const auto ir = must_codegen_folded(R"(
+[[lang = "cstc_std_to_str"]]
+extern "lang" fn to_str(value: num) -> str;
+[[lang = "cstc_std_print"]]
+runtime extern "lang" fn print(value: &str);
+
+fn main() {
+    let rendered: str = to_str(42);
+    print(&rendered);
+}
+)");
+    assert(!ir_contains(ir, "call ptr @cstc_std_to_str(double"));
+    assert(ir_contains(ir, "declare ptr @cstc_std_str_concat(ptr, ptr)"));
+    assert(ir_contains(ir, "call ptr @cstc_std_str_concat(ptr"));
+    assert(ir_contains(ir, "call void @cstc_std_print(ptr"));
+}
+
 int main() {
     test_program_with_full_prelude();
     test_user_fn_calling_extern();
@@ -230,5 +261,6 @@ int main() {
     test_borrowed_str_literal_does_not_emit_runtime_str_free();
     test_auto_drop_recurses_through_struct_fields();
     test_nested_field_borrow_uses_projected_geps();
+    test_folded_owned_str_avoids_runtime_to_str_call();
     return 0;
 }

@@ -47,7 +47,9 @@ For runtime-tagged types, TyIR uses a directional compatibility rule:
 - When control-flow joins `T` with `runtime T`, the resulting type is `runtime T`
 
 TyIR keeps the tag on `Ty` itself. Surface sugar such as `runtime fn` is
-normalized during lowering into a runtime-tagged return type.
+normalized during lowering into a runtime-tagged return type, and TyIR also
+preserves the original declaration-level runtime marker on function items for
+later passes such as const-eval.
 
 ## Expression nodes
 

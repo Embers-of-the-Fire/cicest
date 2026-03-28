@@ -242,8 +242,10 @@ struct TyLiteral {
     enum class Kind {
         /// Numeric literal (e.g. `42`, `3.14`).
         Num,
-        /// String literal (e.g. `"hello"`).
+        /// Borrowed string literal (e.g. `"hello"`), with type `&str`.
         Str,
+        /// Owned compile-time string, with type `str`.
+        OwnedStr,
         /// Boolean literal (`true` or `false`).
         Bool,
         /// Unit literal `()`.
@@ -252,7 +254,7 @@ struct TyLiteral {
 
     /// Literal category.
     Kind kind = Kind::Unit;
-    /// Interned source text of the literal (empty symbol for `Unit`).
+    /// Interned source text of the literal (empty symbol for `Bool` / `Unit`).
     cstc::symbol::Symbol symbol = cstc::symbol::kInvalidSymbol;
     /// Parsed boolean value; meaningful only when `kind == Bool`.
     bool bool_value = false;
@@ -547,6 +549,10 @@ struct TyParam {
 /// Typed function item declaration.
 ///
 /// Surface sugar such as `runtime fn` is normalized into `return_ty`.
+///
+/// The original item-level marker is also preserved in `is_runtime` so later
+/// passes can distinguish declaration-level runtime boundaries from nested
+/// type-level runtime tags.
 struct TyFnDecl {
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
@@ -558,11 +564,17 @@ struct TyFnDecl {
     TyBlockPtr body;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// True when the function was declared with the `runtime` item modifier.
+    bool is_runtime = false;
 };
 
 /// Typed extern function declaration (no body).
 ///
 /// Surface sugar such as `runtime extern ... fn` is normalized into `return_ty`.
+///
+/// The original item-level marker is also preserved in `is_runtime` so later
+/// passes can distinguish declaration-level runtime boundaries from nested
+/// type-level runtime tags.
 struct TyExternFnDecl {
     /// ABI string (e.g. "lang", "c").
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
@@ -576,6 +588,8 @@ struct TyExternFnDecl {
     Ty return_ty;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// True when the function was declared with the `runtime` item modifier.
+    bool is_runtime = false;
 };
 
 /// Typed extern struct declaration (opaque foreign type, no fields).

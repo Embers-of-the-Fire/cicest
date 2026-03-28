@@ -22,7 +22,7 @@ pub struct File;
 pub enum Mode { Read, Write }
 pub fn open() -> File { File { } }
 pub runtime fn open_runtime() -> File { File { } }
-pub extern "lang" fn println(value: &str);
+pub runtime extern "lang" fn println(value: &str);
 ```
 
 `pub` can also prefix an import. A public import re-exports the selected item
