@@ -190,6 +190,42 @@ static void test_runtime_argument_demotion_error() {
         "argument 1 of 'sink': expected 'num', found 'runtime num'");
 }
 
+static void test_runtime_arithmetic_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime num { source() + 1 } runtime fn source() -> num { 1 }");
+    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
+}
+
+static void test_runtime_arithmetic_prevents_demotion() {
+    must_fail_with_message(
+        "fn f() -> num { source() + 1 } runtime fn source() -> num { 1 }",
+        "body has type 'runtime num' but return type is 'num'");
+}
+
+static void test_runtime_comparison_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime bool { source() < 2 } runtime fn source() -> num { 1 }");
+    assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
+}
+
+static void test_runtime_equality_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime bool { source() == 1 } runtime fn source() -> num { 1 }");
+    assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
+}
+
+static void test_runtime_logical_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime bool { flag() && true } runtime fn flag() -> bool { true }");
+    assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
+}
+
+static void test_runtime_logical_prevents_demotion() {
+    must_fail_with_message(
+        "fn f() -> bool { flag() && true } runtime fn flag() -> bool { true }",
+        "body has type 'runtime bool' but return type is 'bool'");
+}
+
 // ─── Unary operators ─────────────────────────────────────────────────────────
 
 static void test_unary_negate() {
@@ -200,6 +236,18 @@ static void test_unary_negate() {
 static void test_unary_not() {
     const auto prog = must_lower("fn f(b: bool) -> bool { !b }");
     assert((*first_fn(prog).body->tail)->ty == ty::bool_());
+}
+
+static void test_runtime_unary_negate_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime num { -source() } runtime fn source() -> num { 1 }");
+    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
+}
+
+static void test_runtime_unary_not_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime bool { !flag() } runtime fn flag() -> bool { true }");
+    assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
 }
 
 static void test_unary_type_errors() {
@@ -235,6 +283,12 @@ static void test_if_else_both_bare_return_is_never() {
 }
 
 static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if x { } }"); }
+
+static void test_runtime_if_condition_accepted() {
+    const auto prog = must_lower(
+        "fn f() -> num { if flag() { 1 } else { 2 } } runtime fn flag() -> bool { true }");
+    assert((*first_fn(prog).body->tail)->ty == ty::num());
+}
 
 static void test_if_else_runtime_join_produces_runtime_type() {
     const auto prog = must_lower(
@@ -272,6 +326,14 @@ static void test_while() {
     assert(while_expr->ty == ty::unit());
 }
 
+static void test_runtime_while_condition_accepted() {
+    const auto prog =
+        must_lower("fn f() { while flag() { break; } } runtime fn flag() -> bool { true }");
+    const auto& while_expr = *first_fn(prog).body->tail;
+    assert(std::holds_alternative<TyWhile>(while_expr->node));
+    assert(while_expr->ty == ty::unit());
+}
+
 static void test_for_loop() {
     const auto prog = must_lower("fn f() { for (let i: num = 0; i < 10; i + 1) { } }");
     const auto& fn_body = *first_fn(prog).body;
@@ -286,6 +348,14 @@ static void test_for_loop() {
     assert(for_node.init->ty == ty::num());
     assert(for_node.condition.has_value());
     assert(for_node.step.has_value());
+}
+
+static void test_runtime_for_condition_accepted() {
+    const auto prog =
+        must_lower("fn f() { for (; flag(); ) { break; } } runtime fn flag() -> bool { true }");
+    const auto& for_expr = *first_fn(prog).body->tail;
+    assert(std::holds_alternative<TyFor>(for_expr->node));
+    assert(for_expr->ty == ty::unit());
 }
 
 static void test_break_and_continue_are_never() {
@@ -842,18 +912,29 @@ int main() {
     test_logical();
     test_runtime_argument_promotion();
     test_runtime_argument_demotion_error();
+    test_runtime_arithmetic_preserves_runtime_type();
+    test_runtime_arithmetic_prevents_demotion();
+    test_runtime_comparison_preserves_runtime_type();
+    test_runtime_equality_preserves_runtime_type();
+    test_runtime_logical_preserves_runtime_type();
+    test_runtime_logical_prevents_demotion();
     test_unary_negate();
     test_unary_not();
+    test_runtime_unary_negate_preserves_runtime_type();
+    test_runtime_unary_not_preserves_runtime_type();
     test_unary_type_errors();
     test_if_no_else();
     test_if_else();
     test_if_else_both_bare_return_is_never();
     test_if_condition_must_be_bool();
+    test_runtime_if_condition_accepted();
     test_if_else_runtime_join_produces_runtime_type();
     test_if_else_runtime_join_prevents_demotion();
     test_loop_is_unit();
     test_while();
+    test_runtime_while_condition_accepted();
     test_for_loop();
+    test_runtime_for_condition_accepted();
     test_break_and_continue_are_never();
     test_return_is_never();
 

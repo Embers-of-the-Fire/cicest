@@ -333,6 +333,15 @@ struct LowerCtx {
     return compatible(*actual.pointee, *expected.pointee);
 }
 
+/// Returns true when `actual` matches the structural shape expected by an
+/// ordinary expression operator or condition.
+///
+/// Unlike `compatible`, this ignores the `runtime` qualifier and therefore
+/// does not permit expression checks to double as coercion sites.
+[[nodiscard]] inline bool matches_type_shape(const tyir::Ty& actual, const tyir::Ty& expected) {
+    return actual.is_never() || same_type_shape(actual, expected);
+}
+
 /// Returns the least common supertype of `lhs` and `rhs`, if one exists.
 ///
 /// The runtime qualifier joins by promotion: mixing `T` with `runtime T`
@@ -363,6 +372,21 @@ struct LowerCtx {
     }
 
     return joined;
+}
+
+[[nodiscard]] inline tyir::Ty unary_result_type(const tyir::Ty& operand, tyir::Ty result_shape) {
+    if (operand.is_never())
+        return tyir::ty::never();
+    result_shape.is_runtime = operand.is_runtime;
+    return result_shape;
+}
+
+[[nodiscard]] inline tyir::Ty
+    binary_result_type(const tyir::Ty& lhs, const tyir::Ty& rhs, tyir::Ty result_shape) {
+    if (lhs.is_never() || rhs.is_never())
+        return tyir::ty::never();
+    result_shape.is_runtime = lhs.is_runtime || rhs.is_runtime;
+    return result_shape;
 }
 
 // ─── Error helpers ────────────────────────────────────────────────────────────
@@ -1123,17 +1147,17 @@ inline std::expected<void, LowerError> merge_loop_break_types(
 
                     tyir::Ty result_ty;
                     if (node.op == ast::UnaryOp::Negate) {
-                        if (!compatible(rhs->expr->ty, tyir::ty::num()))
+                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
                             return make_error(
                                 expr->span, "unary '-' requires 'num', found '"
                                                 + rhs->expr->ty.display() + "'");
-                        result_ty = tyir::ty::num();
+                        result_ty = unary_result_type(rhs->expr->ty, tyir::ty::num());
                     } else {
-                        if (!compatible(rhs->expr->ty, tyir::ty::bool_()))
+                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_()))
                             return make_error(
                                 expr->span, "unary '!' requires 'bool', found '"
                                                 + rhs->expr->ty.display() + "'");
-                        result_ty = tyir::ty::bool_();
+                        result_ty = unary_result_type(rhs->expr->ty, tyir::ty::bool_());
                     }
 
                     auto lowered = LoweredExpr{
@@ -1165,57 +1189,56 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                 case Op::Mul:
                 case Op::Div:
                 case Op::Mod:
-                    if (!compatible(lhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!compatible(rhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on right, found '"
                                             + rhs->expr->ty.display() + "'");
-                    result_ty = tyir::ty::num();
+                    result_ty = binary_result_type(lhs->expr->ty, rhs->expr->ty, tyir::ty::num());
                     break;
 
                 case Op::Lt:
                 case Op::Le:
                 case Op::Gt:
                 case Op::Ge:
-                    if (!compatible(lhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!compatible(rhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on right, found '"
                                             + rhs->expr->ty.display() + "'");
-                    result_ty = tyir::ty::bool_();
+                    result_ty = binary_result_type(lhs->expr->ty, rhs->expr->ty, tyir::ty::bool_());
                     break;
 
                 case Op::Eq:
                 case Op::Ne: {
-                    // Both operands must have the same type (Never unifies)
                     const tyir::Ty& lty = lhs->expr->ty;
                     const tyir::Ty& rty = rhs->expr->ty;
-                    if (!lty.is_never() && !rty.is_never() && lty != rty)
+                    if (!common_type(lty, rty).has_value())
                         return make_error(
                             expr->span,
                             "equality operator requires same types on both sides, found '"
                                 + lty.display() + "' and '" + rty.display() + "'");
-                    result_ty = tyir::ty::bool_();
+                    result_ty = binary_result_type(lty, rty, tyir::ty::bool_());
                     break;
                 }
 
                 case Op::And:
                 case Op::Or:
-                    if (!compatible(lhs->expr->ty, tyir::ty::bool_()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::bool_()))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!compatible(rhs->expr->ty, tyir::ty::bool_()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_()))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on right, found '"
                                             + rhs->expr->ty.display() + "'");
-                    result_ty = tyir::ty::bool_();
+                    result_ty = binary_result_type(lhs->expr->ty, rhs->expr->ty, tyir::ty::bool_());
                     break;
                 }
                 auto lowered = LoweredExpr{
@@ -1324,7 +1347,7 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                 auto cond = lower_expr(node.condition, ctx);
                 if (!cond)
                     return std::unexpected(std::move(cond.error()));
-                if (!compatible(cond->expr->ty, tyir::ty::bool_()))
+                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_()))
                     return make_error(
                         node.condition->span, "'if' condition must have type 'bool', found '"
                                                   + cond->expr->ty.display() + "'");
@@ -1434,7 +1457,7 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                     ctx.pop_loop();
                     return std::unexpected(std::move(cond.error()));
                 }
-                if (!compatible(cond->expr->ty, tyir::ty::bool_())) {
+                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
                     ctx.pop_loop();
                     return make_error(
                         node.condition->span, "'while' condition must have type 'bool', found '"
@@ -1534,7 +1557,7 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                         ctx.scope.pop();
                         return std::unexpected(std::move(cond.error()));
                     }
-                    if (!compatible(cond->expr->ty, tyir::ty::bool_())) {
+                    if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
                         ctx.pop_loop();
                         ctx.scope.pop();
                         return make_error(
