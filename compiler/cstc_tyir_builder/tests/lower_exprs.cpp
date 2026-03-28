@@ -190,6 +190,24 @@ static void test_runtime_argument_demotion_error() {
         "argument 1 of 'sink': expected 'num', found 'runtime num'");
 }
 
+static void test_nominal_argument_mismatch_error() {
+    must_fail_with_message(
+        "enum Left { Value }"
+        "enum Right { Value }"
+        "fn sink(value: Left) -> Left { value }"
+        "fn call() -> Left { sink(Right::Value) }",
+        "argument 1 of 'sink': expected 'Left', found 'Right'");
+}
+
+static void test_nominal_ref_argument_mismatch_error() {
+    must_fail_with_message(
+        "enum Left { Value }"
+        "enum Right { Value }"
+        "fn sink(value: &Left) { }"
+        "fn main() { let value: Right = Right::Value; sink(&value); }",
+        "argument 1 of 'sink': expected '&Left', found '&Right'");
+}
+
 static void test_runtime_arithmetic_preserves_runtime_type() {
     const auto prog =
         must_lower("fn f() -> runtime num { source() + 1 } runtime fn source() -> num { 1 }");
@@ -296,6 +314,14 @@ static void test_if_else_runtime_join_produces_runtime_type() {
         "runtime fn source() -> num { 2 }");
     const auto& tail = *first_fn(prog).body->tail;
     assert(tail->ty == ty::num(true));
+}
+
+static void test_if_else_rejects_distinct_nominal_types() {
+    must_fail_with_message(
+        "enum Left { Value }"
+        "enum Right { Value }"
+        "fn choose(flag: bool) -> Left { if flag { Left::Value } else { Right::Value } }",
+        "'if' then-branch has type 'Left' but else-branch has type 'Right'");
 }
 
 static void test_if_else_runtime_join_prevents_demotion() {
@@ -935,6 +961,8 @@ int main() {
     test_logical();
     test_runtime_argument_promotion();
     test_runtime_argument_demotion_error();
+    test_nominal_argument_mismatch_error();
+    test_nominal_ref_argument_mismatch_error();
     test_runtime_arithmetic_preserves_runtime_type();
     test_runtime_arithmetic_prevents_demotion();
     test_runtime_comparison_preserves_runtime_type();
@@ -952,6 +980,7 @@ int main() {
     test_if_condition_must_be_bool();
     test_runtime_if_condition_accepted();
     test_if_else_runtime_join_produces_runtime_type();
+    test_if_else_rejects_distinct_nominal_types();
     test_if_else_runtime_join_prevents_demotion();
     test_loop_is_unit();
     test_while();

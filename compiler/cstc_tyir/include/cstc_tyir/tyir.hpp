@@ -118,13 +118,19 @@ struct Ty {
     [[nodiscard]] constexpr bool same_shape_as(const Ty& other) const {
         if (kind != other.kind)
             return false;
-        if (kind == TyKind::Named)
-            return name == other.name;
-        if (kind != TyKind::Ref)
-            return true;
-        if (pointee == nullptr || other.pointee == nullptr)
-            return pointee == other.pointee;
-        return pointee->same_shape_as(*other.pointee);
+        switch (kind) {
+        case TyKind::Ref:
+            if (pointee == nullptr || other.pointee == nullptr)
+                return pointee == other.pointee;
+            return pointee->same_shape_as(*other.pointee);
+        case TyKind::Named: return name == other.name;
+        case TyKind::Unit:
+        case TyKind::Num:
+        case TyKind::Str:
+        case TyKind::Bool:
+        case TyKind::Never: return true;
+        }
+        return false;
     }
 
     /// Exact type identity, including all `runtime` tags.

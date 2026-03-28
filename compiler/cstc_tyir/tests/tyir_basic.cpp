@@ -59,6 +59,13 @@ static void test_runtime_ty() {
     assert(borrowed_runtime_handle != ty::ref(ty::named(handle)));
 }
 
+static void test_named_shape_distinguishes_nominal_types() {
+    const Symbol point = Symbol::intern("Point");
+    const Symbol color = Symbol::intern("Color");
+    assert(!ty::named(point).same_shape_as(ty::named(color)));
+    assert(!ty::ref(ty::named(point)).same_shape_as(ty::ref(ty::named(color))));
+}
+
 // ─── TyExpr construction ─────────────────────────────────────────────────────
 
 static void test_make_literal() {
@@ -138,6 +145,7 @@ int main() {
     test_ty_ref();
     test_ty_named();
     test_runtime_ty();
+    test_named_shape_distinguishes_nominal_types();
     test_make_literal();
     test_make_local_ref();
     test_make_binary();
