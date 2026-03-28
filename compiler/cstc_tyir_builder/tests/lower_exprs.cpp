@@ -843,6 +843,16 @@ static void test_field_access() {
     assert(fa.base->ty == ty::named(Symbol::intern("Point")));
 }
 
+static void test_runtime_field_access_preserves_runtime_tag() {
+    const auto prog = must_lower(
+        "struct Point { x: num, y: num }"
+        "fn get_x(p: runtime Point) -> runtime num { p.x }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num(true));
+    const auto& fa = std::get<TyFieldAccess>(tail->node);
+    assert(fa.base->ty.is_runtime);
+}
+
 static void test_field_access_unknown_field_error() {
     must_fail(
         "struct Point { x: num }"
@@ -863,6 +873,19 @@ static void test_borrow_local_binding() {
     const auto& borrow = std::get<TyBorrow>(stmt.init->node);
     assert(std::holds_alternative<LocalRef>(borrow.rhs->node));
     assert(std::get<LocalRef>(borrow.rhs->node).use_kind == ValueUseKind::Borrow);
+}
+
+static void test_borrow_runtime_field_binding() {
+    const auto prog = must_lower(
+        "struct Point { x: num }"
+        "fn f(p: runtime Point) { let r: &runtime num = &p.x; }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.stmts.size() == 1);
+    const auto& stmt = std::get<TyLetStmt>(body.stmts[0]);
+    assert(stmt.ty == ty::ref(ty::num(true)));
+    assert(std::holds_alternative<TyBorrow>(stmt.init->node));
+    const auto& borrow = std::get<TyBorrow>(stmt.init->node);
+    assert(borrow.rhs->ty == ty::num(true));
 }
 
 static void test_move_after_move_error() {
@@ -1005,8 +1028,10 @@ int main() {
     test_struct_init_duplicate_field_error();
     test_struct_init_missing_field_error();
     test_field_access();
+    test_runtime_field_access_preserves_runtime_tag();
     test_field_access_unknown_field_error();
     test_borrow_local_binding();
+    test_borrow_runtime_field_binding();
     test_move_after_move_error();
     test_move_while_borrowed_error();
     test_copy_ref_binding_keeps_borrow();

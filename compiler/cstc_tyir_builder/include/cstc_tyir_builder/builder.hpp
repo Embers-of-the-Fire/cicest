@@ -373,6 +373,11 @@ struct LowerCtx {
     return result_shape;
 }
 
+[[nodiscard]] inline tyir::Ty propagate_runtime_tag(tyir::Ty ty, bool inherited_runtime) {
+    ty.is_runtime = ty.is_runtime || inherited_runtime;
+    return ty;
+}
+
 // ─── Error helpers ────────────────────────────────────────────────────────────
 
 [[nodiscard]] inline std::unexpected<LowerError>
@@ -895,13 +900,15 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                     return make_error(
                         expr->span, "no field '" + std::string(node.field.as_str())
                                         + "' in struct '" + base->expr->ty.display() + "'");
+                tyir::Ty lowered_field_ty =
+                    propagate_runtime_tag(*field_ty, base->expr->ty.is_runtime);
 
                 return LoweredPlace{
                     tyir::make_ty_expr(
                         expr->span,
                         tyir::TyFieldAccess{
                             std::move(base->expr), node.field, tyir::ValueUseKind::Borrow},
-                        *field_ty),
+                        lowered_field_ty),
                     base->owner_local,
                 };
             } else {
