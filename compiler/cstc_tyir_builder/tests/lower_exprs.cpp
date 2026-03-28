@@ -809,7 +809,7 @@ static void test_enum_variant_ref() {
         "enum Color { Red, Green }"
         "fn f() -> Color { Color::Red }");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::named(Symbol::intern("Color")));
+    assert(tail->ty == ty::named(Symbol::intern("Color"), kInvalidSymbol, ValueSemantics::Copy));
     const auto& ref = std::get<EnumVariantRef>(tail->node);
     assert(ref.enum_name == Symbol::intern("Color"));
     assert(ref.variant_name == Symbol::intern("Red"));
@@ -826,7 +826,7 @@ static void test_struct_init() {
         "struct Point { x: num, y: num }"
         "fn origin() -> Point { Point { x: 0, y: 0 } }");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::named(Symbol::intern("Point")));
+    assert(tail->ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy));
     assert(std::holds_alternative<TyStructInit>(tail->node));
 }
 
@@ -866,7 +866,7 @@ static void test_field_access() {
     assert(tail->ty == ty::num());
     const auto& fa = std::get<TyFieldAccess>(tail->node);
     assert(fa.field == Symbol::intern("x"));
-    assert(fa.base->ty == ty::named(Symbol::intern("Point")));
+    assert(fa.base->ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy));
 }
 
 static void test_runtime_field_access_preserves_runtime_tag() {

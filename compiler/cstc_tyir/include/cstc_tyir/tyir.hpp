@@ -135,7 +135,8 @@ struct Ty {
 
     /// Exact type identity, including all `runtime` tags.
     friend constexpr bool operator==(const Ty& lhs, const Ty& rhs) {
-        if (lhs.kind != rhs.kind || lhs.name != rhs.name || lhs.is_runtime != rhs.is_runtime)
+        if (lhs.kind != rhs.kind || lhs.name != rhs.name || lhs.semantics != rhs.semantics
+            || lhs.is_runtime != rhs.is_runtime)
             return false;
         if (lhs.kind != TyKind::Ref)
             return true;

@@ -66,6 +66,13 @@ static void test_named_shape_distinguishes_nominal_types() {
     assert(!ty::ref(ty::named(point)).same_shape_as(ty::ref(ty::named(color))));
 }
 
+static void test_ty_equality_distinguishes_value_semantics() {
+    const Symbol handle = Symbol::intern("Handle");
+    assert(
+        ty::named(handle, kInvalidSymbol, ValueSemantics::Move)
+        != ty::named(handle, kInvalidSymbol, ValueSemantics::Copy));
+}
+
 // ─── TyExpr construction ─────────────────────────────────────────────────────
 
 static void test_make_literal() {
@@ -146,6 +153,7 @@ int main() {
     test_ty_named();
     test_runtime_ty();
     test_named_shape_distinguishes_nominal_types();
+    test_ty_equality_distinguishes_value_semantics();
     test_make_literal();
     test_make_local_ref();
     test_make_binary();

@@ -72,7 +72,9 @@ static void test_struct_with_named_field() {
         "struct Brush { c: Color }");
     assert(prog.items.size() == 2);
     const auto& brush = std::get<TyStructDecl>(prog.items[1]);
-    assert(brush.fields[0].ty == ty::named(Symbol::intern("Color")));
+    assert(
+        brush.fields[0].ty
+        == ty::named(Symbol::intern("Color"), kInvalidSymbol, ValueSemantics::Copy));
 }
 
 static void test_struct_undefined_type_error() { must_fail("struct Foo { x: Unknown }"); }
@@ -328,7 +330,8 @@ static void test_non_main_fn_accepts_any_return() {
         "fn make_point() -> Point { Point { x: 1 } }");
     assert(prog.items.size() == 2);
     const auto& fn = std::get<TyFnDecl>(prog.items[1]);
-    assert(fn.return_ty == ty::named(Symbol::intern("Point")));
+    assert(
+        fn.return_ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy));
 }
 
 int main() {
