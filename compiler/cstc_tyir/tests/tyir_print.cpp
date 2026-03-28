@@ -83,7 +83,6 @@ static void test_print_enum_with_discriminant() {
 static void test_print_runtime_items() {
     TyFnDecl fn;
     fn.name = Symbol::intern("dispatch");
-    fn.is_runtime = true;
     fn.params = {
         TyParam{
                 Symbol::intern("job"),
@@ -98,7 +97,6 @@ static void test_print_runtime_items() {
     TyExternFnDecl ext;
     ext.abi = Symbol::intern("lang");
     ext.name = Symbol::intern("poll");
-    ext.is_runtime = true;
     ext.params = {
         TyParam{
                 Symbol::intern("value"),
@@ -113,8 +111,8 @@ static void test_print_runtime_items() {
     prog.items.push_back(std::move(ext));
 
     const std::string out = format_program(prog);
-    assert(contains(out, "Runtime TyFnDecl dispatch(job: runtime Job) -> runtime Job"));
-    assert(contains(out, "Runtime TyExternFnDecl \"lang\" poll(value: &runtime str) -> Unit"));
+    assert(contains(out, "TyFnDecl dispatch(job: runtime Job) -> runtime Job"));
+    assert(contains(out, "TyExternFnDecl \"lang\" poll(value: &runtime str) -> Unit"));
 }
 
 // ─── Literal expressions ─────────────────────────────────────────────────────

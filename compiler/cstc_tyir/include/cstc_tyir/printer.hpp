@@ -281,8 +281,6 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 }
             } else if constexpr (std::is_same_v<T, TyFnDecl>) {
                 indent(out, level);
-                if (node.is_runtime)
-                    out << "Runtime ";
                 out << "TyFnDecl " << node.name.as_str() << "(";
                 for (std::size_t i = 0; i < node.params.size(); ++i) {
                     if (i > 0)
@@ -293,8 +291,6 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 print_ty_block(out, node.body, level + 1);
             } else if constexpr (std::is_same_v<T, TyExternFnDecl>) {
                 indent(out, level);
-                if (node.is_runtime)
-                    out << "Runtime ";
                 out << "TyExternFnDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
                     << "(";
                 for (std::size_t i = 0; i < node.params.size(); ++i) {

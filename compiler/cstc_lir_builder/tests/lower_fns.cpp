@@ -146,11 +146,10 @@ static void test_runtime_fn_preserved() {
     const LirProgram prog =
         must_lower("struct Job; runtime fn dispatch(job: runtime Job) -> runtime Job { job }");
     const LirFnDef& fn = prog.fns[0];
-    assert(fn.is_runtime);
     assert(fn.params.size() == 1);
     assert(fn.params[0].ty.is_runtime);
     assert(fn.return_ty.is_runtime);
-    assert(output_contains(prog, "runtime fn dispatch(job: runtime Job) -> runtime Job"));
+    assert(output_contains(prog, "fn dispatch(job: runtime Job) -> runtime Job"));
 }
 
 // ─── Multiple functions ───────────────────────────────────────────────────────

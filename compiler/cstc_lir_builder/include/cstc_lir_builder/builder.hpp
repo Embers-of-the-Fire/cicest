@@ -816,7 +816,6 @@ private:
     fn.name = ty_fn.name;
     fn.return_ty = ty_fn.return_ty;
     fn.span = ty_fn.span;
-    fn.is_runtime = ty_fn.is_runtime;
 
     FnBuilder builder;
 
@@ -903,7 +902,6 @@ inline lir::LirProgram lower_program(const tyir::TyProgram& program) {
                     ext.link_name = node.link_name;
                     ext.return_ty = node.return_ty;
                     ext.span = node.span;
-                    ext.is_runtime = node.is_runtime;
                     for (std::size_t i = 0; i < node.params.size(); ++i) {
                         ext.params.push_back(
                             lir::LirParam{

@@ -295,23 +295,7 @@ struct LowerCtx {
 
 /// Returns true when two types share the same non-`runtime` shape.
 [[nodiscard]] inline bool same_type_shape(const tyir::Ty& lhs, const tyir::Ty& rhs) {
-    if (lhs.kind != rhs.kind)
-        return false;
-
-    switch (lhs.kind) {
-    case tyir::TyKind::Ref:
-        if (lhs.pointee == nullptr || rhs.pointee == nullptr)
-            return lhs.pointee == rhs.pointee;
-        return same_type_shape(*lhs.pointee, *rhs.pointee);
-    case tyir::TyKind::Named: return lhs.name == rhs.name;
-    case tyir::TyKind::Unit:
-    case tyir::TyKind::Num:
-    case tyir::TyKind::Str:
-    case tyir::TyKind::Bool:
-    case tyir::TyKind::Never: return true;
-    }
-
-    return false;
+    return lhs.same_shape_as(rhs);
 }
 
 /// Returns true when `actual` may appear where `expected` is required.
@@ -1769,8 +1753,8 @@ inline std::expected<void, LowerError> merge_loop_break_types(
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
 
-    return tyir::TyFnDecl{fn.name, std::move(ty_params), sig.return_ty, std::move(body_ptr),
-                          fn.span, fn.is_runtime};
+    return tyir::TyFnDecl{
+        fn.name, std::move(ty_params), sig.return_ty, std::move(body_ptr), fn.span};
 }
 
 } // namespace detail
@@ -1925,7 +1909,6 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             ty_decl.link_name = *link_name;
             ty_decl.return_ty = sig.return_ty;
             ty_decl.span = ext_fn->span;
-            ty_decl.is_runtime = ext_fn->is_runtime;
             for (std::size_t i = 0; i < ext_fn->params.size(); ++i) {
                 ty_decl.params.push_back(
                     tyir::TyParam{

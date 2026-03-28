@@ -170,9 +170,10 @@ UserType           = IDENT ;
 > also be used as an explicit return type annotation (e.g., `fn f() -> ! { loop {} }`)
 > to indicate that a function never returns.
 
-> **Note:** `runtime T` is a distinct type from `T` during type checking.
-> Values of type `T` may be used where `runtime T` is expected, but the reverse
-> conversion is forbidden and is reported as a hard error.
+> **Note:** `runtime T` is a runtime-tagged form of `T`, conceptually close to
+> a wrapper like `Runtime<T>` rather than a separate ad hoc type category.
+> Values of type `T` may be promoted to `runtime T`, but the reverse demotion
+> is forbidden and is reported as a hard error.
 
 No generic parameters are allowed anywhere.
 

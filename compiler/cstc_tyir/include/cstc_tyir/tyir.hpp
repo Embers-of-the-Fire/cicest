@@ -102,7 +102,7 @@ struct Ty {
     std::shared_ptr<Ty> pointee;
     /// Ownership behavior attached to this resolved type.
     ValueSemantics semantics = ValueSemantics::Copy;
-    /// True when this type carries the `runtime` qualifier.
+    /// True when this type carries the `runtime` tag.
     bool is_runtime = false;
 
     [[nodiscard]] constexpr bool is_unit() const { return kind == TyKind::Unit; }
@@ -113,7 +113,21 @@ struct Ty {
         return semantics == ValueSemantics::Copy || semantics == ValueSemantics::Ref;
     }
     [[nodiscard]] constexpr bool is_move_only() const { return semantics == ValueSemantics::Move; }
+    /// Returns true when `other` has the same underlying type shape after
+    /// ignoring every `runtime` tag.
+    [[nodiscard]] constexpr bool same_shape_as(const Ty& other) const {
+        if (kind != other.kind)
+            return false;
+        if (kind == TyKind::Named)
+            return name == other.name;
+        if (kind != TyKind::Ref)
+            return true;
+        if (pointee == nullptr || other.pointee == nullptr)
+            return pointee == other.pointee;
+        return pointee->same_shape_as(*other.pointee);
+    }
 
+    /// Exact type identity, including all `runtime` tags.
     friend constexpr bool operator==(const Ty& lhs, const Ty& rhs) {
         if (lhs.kind != rhs.kind || lhs.name != rhs.name || lhs.is_runtime != rhs.is_runtime)
             return false;
@@ -524,6 +538,8 @@ struct TyParam {
 };
 
 /// Typed function item declaration.
+///
+/// Surface sugar such as `runtime fn` is normalized into `return_ty`.
 struct TyFnDecl {
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
@@ -535,11 +551,11 @@ struct TyFnDecl {
     TyBlockPtr body;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
-    /// True when the declaration is prefixed with `runtime`.
-    bool is_runtime = false;
 };
 
 /// Typed extern function declaration (no body).
+///
+/// Surface sugar such as `runtime extern ... fn` is normalized into `return_ty`.
 struct TyExternFnDecl {
     /// ABI string (e.g. "lang", "c").
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
@@ -553,8 +569,6 @@ struct TyExternFnDecl {
     Ty return_ty;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
-    /// True when the declaration is prefixed with `runtime`.
-    bool is_runtime = false;
 };
 
 /// Typed extern struct declaration (opaque foreign type, no fields).

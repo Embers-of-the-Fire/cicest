@@ -175,7 +175,6 @@ static void test_runtime_fn_preserves_runtime_markers() {
         must_lower("struct Job; runtime fn dispatch(job: runtime Job) -> runtime Job { job }");
     assert(prog.items.size() == 2);
     const auto& fn = std::get<TyFnDecl>(prog.items[1]);
-    assert(fn.is_runtime);
     assert(fn.params.size() == 1);
     assert(fn.params[0].ty.is_runtime);
     assert(fn.return_ty.is_runtime);
@@ -186,7 +185,6 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
     const auto prog = must_lower("struct Job; runtime fn dispatch(job: Job) -> Job { job }");
     assert(prog.items.size() == 2);
     const auto& fn = std::get<TyFnDecl>(prog.items[1]);
-    assert(fn.is_runtime);
     assert(fn.params.size() == 1);
     assert(!fn.params[0].ty.is_runtime);
     assert(fn.return_ty.is_runtime);

@@ -146,7 +146,6 @@ static void test_print_runtime_items() {
 
     LirFnDef fn;
     fn.name = Symbol::intern("dispatch");
-    fn.is_runtime = true;
     fn.return_ty = ty::named(Symbol::intern("Job"), kInvalidSymbol, ValueSemantics::Move, true);
     fn.locals.push_back({0, fn.return_ty, Symbol::intern("job")});
     fn.params.push_back({0, Symbol::intern("job"), fn.return_ty, {}});
@@ -160,14 +159,13 @@ static void test_print_runtime_items() {
     LirExternFnDecl ext;
     ext.abi = Symbol::intern("lang");
     ext.name = Symbol::intern("poll");
-    ext.is_runtime = true;
     ext.return_ty = ty::unit();
     ext.params.push_back({0, Symbol::intern("value"), ty::ref(ty::str(true)), {}});
     prog.extern_fns.push_back(std::move(ext));
 
     const std::string out = format_program(prog);
-    assert(contains(out, "runtime fn dispatch(job: runtime Job) -> runtime Job"));
-    assert(contains(out, "runtime extern \"lang\" fn poll(value: &runtime str) -> Unit"));
+    assert(contains(out, "fn dispatch(job: runtime Job) -> runtime Job"));
+    assert(contains(out, "extern \"lang\" fn poll(value: &runtime str) -> Unit"));
 }
 
 static void test_print_fn_locals_table() {
