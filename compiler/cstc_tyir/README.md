@@ -49,6 +49,11 @@ cstc::tyir::ty::named(sym) // user-defined struct or enum
 The `Never` kind represents diverging expressions (`break`, `continue`,
 `return`).  It acts as a bottom type: compatible with any expected type.
 
+`Ty` also carries a `runtime` tag. Conceptually, `runtime T` behaves like a
+wrapper-shaped type such as `Runtime<T>`: it keeps the same underlying type
+shape as `T`, but its tag participates in exact type identity and in the
+directional promotion rule `T -> runtime T`.
+
 ### `TyExpr` — type-annotated expression
 
 Every expression node carries:
@@ -93,6 +98,9 @@ struct TyBlock {
 - `TyStructDecl` — struct with resolved field types
 - `TyEnumDecl`   — fieldless enum
 - `TyFnDecl`     — function with resolved param/return types and typed body
+
+Surface sugar such as `runtime fn` is normalized away in TyIR: the semantic
+signal is carried by the function's `return_ty.is_runtime` tag.
 
 ## Printer
 

@@ -23,7 +23,8 @@ Source → Lexer → Tokens → Parser → AST → [Lower] → TyIR → (future:
 
 ## Type system
 
-Cicest has five source-level types and one bottom type:
+Cicest has five source-level types, their `runtime`-qualified variants, and one
+bottom type:
 
 | Type | Kind | Notes |
 |---|---|---|
@@ -32,11 +33,21 @@ Cicest has five source-level types and one bottom type:
 | `str` | built-in | String type |
 | `bool` | built-in | Boolean |
 | `TypeName` | user-defined | Struct or enum declared in the same program |
+| `runtime T` | qualified | Runtime-tagged form of any other type `T` |
 | `!` | bottom | Never type; produced by `break`, `continue`, `return`; also denotable as `-> !` |
 
 The **Never** type (`!`) is a bottom type: it is compatible with any expected
 type.  This allows expressions like `return 42` to appear as the value of any
 sub-expression without a type error.
+
+For runtime-tagged types, TyIR uses a directional compatibility rule:
+
+- `T` implicitly converts to `runtime T`
+- `runtime T` does not convert to `T`
+- When control-flow joins `T` with `runtime T`, the resulting type is `runtime T`
+
+TyIR keeps the tag on `Ty` itself. Surface sugar such as `runtime fn` is
+normalized during lowering into a runtime-tagged return type.
 
 ## Expression nodes
 

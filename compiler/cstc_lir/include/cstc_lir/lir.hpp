@@ -396,6 +396,8 @@ struct LirParam {
 /// - `locals[0 … params.size()-1]` are parameter slots.
 /// - `locals[params.size() … ]` are temporaries and user-defined `let` locals.
 /// - `blocks[kEntryBlock]` is the function entry point.
+/// - Surface sugar such as `runtime fn` has already been normalized into
+///   `return_ty`.
 struct LirFnDef {
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
@@ -409,8 +411,6 @@ struct LirFnDef {
     std::vector<LirBasicBlock> blocks;
     /// Source location.
     cstc::span::SourceSpan span;
-    /// True when the declaration is prefixed with `runtime`.
-    bool is_runtime = false;
 };
 
 // ─── Type declarations ───────────────────────────────────────────────────────
@@ -450,6 +450,9 @@ struct LirEnumDecl {
 };
 
 /// An extern function declaration (no body, just a signature).
+///
+/// Surface sugar such as `runtime extern ... fn` has already been normalized
+/// into `return_ty`.
 struct LirExternFnDecl {
     /// ABI string (e.g. "lang", "c").
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
@@ -463,8 +466,6 @@ struct LirExternFnDecl {
     Ty return_ty;
     /// Source location.
     cstc::span::SourceSpan span;
-    /// True when the declaration is prefixed with `runtime`.
-    bool is_runtime = false;
 };
 
 /// An extern struct declaration (opaque foreign type, no fields).

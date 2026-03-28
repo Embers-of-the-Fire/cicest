@@ -64,9 +64,9 @@ static void test_type_display() {
 static void test_runtime_type_display() {
     SymbolSession session;
     const Symbol handle = Symbol::intern("Handle");
-    assert(
-        ty::named(handle, kInvalidSymbol, ValueSemantics::Move, true).display()
-        == "runtime Handle");
+    const Ty runtime_handle = ty::named(handle, kInvalidSymbol, ValueSemantics::Move, true);
+    assert(runtime_handle.display() == "runtime Handle");
+    assert(runtime_handle.same_shape_as(ty::named(handle)));
     assert(ty::ref(ty::str(true)).display() == "&runtime str");
 }
 

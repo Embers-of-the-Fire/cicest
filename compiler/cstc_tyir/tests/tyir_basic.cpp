@@ -50,11 +50,27 @@ static void test_runtime_ty() {
     const Symbol handle = Symbol::intern("Handle");
     const Ty runtime_handle = ty::named(handle, kInvalidSymbol, ValueSemantics::Move, true);
     assert(runtime_handle.display() == "runtime Handle");
+    assert(runtime_handle.same_shape_as(ty::named(handle)));
     assert(runtime_handle != ty::named(handle));
 
     const Ty borrowed_runtime_handle = ty::ref(runtime_handle);
     assert(borrowed_runtime_handle.display() == "&runtime Handle");
+    assert(borrowed_runtime_handle.same_shape_as(ty::ref(ty::named(handle))));
     assert(borrowed_runtime_handle != ty::ref(ty::named(handle)));
+}
+
+static void test_named_shape_distinguishes_nominal_types() {
+    const Symbol point = Symbol::intern("Point");
+    const Symbol color = Symbol::intern("Color");
+    assert(!ty::named(point).same_shape_as(ty::named(color)));
+    assert(!ty::ref(ty::named(point)).same_shape_as(ty::ref(ty::named(color))));
+}
+
+static void test_ty_equality_distinguishes_value_semantics() {
+    const Symbol handle = Symbol::intern("Handle");
+    assert(
+        ty::named(handle, kInvalidSymbol, ValueSemantics::Move)
+        != ty::named(handle, kInvalidSymbol, ValueSemantics::Copy));
 }
 
 // ─── TyExpr construction ─────────────────────────────────────────────────────
@@ -136,6 +152,8 @@ int main() {
     test_ty_ref();
     test_ty_named();
     test_runtime_ty();
+    test_named_shape_distinguishes_nominal_types();
+    test_ty_equality_distinguishes_value_semantics();
     test_make_literal();
     test_make_local_ref();
     test_make_binary();

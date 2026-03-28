@@ -72,7 +72,9 @@ static void test_struct_with_named_field() {
         "struct Brush { c: Color }");
     assert(prog.items.size() == 2);
     const auto& brush = std::get<TyStructDecl>(prog.items[1]);
-    assert(brush.fields[0].ty == ty::named(Symbol::intern("Color")));
+    assert(
+        brush.fields[0].ty
+        == ty::named(Symbol::intern("Color"), kInvalidSymbol, ValueSemantics::Copy));
 }
 
 static void test_struct_undefined_type_error() { must_fail("struct Foo { x: Unknown }"); }
@@ -175,17 +177,40 @@ static void test_runtime_fn_preserves_runtime_markers() {
         must_lower("struct Job; runtime fn dispatch(job: runtime Job) -> runtime Job { job }");
     assert(prog.items.size() == 2);
     const auto& fn = std::get<TyFnDecl>(prog.items[1]);
-    assert(fn.is_runtime);
     assert(fn.params.size() == 1);
     assert(fn.params[0].ty.is_runtime);
     assert(fn.return_ty.is_runtime);
     assert(fn.body->ty.is_runtime);
 }
 
+static void test_runtime_fn_return_uses_runtime_sugar() {
+    const auto prog = must_lower("struct Job; runtime fn dispatch(job: Job) -> Job { job }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.params.size() == 1);
+    assert(!fn.params[0].ty.is_runtime);
+    assert(fn.return_ty.is_runtime);
+    assert(!fn.body->ty.is_runtime);
+}
+
+static void test_runtime_return_annotation_accepts_plain_value() {
+    const auto prog = must_lower("fn promote() -> runtime num { 1 }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::num(true));
+    assert(fn.body->ty == ty::num());
+}
+
 static void test_runtime_return_type_mismatch_rejected() {
     must_fail_with_message(
         "struct Job; fn unwrap(job: runtime Job) -> Job { job }",
         "body has type 'runtime Job' but return type is 'Job'");
+}
+
+static void test_runtime_main_return_allowed() {
+    const auto prog = must_lower("runtime fn main() -> num { 0 }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::num(true));
+    assert(fn.body->ty == ty::num());
 }
 
 static void test_duplicate_function_name_error() {
@@ -305,7 +330,8 @@ static void test_non_main_fn_accepts_any_return() {
         "fn make_point() -> Point { Point { x: 1 } }");
     assert(prog.items.size() == 2);
     const auto& fn = std::get<TyFnDecl>(prog.items[1]);
-    assert(fn.return_ty == ty::named(Symbol::intern("Point")));
+    assert(
+        fn.return_ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy));
 }
 
 int main() {
@@ -328,7 +354,10 @@ int main() {
     test_fn_str_return();
     test_fn_ref_return_rejected();
     test_runtime_fn_preserves_runtime_markers();
+    test_runtime_fn_return_uses_runtime_sugar();
+    test_runtime_return_annotation_accepts_plain_value();
     test_runtime_return_type_mismatch_rejected();
+    test_runtime_main_return_allowed();
     test_duplicate_function_name_error();
     test_item_order();
     test_return_type_mismatch();

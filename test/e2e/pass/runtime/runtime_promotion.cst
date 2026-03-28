@@ -1,0 +1,13 @@
+runtime fn source() -> num { 41 }
+
+fn take(value: runtime num) -> runtime num { value }
+
+fn main() {
+    let explicit: runtime num = 1;
+    let from_runtime: runtime num = source();
+    let promoted: runtime num = take(2);
+
+    let _ = explicit;
+    let _ = from_runtime;
+    let _ = promoted;
+}

@@ -82,8 +82,11 @@ Cicest uses Rust-like type and value namespaces:
 - Type namespace: `struct`, `enum`, `extern struct`
 - Value namespace: `fn`, `runtime fn`, `extern fn`, `runtime extern fn`
 
-The `runtime` keyword does not create a separate namespace. It is an inert
-modifier on function declarations today.
+The `runtime` keyword does not create a separate namespace. It is a
+surface-syntax modifier on function declarations: `runtime fn`
+and `runtime extern ... fn` still live in the same value namespace as plain
+functions, and they sugar-coat a `runtime` return type rather than introducing
+a separate callable category.
 
 Imported names enter the same namespaces as local declarations. Because of
 that:

@@ -293,13 +293,89 @@ struct LowerCtx {
 
 // ─── Type compatibility ──────────────────────────────────────────────────────
 
+/// Returns true when two types share the same non-`runtime` shape.
+[[nodiscard]] inline bool same_type_shape(const tyir::Ty& lhs, const tyir::Ty& rhs) {
+    return lhs.same_shape_as(rhs);
+}
+
 /// Returns true when `actual` may appear where `expected` is required.
 ///
-/// `Never` (bottom type) is compatible with any expected type.
+/// `Never` (bottom type) is compatible with any expected type.  Outside of
+/// `Never`, the only implicit conversion is `T -> runtime T`, applied
+/// structurally to the type tree.
 [[nodiscard]] inline bool compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
     if (actual.is_never())
         return true;
-    return actual == expected;
+    if (!same_type_shape(actual, expected))
+        return false;
+    if (actual.is_runtime && !expected.is_runtime)
+        return false;
+    if (actual.kind != tyir::TyKind::Ref)
+        return true;
+    if (actual.pointee == nullptr || expected.pointee == nullptr)
+        return actual.pointee == expected.pointee;
+    return compatible(*actual.pointee, *expected.pointee);
+}
+
+/// Returns true when `actual` matches the structural shape expected by an
+/// ordinary expression operator or condition.
+///
+/// Unlike `compatible`, this ignores the `runtime` qualifier and therefore
+/// does not permit expression checks to double as coercion sites.
+[[nodiscard]] inline bool matches_type_shape(const tyir::Ty& actual, const tyir::Ty& expected) {
+    return actual.is_never() || same_type_shape(actual, expected);
+}
+
+/// Returns the least common supertype of `lhs` and `rhs`, if one exists.
+///
+/// The runtime qualifier joins by promotion: mixing `T` with `runtime T`
+/// yields `runtime T`.
+[[nodiscard]] inline std::optional<tyir::Ty> common_type(const tyir::Ty& lhs, const tyir::Ty& rhs) {
+    if (lhs.is_never())
+        return rhs;
+    if (rhs.is_never())
+        return lhs;
+    if (!same_type_shape(lhs, rhs))
+        return std::nullopt;
+
+    tyir::Ty joined = lhs;
+    joined.is_runtime = lhs.is_runtime || rhs.is_runtime;
+    if (!joined.display_name.is_valid())
+        joined.display_name = rhs.display_name;
+
+    if (joined.kind == tyir::TyKind::Ref) {
+        if (lhs.pointee == nullptr || rhs.pointee == nullptr) {
+            if (lhs.pointee != rhs.pointee)
+                return std::nullopt;
+        } else {
+            auto pointee = common_type(*lhs.pointee, *rhs.pointee);
+            if (!pointee.has_value())
+                return std::nullopt;
+            joined.pointee = std::make_shared<tyir::Ty>(std::move(*pointee));
+        }
+    }
+
+    return joined;
+}
+
+[[nodiscard]] inline tyir::Ty unary_result_type(const tyir::Ty& operand, tyir::Ty result_shape) {
+    if (operand.is_never())
+        return tyir::ty::never();
+    result_shape.is_runtime = operand.is_runtime;
+    return result_shape;
+}
+
+[[nodiscard]] inline tyir::Ty
+    binary_result_type(const tyir::Ty& lhs, const tyir::Ty& rhs, tyir::Ty result_shape) {
+    if (lhs.is_never() || rhs.is_never())
+        return tyir::ty::never();
+    result_shape.is_runtime = lhs.is_runtime || rhs.is_runtime;
+    return result_shape;
+}
+
+[[nodiscard]] inline tyir::Ty propagate_runtime_tag(tyir::Ty ty, bool inherited_runtime) {
+    ty.is_runtime = ty.is_runtime || inherited_runtime;
+    return ty;
 }
 
 // ─── Error helpers ────────────────────────────────────────────────────────────
@@ -528,18 +604,20 @@ struct LoweredPlace {
 
 [[nodiscard]] inline std::expected<FnSignature, LowerError> resolve_fn_signature(
     const std::vector<ast::Param>& params, const std::optional<ast::TypeRef>& return_type,
-    cstc::span::SourceSpan span, const TypeEnv& env) {
+    cstc::span::SourceSpan span, const TypeEnv& env, bool is_runtime) {
     FnSignature sig;
     sig.span = span;
     if (return_type.has_value()) {
         auto t = lower_type(*return_type, env, span);
         if (!t)
             return std::unexpected(std::move(t.error()));
+        if (is_runtime)
+            t->is_runtime = true;
         if (t->is_ref())
             return make_error(span, "reference return types are not supported");
         sig.return_ty = *t;
     } else {
-        sig.return_ty = tyir::ty::unit();
+        sig.return_ty = tyir::ty::unit(is_runtime);
     }
     for (const ast::Param& p : params) {
         auto pt = lower_type(p.type, env, p.span);
@@ -770,14 +848,12 @@ inline std::expected<void, LowerError> merge_loop_break_types(
 
         const tyir::Ty& existing = *target[i].break_ty;
         const tyir::Ty& incoming = *source[i].break_ty;
-        if (existing.is_never()) {
-            target[i].break_ty = incoming;
-            continue;
-        }
-        if (!compatible(incoming, existing))
+        const auto joined = common_type(existing, incoming);
+        if (!joined.has_value())
             return make_error(
                 span, "'break' value type mismatch: expected '" + existing.display() + "', found '"
                           + incoming.display() + "'");
+        target[i].break_ty = *joined;
     }
     return {};
 }
@@ -824,13 +900,15 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                     return make_error(
                         expr->span, "no field '" + std::string(node.field.as_str())
                                         + "' in struct '" + base->expr->ty.display() + "'");
+                tyir::Ty lowered_field_ty =
+                    propagate_runtime_tag(*field_ty, base->expr->ty.is_runtime);
 
                 return LoweredPlace{
                     tyir::make_ty_expr(
                         expr->span,
                         tyir::TyFieldAccess{
                             std::move(base->expr), node.field, tyir::ValueUseKind::Borrow},
-                        *field_ty),
+                        lowered_field_ty),
                     base->owner_local,
                 };
             } else {
@@ -1060,17 +1138,17 @@ inline std::expected<void, LowerError> merge_loop_break_types(
 
                     tyir::Ty result_ty;
                     if (node.op == ast::UnaryOp::Negate) {
-                        if (!compatible(rhs->expr->ty, tyir::ty::num()))
+                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
                             return make_error(
                                 expr->span, "unary '-' requires 'num', found '"
                                                 + rhs->expr->ty.display() + "'");
-                        result_ty = tyir::ty::num();
+                        result_ty = unary_result_type(rhs->expr->ty, tyir::ty::num());
                     } else {
-                        if (!compatible(rhs->expr->ty, tyir::ty::bool_()))
+                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_()))
                             return make_error(
                                 expr->span, "unary '!' requires 'bool', found '"
                                                 + rhs->expr->ty.display() + "'");
-                        result_ty = tyir::ty::bool_();
+                        result_ty = unary_result_type(rhs->expr->ty, tyir::ty::bool_());
                     }
 
                     auto lowered = LoweredExpr{
@@ -1102,57 +1180,56 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                 case Op::Mul:
                 case Op::Div:
                 case Op::Mod:
-                    if (!compatible(lhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!compatible(rhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on right, found '"
                                             + rhs->expr->ty.display() + "'");
-                    result_ty = tyir::ty::num();
+                    result_ty = binary_result_type(lhs->expr->ty, rhs->expr->ty, tyir::ty::num());
                     break;
 
                 case Op::Lt:
                 case Op::Le:
                 case Op::Gt:
                 case Op::Ge:
-                    if (!compatible(lhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!compatible(rhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on right, found '"
                                             + rhs->expr->ty.display() + "'");
-                    result_ty = tyir::ty::bool_();
+                    result_ty = binary_result_type(lhs->expr->ty, rhs->expr->ty, tyir::ty::bool_());
                     break;
 
                 case Op::Eq:
                 case Op::Ne: {
-                    // Both operands must have the same type (Never unifies)
                     const tyir::Ty& lty = lhs->expr->ty;
                     const tyir::Ty& rty = rhs->expr->ty;
-                    if (!lty.is_never() && !rty.is_never() && lty != rty)
+                    if (!common_type(lty, rty).has_value())
                         return make_error(
                             expr->span,
                             "equality operator requires same types on both sides, found '"
                                 + lty.display() + "' and '" + rty.display() + "'");
-                    result_ty = tyir::ty::bool_();
+                    result_ty = binary_result_type(lty, rty, tyir::ty::bool_());
                     break;
                 }
 
                 case Op::And:
                 case Op::Or:
-                    if (!compatible(lhs->expr->ty, tyir::ty::bool_()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::bool_()))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!compatible(rhs->expr->ty, tyir::ty::bool_()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_()))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on right, found '"
                                             + rhs->expr->ty.display() + "'");
-                    result_ty = tyir::ty::bool_();
+                    result_ty = binary_result_type(lhs->expr->ty, rhs->expr->ty, tyir::ty::bool_());
                     break;
                 }
                 auto lowered = LoweredExpr{
@@ -1261,7 +1338,7 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                 auto cond = lower_expr(node.condition, ctx);
                 if (!cond)
                     return std::unexpected(std::move(cond.error()));
-                if (!compatible(cond->expr->ty, tyir::ty::bool_()))
+                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_()))
                     return make_error(
                         node.condition->span, "'if' condition must have type 'bool', found '"
                                                   + cond->expr->ty.display() + "'");
@@ -1284,16 +1361,14 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                     if (!else_val)
                         return std::unexpected(std::move(else_val.error()));
 
-                    // Unify then / else types (Never unifies with anything)
                     const tyir::Ty& else_ty = else_val->expr->ty;
-                    if (!compatible(then_ptr->ty, else_ty) && !compatible(else_ty, then_ptr->ty))
+                    const auto joined_ty = common_type(then_ptr->ty, else_ty);
+                    if (!joined_ty.has_value())
                         return make_error(
                             expr->span, "'if' then-branch has type '" + then_ptr->ty.display()
                                             + "' but else-branch has type '" + else_ty.display()
                                             + "'");
-
-                    if (then_ptr->ty.is_never())
-                        result_ty = else_ty;
+                    result_ty = *joined_ty;
 
                     if (auto merged =
                             merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
@@ -1373,7 +1448,7 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                     ctx.pop_loop();
                     return std::unexpected(std::move(cond.error()));
                 }
-                if (!compatible(cond->expr->ty, tyir::ty::bool_())) {
+                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
                     ctx.pop_loop();
                     return make_error(
                         node.condition->span, "'while' condition must have type 'bool', found '"
@@ -1473,7 +1548,7 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                         ctx.scope.pop();
                         return std::unexpected(std::move(cond.error()));
                     }
-                    if (!compatible(cond->expr->ty, tyir::ty::bool_())) {
+                    if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
                         ctx.pop_loop();
                         ctx.scope.pop();
                         return make_error(
@@ -1550,16 +1625,15 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                     if (!loop_ctx.break_ty.has_value()) {
                         loop_ctx.break_ty = val_ty;
                     } else {
-                        // Unify: Never is compatible with anything
                         const tyir::Ty& prev = *loop_ctx.break_ty;
-                        if (prev.is_never()) {
-                            loop_ctx.break_ty = val_ty;
-                        } else if (!compatible(val_ty, prev)) {
+                        const auto joined = common_type(prev, val_ty);
+                        if (!joined.has_value()) {
                             return make_error(
                                 expr->span, "'break' value type mismatch: expected '"
                                                 + prev.display() + "', found '" + val_ty.display()
                                                 + "'");
                         }
+                        loop_ctx.break_ty = *joined;
                     }
 
                     release_temp_borrows(ctx, val->temp_borrows);
@@ -1579,13 +1653,13 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                         loop_ctx.break_ty = tyir::ty::unit();
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
-                        if (prev.is_never()) {
-                            loop_ctx.break_ty = tyir::ty::unit();
-                        } else if (!compatible(tyir::ty::unit(), prev)) {
+                        const auto joined = common_type(prev, tyir::ty::unit());
+                        if (!joined.has_value()) {
                             return make_error(
                                 expr->span, "'break' value type mismatch: expected '"
                                                 + prev.display() + "', found 'Unit'");
                         }
+                        loop_ctx.break_ty = *joined;
                     }
                 }
                 // Bare break in while/for: no type tracking needed
@@ -1686,8 +1760,8 @@ inline std::expected<void, LowerError> merge_loop_break_types(
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
 
-    return tyir::TyFnDecl{fn.name, std::move(ty_params), sig.return_ty, std::move(body_ptr),
-                          fn.span, fn.is_runtime};
+    return tyir::TyFnDecl{
+        fn.name, std::move(ty_params), sig.return_ty, std::move(body_ptr), fn.span};
 }
 
 } // namespace detail
@@ -1765,7 +1839,8 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
     // ── Phase 3: resolve function signatures ─────────────────────────────
     for (const ast::Item& item : program.items) {
         if (const auto* fn = std::get_if<ast::FnDecl>(&item)) {
-            auto sig = detail::resolve_fn_signature(fn->params, fn->return_type, fn->span, env);
+            auto sig = detail::resolve_fn_signature(
+                fn->params, fn->return_type, fn->span, env, fn->is_runtime);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
@@ -1781,7 +1856,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
                 return std::unexpected(std::move(link_name.error()));
             // Build a signature from the extern fn declaration.
             auto sig = detail::resolve_fn_signature(
-                ext_fn->params, ext_fn->return_type, ext_fn->span, env);
+                ext_fn->params, ext_fn->return_type, ext_fn->span, env, ext_fn->is_runtime);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(ext_fn->name, std::move(*sig));
@@ -1840,7 +1915,6 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             ty_decl.link_name = *link_name;
             ty_decl.return_ty = sig.return_ty;
             ty_decl.span = ext_fn->span;
-            ty_decl.is_runtime = ext_fn->is_runtime;
             for (std::size_t i = 0; i < ext_fn->params.size(); ++i) {
                 ty_decl.params.push_back(
                     tyir::TyParam{

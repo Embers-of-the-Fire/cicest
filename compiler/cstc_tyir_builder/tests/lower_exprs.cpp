@@ -173,6 +173,77 @@ static void test_logical() {
     }
 }
 
+static void test_runtime_argument_promotion() {
+    const auto prog = must_lower(
+        "fn main() { let value: runtime num = take(1); }"
+        "fn take(value: runtime num) -> runtime num { value }");
+    const auto& stmt = std::get<TyLetStmt>(first_fn(prog).body->stmts[0]);
+    assert(stmt.ty == ty::num(true));
+    assert(stmt.init->ty == ty::num(true));
+}
+
+static void test_runtime_argument_demotion_error() {
+    must_fail_with_message(
+        "runtime fn source() -> num { 1 }"
+        "fn sink(value: num) -> num { value }"
+        "fn main() -> num { sink(source()) }",
+        "argument 1 of 'sink': expected 'num', found 'runtime num'");
+}
+
+static void test_nominal_argument_mismatch_error() {
+    must_fail_with_message(
+        "enum Left { Value }"
+        "enum Right { Value }"
+        "fn sink(value: Left) -> Left { value }"
+        "fn call() -> Left { sink(Right::Value) }",
+        "argument 1 of 'sink': expected 'Left', found 'Right'");
+}
+
+static void test_nominal_ref_argument_mismatch_error() {
+    must_fail_with_message(
+        "enum Left { Value }"
+        "enum Right { Value }"
+        "fn sink(value: &Left) { }"
+        "fn main() { let value: Right = Right::Value; sink(&value); }",
+        "argument 1 of 'sink': expected '&Left', found '&Right'");
+}
+
+static void test_runtime_arithmetic_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime num { source() + 1 } runtime fn source() -> num { 1 }");
+    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
+}
+
+static void test_runtime_arithmetic_prevents_demotion() {
+    must_fail_with_message(
+        "fn f() -> num { source() + 1 } runtime fn source() -> num { 1 }",
+        "body has type 'runtime num' but return type is 'num'");
+}
+
+static void test_runtime_comparison_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime bool { source() < 2 } runtime fn source() -> num { 1 }");
+    assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
+}
+
+static void test_runtime_equality_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime bool { source() == 1 } runtime fn source() -> num { 1 }");
+    assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
+}
+
+static void test_runtime_logical_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime bool { flag() && true } runtime fn flag() -> bool { true }");
+    assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
+}
+
+static void test_runtime_logical_prevents_demotion() {
+    must_fail_with_message(
+        "fn f() -> bool { flag() && true } runtime fn flag() -> bool { true }",
+        "body has type 'runtime bool' but return type is 'bool'");
+}
+
 // ─── Unary operators ─────────────────────────────────────────────────────────
 
 static void test_unary_negate() {
@@ -183,6 +254,18 @@ static void test_unary_negate() {
 static void test_unary_not() {
     const auto prog = must_lower("fn f(b: bool) -> bool { !b }");
     assert((*first_fn(prog).body->tail)->ty == ty::bool_());
+}
+
+static void test_runtime_unary_negate_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime num { -source() } runtime fn source() -> num { 1 }");
+    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
+}
+
+static void test_runtime_unary_not_preserves_runtime_type() {
+    const auto prog =
+        must_lower("fn f() -> runtime bool { !flag() } runtime fn flag() -> bool { true }");
+    assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
 }
 
 static void test_unary_type_errors() {
@@ -219,6 +302,35 @@ static void test_if_else_both_bare_return_is_never() {
 
 static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if x { } }"); }
 
+static void test_runtime_if_condition_accepted() {
+    const auto prog = must_lower(
+        "fn f() -> num { if flag() { 1 } else { 2 } } runtime fn flag() -> bool { true }");
+    assert((*first_fn(prog).body->tail)->ty == ty::num());
+}
+
+static void test_if_else_runtime_join_produces_runtime_type() {
+    const auto prog = must_lower(
+        "fn choose(flag: bool) -> runtime num { if flag { 1 } else { source() } }"
+        "runtime fn source() -> num { 2 }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num(true));
+}
+
+static void test_if_else_rejects_distinct_nominal_types() {
+    must_fail_with_message(
+        "enum Left { Value }"
+        "enum Right { Value }"
+        "fn choose(flag: bool) -> Left { if flag { Left::Value } else { Right::Value } }",
+        "'if' then-branch has type 'Left' but else-branch has type 'Right'");
+}
+
+static void test_if_else_runtime_join_prevents_demotion() {
+    must_fail_with_message(
+        "fn choose(flag: bool) -> num { if flag { 1 } else { source() } }"
+        "runtime fn source() -> num { 2 }",
+        "body has type 'runtime num' but return type is 'num'");
+}
+
 // ─── Control flow ─────────────────────────────────────────────────────────────
 
 static void test_loop_is_unit() {
@@ -240,6 +352,14 @@ static void test_while() {
     assert(while_expr->ty == ty::unit());
 }
 
+static void test_runtime_while_condition_accepted() {
+    const auto prog =
+        must_lower("fn f() { while flag() { break; } } runtime fn flag() -> bool { true }");
+    const auto& while_expr = *first_fn(prog).body->tail;
+    assert(std::holds_alternative<TyWhile>(while_expr->node));
+    assert(while_expr->ty == ty::unit());
+}
+
 static void test_for_loop() {
     const auto prog = must_lower("fn f() { for (let i: num = 0; i < 10; i + 1) { } }");
     const auto& fn_body = *first_fn(prog).body;
@@ -254,6 +374,14 @@ static void test_for_loop() {
     assert(for_node.init->ty == ty::num());
     assert(for_node.condition.has_value());
     assert(for_node.step.has_value());
+}
+
+static void test_runtime_for_condition_accepted() {
+    const auto prog =
+        must_lower("fn f() { for (; flag(); ) { break; } } runtime fn flag() -> bool { true }");
+    const auto& for_expr = *first_fn(prog).body->tail;
+    assert(std::holds_alternative<TyFor>(for_expr->node));
+    assert(for_expr->ty == ty::unit());
 }
 
 static void test_break_and_continue_are_never() {
@@ -334,6 +462,29 @@ static void test_loop_break_bare_vs_value_mismatch_error() {
     must_fail_with_message(
         "fn f(b: bool) { loop { if b { break 42; } else { break; } } }",
         "'break' value type mismatch");
+}
+
+static void test_loop_break_runtime_join_produces_runtime_type() {
+    const auto prog = must_lower(
+        "fn choose(flag: bool) -> runtime num {"
+        "  loop {"
+        "    if flag { break 1; } else { break source(); }"
+        "  }"
+        "}"
+        "runtime fn source() -> num { 2 }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num(true));
+}
+
+static void test_loop_break_runtime_join_prevents_demotion() {
+    must_fail_with_message(
+        "fn choose(flag: bool) -> num {"
+        "  loop {"
+        "    if flag { break 1; } else { break source(); }"
+        "  }"
+        "}"
+        "runtime fn source() -> num { 2 }",
+        "body has type 'runtime num' but return type is 'num'");
 }
 
 // ─── Break/continue outside loop ─────────────────────────────────────────────
@@ -658,7 +809,7 @@ static void test_enum_variant_ref() {
         "enum Color { Red, Green }"
         "fn f() -> Color { Color::Red }");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::named(Symbol::intern("Color")));
+    assert(tail->ty == ty::named(Symbol::intern("Color"), kInvalidSymbol, ValueSemantics::Copy));
     const auto& ref = std::get<EnumVariantRef>(tail->node);
     assert(ref.enum_name == Symbol::intern("Color"));
     assert(ref.variant_name == Symbol::intern("Red"));
@@ -675,7 +826,7 @@ static void test_struct_init() {
         "struct Point { x: num, y: num }"
         "fn origin() -> Point { Point { x: 0, y: 0 } }");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::named(Symbol::intern("Point")));
+    assert(tail->ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy));
     assert(std::holds_alternative<TyStructInit>(tail->node));
 }
 
@@ -715,7 +866,17 @@ static void test_field_access() {
     assert(tail->ty == ty::num());
     const auto& fa = std::get<TyFieldAccess>(tail->node);
     assert(fa.field == Symbol::intern("x"));
-    assert(fa.base->ty == ty::named(Symbol::intern("Point")));
+    assert(fa.base->ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy));
+}
+
+static void test_runtime_field_access_preserves_runtime_tag() {
+    const auto prog = must_lower(
+        "struct Point { x: num, y: num }"
+        "fn get_x(p: runtime Point) -> runtime num { p.x }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num(true));
+    const auto& fa = std::get<TyFieldAccess>(tail->node);
+    assert(fa.base->ty.is_runtime);
 }
 
 static void test_field_access_unknown_field_error() {
@@ -738,6 +899,19 @@ static void test_borrow_local_binding() {
     const auto& borrow = std::get<TyBorrow>(stmt.init->node);
     assert(std::holds_alternative<LocalRef>(borrow.rhs->node));
     assert(std::get<LocalRef>(borrow.rhs->node).use_kind == ValueUseKind::Borrow);
+}
+
+static void test_borrow_runtime_field_binding() {
+    const auto prog = must_lower(
+        "struct Point { x: num }"
+        "fn f(p: runtime Point) { let r: &runtime num = &p.x; }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.stmts.size() == 1);
+    const auto& stmt = std::get<TyLetStmt>(body.stmts[0]);
+    assert(stmt.ty == ty::ref(ty::num(true)));
+    assert(std::holds_alternative<TyBorrow>(stmt.init->node));
+    const auto& borrow = std::get<TyBorrow>(stmt.init->node);
+    assert(borrow.rhs->ty == ty::num(true));
 }
 
 static void test_move_after_move_error() {
@@ -785,16 +959,34 @@ int main() {
     test_equality();
     test_equality_type_mismatch_error();
     test_logical();
+    test_runtime_argument_promotion();
+    test_runtime_argument_demotion_error();
+    test_nominal_argument_mismatch_error();
+    test_nominal_ref_argument_mismatch_error();
+    test_runtime_arithmetic_preserves_runtime_type();
+    test_runtime_arithmetic_prevents_demotion();
+    test_runtime_comparison_preserves_runtime_type();
+    test_runtime_equality_preserves_runtime_type();
+    test_runtime_logical_preserves_runtime_type();
+    test_runtime_logical_prevents_demotion();
     test_unary_negate();
     test_unary_not();
+    test_runtime_unary_negate_preserves_runtime_type();
+    test_runtime_unary_not_preserves_runtime_type();
     test_unary_type_errors();
     test_if_no_else();
     test_if_else();
     test_if_else_both_bare_return_is_never();
     test_if_condition_must_be_bool();
+    test_runtime_if_condition_accepted();
+    test_if_else_runtime_join_produces_runtime_type();
+    test_if_else_rejects_distinct_nominal_types();
+    test_if_else_runtime_join_prevents_demotion();
     test_loop_is_unit();
     test_while();
+    test_runtime_while_condition_accepted();
     test_for_loop();
+    test_runtime_for_condition_accepted();
     test_break_and_continue_are_never();
     test_return_is_never();
 
@@ -807,6 +999,8 @@ int main() {
     test_loop_multiple_breaks_same_type();
     test_loop_break_type_mismatch_error();
     test_loop_break_bare_vs_value_mismatch_error();
+    test_loop_break_runtime_join_produces_runtime_type();
+    test_loop_break_runtime_join_prevents_demotion();
 
     // Break/continue outside loop
     test_break_outside_loop_error();
@@ -863,8 +1057,10 @@ int main() {
     test_struct_init_duplicate_field_error();
     test_struct_init_missing_field_error();
     test_field_access();
+    test_runtime_field_access_preserves_runtime_tag();
     test_field_access_unknown_field_error();
     test_borrow_local_binding();
+    test_borrow_runtime_field_binding();
     test_move_after_move_error();
     test_move_while_borrowed_error();
     test_copy_ref_binding_keeps_borrow();

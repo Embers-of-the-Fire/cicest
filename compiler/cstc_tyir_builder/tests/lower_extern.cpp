@@ -68,11 +68,19 @@ static void test_runtime_extern_fn_preserves_runtime_markers() {
     const auto prog = must_lower(R"(runtime extern "lang" fn print(value: &runtime str);)");
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
-    assert(decl.is_runtime);
     assert(decl.params.size() == 1);
     assert(decl.params[0].ty.is_ref());
     assert(decl.params[0].ty.pointee != nullptr);
     assert(decl.params[0].ty.pointee->is_runtime);
+    assert(decl.return_ty == ty::unit(true));
+}
+
+static void test_runtime_extern_fn_return_uses_runtime_sugar() {
+    SymbolSession session;
+    const auto prog = must_lower(R"(runtime extern "lang" fn to_num(value: &str) -> num;)");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
+    assert(decl.return_ty == ty::num(true));
 }
 
 static void test_extern_fn_multiple_params() {
@@ -306,6 +314,7 @@ int main() {
     test_extern_fn_basic();
     test_extern_fn_with_return();
     test_runtime_extern_fn_preserves_runtime_markers();
+    test_runtime_extern_fn_return_uses_runtime_sugar();
     test_extern_fn_multiple_params();
     test_extern_fn_lang_attribute_overrides_link_name();
     test_extern_fn_callable();

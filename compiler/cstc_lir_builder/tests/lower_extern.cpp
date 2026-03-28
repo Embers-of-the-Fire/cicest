@@ -53,11 +53,11 @@ static void test_runtime_extern_fn_preserved() {
     const auto prog = must_lower(R"(runtime extern "lang" fn print(value: &runtime str);)");
     assert(prog.extern_fns.size() == 1);
     const auto& ext = prog.extern_fns[0];
-    assert(ext.is_runtime);
     assert(ext.params.size() == 1);
     assert(ext.params[0].ty.is_ref());
     assert(ext.params[0].ty.pointee != nullptr);
     assert(ext.params[0].ty.pointee->is_runtime);
+    assert(ext.return_ty == cstc::tyir::ty::unit(true));
 }
 
 static void test_extern_fn_multiple_params() {

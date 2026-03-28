@@ -59,6 +59,17 @@ The `Never` (display: `!`) type is produced by `break`, `continue`, and
 semantics), so `break` / `return` can appear in any expression position.
 It can also be used as an explicit return type annotation: `fn f() -> ! { loop {} }`.
 
+### Runtime-tagged types
+
+`runtime T` is modeled as a runtime-tagged form of `T`, close in spirit to a
+wrapper like `Runtime<T>`. The lowering pass preserves the tag on the resolved
+`tyir::Ty`, allows implicit promotion from `T` to `runtime T`, rejects the
+reverse demotion, and promotes joins such as `if`/`loop` breaks to the tagged
+form when either side is tagged.
+
+Surface syntax sugar such as `runtime fn` and `runtime extern ... fn` is
+normalized into a runtime-tagged return type during lowering.
+
 ### Main function constraints
 
 The `main` function, if present, is restricted to return one of:
