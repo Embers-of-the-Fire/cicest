@@ -204,10 +204,11 @@ static void test_runtime_return_type_mismatch_rejected() {
         "body has type 'runtime Job' but return type is 'Job'");
 }
 
-static void test_runtime_main_return_rejected() {
-    must_fail_with_message(
-        "runtime fn main() -> num { 0 }",
-        "'main' function must return 'Unit', 'num', or '!' (never), found 'runtime num'");
+static void test_runtime_main_return_allowed() {
+    const auto prog = must_lower("runtime fn main() -> num { 0 }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::num(true));
+    assert(fn.body->ty == ty::num());
 }
 
 static void test_duplicate_function_name_error() {
@@ -353,7 +354,7 @@ int main() {
     test_runtime_fn_return_uses_runtime_sugar();
     test_runtime_return_annotation_accepts_plain_value();
     test_runtime_return_type_mismatch_rejected();
-    test_runtime_main_return_rejected();
+    test_runtime_main_return_allowed();
     test_duplicate_function_name_error();
     test_item_order();
     test_return_type_mismatch();

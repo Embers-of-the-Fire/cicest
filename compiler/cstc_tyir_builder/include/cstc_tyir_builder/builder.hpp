@@ -1866,9 +1866,8 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
         const auto it = env.fn_signatures.find(main_sym);
         if (it != env.fn_signatures.end()) {
             const auto& ret = it->second.return_ty;
-            if (ret.is_runtime
-                || (ret.kind != tyir::TyKind::Unit && ret.kind != tyir::TyKind::Num
-                    && ret.kind != tyir::TyKind::Never)) {
+            if (ret.kind != tyir::TyKind::Unit && ret.kind != tyir::TyKind::Num
+                && ret.kind != tyir::TyKind::Never) {
                 return detail::make_error(
                     it->second.span,
                     "'main' function must return 'Unit', 'num', or '!' (never), found '"
