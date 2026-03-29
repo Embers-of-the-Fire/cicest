@@ -1,5 +1,6 @@
 #include <cassert>
 #include <cstdlib>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -193,6 +194,28 @@ fn main() {
     }
 }
 
+static void test_borrowed_str_free_intrinsic_is_noop() {
+    SymbolSession session;
+    cstc::tyir_interp::detail::ProgramView program;
+    cstc::tyir_interp::detail::EvalContext ctx{
+        program,
+        {},
+        cstc::tyir_interp::detail::kDefaultEvalStepBudget,
+        cstc::tyir_interp::detail::kDefaultEvalCallDepth,
+    };
+    TyExternFnDecl decl;
+    decl.name = Symbol::intern("str_free");
+    decl.link_name = Symbol::intern("cstc_std_str_free");
+
+    auto result = cstc::tyir_interp::detail::eval_lang_intrinsic(
+        decl,
+        {cstc::tyir_interp::detail::make_string(
+            "hello", cstc::tyir_interp::detail::Value::StringOwnership::BorrowedLiteral)},
+        ctx, {});
+    assert(result.has_value());
+    assert((*result)->kind == cstc::tyir_interp::detail::Value::Kind::Unit);
+}
+
 static void test_runtime_intrinsic_call_is_preserved() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -298,6 +321,19 @@ fn main() {
     assert(error.message.find("compile-time assert_eq failed") != std::string::npos);
     assert(error.stack.size() == 1);
     assert(error.stack[0].fn_name == Symbol::intern("check"));
+}
+
+static void test_assert_eq_requires_exact_runtime_equality() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+extern "lang" fn assert_eq(a: num, b: num);
+
+fn main() {
+    assert_eq(1, 1.0000000005);
+}
+)");
+
+    assert(error.message.find("compile-time assert_eq failed") != std::string::npos);
 }
 
 static void test_recursive_const_eval_reports_call_depth_error() {
@@ -478,6 +514,12 @@ fn cmp(x: num, y: num) -> bool {
     assert(folded.error().message.find("numeric comparison operands") != std::string::npos);
 }
 
+static void test_numeric_equality_treats_nan_as_not_equal() {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    assert(!cstc::tyir_interp::detail::values_equal(
+        cstc::tyir_interp::detail::make_num(nan), cstc::tyir_interp::detail::make_num(nan)));
+}
+
 int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
@@ -486,6 +528,7 @@ int main() {
     test_move_only_return_materializes_owned_string();
     test_string_intrinsics_fold_to_owned_string();
     test_assert_intrinsics_fold_to_unit();
+    test_borrowed_str_free_intrinsic_is_noop();
     test_runtime_intrinsic_call_is_preserved();
     test_dead_if_body_is_not_folded();
     test_dead_while_body_is_not_folded();
@@ -493,6 +536,7 @@ int main() {
     test_dead_for_still_folds_reachable_init();
     test_reached_assertion_failure_reports_error();
     test_error_stack_records_called_function();
+    test_assert_eq_requires_exact_runtime_equality();
     test_recursive_const_eval_reports_call_depth_error();
     test_infinite_loop_reports_step_budget_error();
     test_infinite_while_reports_step_budget_error();
@@ -502,5 +546,6 @@ int main() {
     test_materialization_mismatch_reports_error();
     test_null_materialization_reports_error();
     test_comparison_requires_numeric_operands();
+    test_numeric_equality_treats_nan_as_not_equal();
     return 0;
 }

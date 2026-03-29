@@ -320,6 +320,8 @@ struct EvalContext {
     return nullptr;
 }
 
+[[nodiscard]] inline bool ordered_num_equal(double lhs, double rhs);
+
 [[nodiscard]] inline bool values_equal(const ValuePtr& lhs, const ValuePtr& rhs) {
     const Value* left = deref_value(lhs);
     const Value* right = deref_value(rhs);
@@ -329,7 +331,7 @@ struct EvalContext {
         return false;
 
     switch (left->kind) {
-    case Value::Kind::Num: return left->num_value == right->num_value;
+    case Value::Kind::Num: return ordered_num_equal(left->num_value, right->num_value);
     case Value::Kind::Bool: return left->bool_value == right->bool_value;
     case Value::Kind::Unit: return true;
     case Value::Kind::String: return left->string_value == right->string_value;
@@ -346,9 +348,8 @@ struct EvalContext {
         }
         return true;
     case Value::Kind::Ref:
-        if (left->referent == nullptr || right->referent == nullptr)
-            return left->referent == right->referent;
-        return values_equal(left->referent, right->referent);
+        assert(false && "deref_value should not leave reference wrappers behind");
+        return false;
     }
     return false;
 }
@@ -366,6 +367,26 @@ struct EvalContext {
 [[nodiscard]] inline std::unexpected<EvalError>
     unsupported_value_error(const EvalContext& ctx, SourceSpan span, std::string_view what) {
     return make_error(ctx, span, "unsupported compile-time value: " + std::string(what));
+}
+
+struct NumericOperands {
+    double lhs = 0.0;
+    double rhs = 0.0;
+};
+
+[[nodiscard]] inline bool ordered_num_equal(double lhs, double rhs) {
+    // Match runtime LLVM ordered float equality: NaN never compares equal, even to itself.
+    return !std::isnan(lhs) && !std::isnan(rhs) && lhs == rhs;
+}
+
+[[nodiscard]] inline std::expected<NumericOperands, EvalError> require_numeric_operands(
+    const Value* lhs, const Value* rhs, const EvalContext& ctx, SourceSpan span,
+    std::string_view what) {
+    if (lhs == nullptr || rhs == nullptr || lhs->kind != Value::Kind::Num
+        || rhs->kind != Value::Kind::Num) {
+        return unsupported_value_error(ctx, span, what);
+    }
+    return NumericOperands{lhs->num_value, rhs->num_value};
 }
 
 [[nodiscard]] inline std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
@@ -406,11 +427,10 @@ struct EvalContext {
     }
 
     if (name == "str_free" || name == "cstc_std_str_free") {
-        const Value* value = deref_value(args[0]);
-        if (value == nullptr || value->kind != Value::Kind::String
-            || value->string_ownership != Value::StringOwnership::Owned) {
-            return make_error(ctx, span, "compile-time 'str_free' requires an owned string");
-        }
+        auto value = unwrap_string(0);
+        if (!value)
+            return std::unexpected(std::move(value.error()));
+        // Runtime str_free only frees owned buffers; borrowed literals are a no-op.
         return make_unit();
     }
 
@@ -426,16 +446,15 @@ struct EvalContext {
     if (name == "assert_eq" || name == "cstc_std_assert_eq") {
         const Value* lhs = deref_value(args[0]);
         const Value* rhs = deref_value(args[1]);
-        if (lhs == nullptr || rhs == nullptr || lhs->kind != Value::Kind::Num
-            || rhs->kind != Value::Kind::Num) {
-            return unsupported_value_error(ctx, span, "numeric equality assertion arguments");
-        }
-        constexpr double epsilon = 1e-9;
-        if (std::fabs(lhs->num_value - rhs->num_value) > epsilon) {
+        auto operands =
+            require_numeric_operands(lhs, rhs, ctx, span, "numeric equality assertion arguments");
+        if (!operands)
+            return std::unexpected(std::move(operands.error()));
+        if (!ordered_num_equal(operands->lhs, operands->rhs)) {
             return make_error(
                 ctx, span,
-                "compile-time assert_eq failed: left=" + format_num(lhs->num_value)
-                    + ", right=" + format_num(rhs->num_value));
+                "compile-time assert_eq failed: left=" + format_num(operands->lhs)
+                    + ", right=" + format_num(operands->rhs));
         }
         return make_unit();
     }
@@ -569,55 +588,44 @@ struct EvalContext {
                 case Op::Mul:
                 case Op::Div:
                 case Op::Mod:
-                    if (left == nullptr || right == nullptr || left->kind != Value::Kind::Num
-                        || right->kind != Value::Kind::Num) {
-                        return unsupported_value_error(ctx, expr->span, "numeric binary operands");
-                    }
-                    if ((node.op == Op::Div || node.op == Op::Mod) && right->num_value == 0.0)
+                case Op::Lt:
+                case Op::Le:
+                case Op::Gt:
+                case Op::Ge: {
+                    const bool comparison = node.op == Op::Lt || node.op == Op::Le
+                                         || node.op == Op::Gt || node.op == Op::Ge;
+                    auto operands = require_numeric_operands(
+                        left, right, ctx, expr->span,
+                        comparison ? "numeric comparison operands" : "numeric binary operands");
+                    if (!operands)
+                        return std::unexpected(std::move(operands.error()));
+                    if ((node.op == Op::Div || node.op == Op::Mod) && operands->rhs == 0.0)
                         return make_error(ctx, expr->span, "division by zero during const-eval");
+
                     switch (node.op) {
                     case Op::Add:
-                        return EvalState::from_value(make_num(left->num_value + right->num_value));
+                        return EvalState::from_value(make_num(operands->lhs + operands->rhs));
                     case Op::Sub:
-                        return EvalState::from_value(make_num(left->num_value - right->num_value));
+                        return EvalState::from_value(make_num(operands->lhs - operands->rhs));
                     case Op::Mul:
-                        return EvalState::from_value(make_num(left->num_value * right->num_value));
+                        return EvalState::from_value(make_num(operands->lhs * operands->rhs));
                     case Op::Div:
-                        return EvalState::from_value(make_num(left->num_value / right->num_value));
+                        return EvalState::from_value(make_num(operands->lhs / operands->rhs));
                     case Op::Mod:
                         return EvalState::from_value(
-                            make_num(std::fmod(left->num_value, right->num_value)));
+                            make_num(std::fmod(operands->lhs, operands->rhs)));
+                    case Op::Lt:
+                        return EvalState::from_value(make_bool(operands->lhs < operands->rhs));
+                    case Op::Le:
+                        return EvalState::from_value(make_bool(operands->lhs <= operands->rhs));
+                    case Op::Gt:
+                        return EvalState::from_value(make_bool(operands->lhs > operands->rhs));
+                    case Op::Ge:
+                        return EvalState::from_value(make_bool(operands->lhs >= operands->rhs));
                     default: break;
                     }
                     break;
-                case Op::Lt:
-                    if (left == nullptr || right == nullptr || left->kind != Value::Kind::Num
-                        || right->kind != Value::Kind::Num) {
-                        return unsupported_value_error(
-                            ctx, expr->span, "numeric comparison operands");
-                    }
-                    return EvalState::from_value(make_bool(left->num_value < right->num_value));
-                case Op::Le:
-                    if (left == nullptr || right == nullptr || left->kind != Value::Kind::Num
-                        || right->kind != Value::Kind::Num) {
-                        return unsupported_value_error(
-                            ctx, expr->span, "numeric comparison operands");
-                    }
-                    return EvalState::from_value(make_bool(left->num_value <= right->num_value));
-                case Op::Gt:
-                    if (left == nullptr || right == nullptr || left->kind != Value::Kind::Num
-                        || right->kind != Value::Kind::Num) {
-                        return unsupported_value_error(
-                            ctx, expr->span, "numeric comparison operands");
-                    }
-                    return EvalState::from_value(make_bool(left->num_value > right->num_value));
-                case Op::Ge:
-                    if (left == nullptr || right == nullptr || left->kind != Value::Kind::Num
-                        || right->kind != Value::Kind::Num) {
-                        return unsupported_value_error(
-                            ctx, expr->span, "numeric comparison operands");
-                    }
-                    return EvalState::from_value(make_bool(left->num_value >= right->num_value));
+                }
                 case Op::Eq:
                     return EvalState::from_value(make_bool(values_equal(lhs->value, rhs->value)));
                 case Op::Ne:

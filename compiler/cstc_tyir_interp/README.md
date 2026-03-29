@@ -23,6 +23,10 @@ const-evaluable subtrees back into TyIR before LIR lowering.
 - Treats runtime-qualified expressions as const-eval barriers.
 - Evaluates supported `extern "lang"` intrinsics inside the interpreter rather
   than reusing the runtime C library.
+- Matches runtime ordered floating-point equality semantics during const-eval,
+  so `NaN` never compares equal, including under `assert_eq`.
+- Treats `str_free` on borrowed strings as a compile-time no-op, matching the
+  runtime ownership check.
 - Returns an `EvalError` with a source span and TyIR call stack when a reached
   const-eval operation fails.
 
