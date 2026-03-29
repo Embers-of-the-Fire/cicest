@@ -1158,6 +1158,93 @@ struct NumericOperands {
 [[nodiscard]] inline std::expected<tyir::TyExprPtr, EvalError>
     fold_expr(const tyir::TyExprPtr& expr, ConstEnv& env, const ProgramView& program);
 
+[[nodiscard]] inline bool expr_can_fallthrough(const tyir::TyExpr& expr);
+
+[[nodiscard]] inline bool stmt_can_fallthrough(const tyir::TyStmt& stmt) {
+    return std::visit(
+        [](const auto& node) {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<Node, tyir::TyLetStmt>)
+                return expr_can_fallthrough(*node.init);
+            else
+                return expr_can_fallthrough(*node.expr);
+        },
+        stmt);
+}
+
+[[nodiscard]] inline bool block_can_fallthrough(const tyir::TyBlock& block);
+
+[[nodiscard]] inline bool expr_can_fallthrough(const tyir::TyExpr& expr) {
+    if (expr.ty.is_never())
+        return false;
+
+    return std::visit(
+        [](const auto& node) {
+            using Node = std::decay_t<decltype(node)>;
+
+            if constexpr (
+                std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
+                || std::is_same_v<Node, tyir::EnumVariantRef>) { // NOLINT(bugprone-branch-clone)
+                return true;
+            } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    if (!expr_can_fallthrough(*field.value))
+                        return false;
+                }
+                return true;
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                return expr_can_fallthrough(*node.rhs);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                return expr_can_fallthrough(*node.lhs) && expr_can_fallthrough(*node.rhs);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                return expr_can_fallthrough(*node.base);
+            } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (!expr_can_fallthrough(*arg))
+                        return false;
+                }
+                return true;
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                return block_can_fallthrough(*node);
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                if (!expr_can_fallthrough(*node.condition))
+                    return false;
+                if (!node.else_branch.has_value())
+                    return true;
+                return block_can_fallthrough(*node.then_block)
+                    || expr_can_fallthrough(**node.else_branch);
+            } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                return true;
+            } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                return expr_can_fallthrough(*node.condition);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                if (node.init.has_value() && !expr_can_fallthrough(*node.init->init))
+                    return false;
+                if (node.condition.has_value() && !expr_can_fallthrough(**node.condition))
+                    return false;
+                return true;
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyContinue>
+                || std::is_same_v<Node, tyir::TyReturn>) {
+                return false;
+            } else {
+                return true;
+            }
+        },
+        expr.node);
+}
+
+[[nodiscard]] inline bool block_can_fallthrough(const tyir::TyBlock& block) {
+    for (const tyir::TyStmt& stmt : block.stmts) {
+        if (!stmt_can_fallthrough(stmt))
+            return false;
+    }
+    if (!block.tail.has_value())
+        return true;
+    return expr_can_fallthrough(**block.tail);
+}
+
 [[nodiscard]] inline std::expected<tyir::TyBlock, EvalError>
     fold_block(const tyir::TyBlock& block, ConstEnv& env, const ProgramView& program) {
     env.push();
@@ -1165,7 +1252,8 @@ struct NumericOperands {
     folded.ty = block.ty;
     folded.span = block.span;
 
-    for (const tyir::TyStmt& stmt : block.stmts) {
+    for (std::size_t index = 0; index < block.stmts.size(); ++index) {
+        const tyir::TyStmt& stmt = block.stmts[index];
         auto folded_stmt = std::visit(
             [&](const auto& node) -> std::expected<tyir::TyStmt, EvalError> {
                 using Node = std::decay_t<decltype(node)>;
@@ -1197,7 +1285,17 @@ struct NumericOperands {
             env.pop();
             return std::unexpected(std::move(folded_stmt.error()));
         }
+        const bool reaches_next_stmt = stmt_can_fallthrough(*folded_stmt);
         folded.stmts.push_back(std::move(*folded_stmt));
+        if (!reaches_next_stmt) {
+            // Preserve the unreachable remainder without folding it.
+            folded.stmts.insert(
+                folded.stmts.end(), block.stmts.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                block.stmts.end());
+            folded.tail = block.tail;
+            env.pop();
+            return folded;
+        }
     }
 
     if (block.tail.has_value()) {

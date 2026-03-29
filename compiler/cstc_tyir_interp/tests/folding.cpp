@@ -58,6 +58,11 @@ static const TyLiteral& require_literal(const TyExprPtr& expr) {
     return std::get<TyLiteral>(expr->node);
 }
 
+static const TyCall& require_call(const TyExprPtr& expr) {
+    assert(std::holds_alternative<TyCall>(expr->node));
+    return std::get<TyCall>(expr->node);
+}
+
 static void test_const_function_call_folds_to_literal() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -347,6 +352,87 @@ fn main() {
 )");
 
     assert(error.message.find("compile-time assertion failed") != std::string::npos);
+}
+
+static void test_dead_stmt_after_return_is_not_folded() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+extern "lang" fn assert(condition: bool);
+
+fn main() -> num {
+    return 1;
+    assert(false);
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    assert(main_fn.body != nullptr);
+    assert(main_fn.body->stmts.size() == 2);
+    assert(!main_fn.body->tail.has_value());
+
+    const auto& return_stmt = std::get<TyExprStmt>(main_fn.body->stmts[0]);
+    assert(std::holds_alternative<TyReturn>(return_stmt.expr->node));
+    const auto& return_expr = std::get<TyReturn>(return_stmt.expr->node);
+    assert(return_expr.value.has_value());
+    const TyLiteral& return_value = require_literal(*return_expr.value);
+    assert(return_value.kind == TyLiteral::Kind::Num);
+    assert(return_value.symbol.as_str() == std::string_view{"1"});
+
+    const auto& dead_stmt = std::get<TyExprStmt>(main_fn.body->stmts[1]);
+    const TyCall& dead_call = require_call(dead_stmt.expr);
+    assert(dead_call.fn_name == Symbol::intern("assert"));
+}
+
+static void test_dead_tail_after_break_is_not_folded() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+extern "lang" fn assert(condition: bool);
+runtime extern "lang" fn keep_running() -> bool;
+
+fn main() {
+    while keep_running() {
+        break;
+        assert(false)
+    }
+}
+)");
+
+    const auto& while_expr = std::get<TyWhile>(require_tail(find_fn(program, "main"))->node);
+    assert(while_expr.body != nullptr);
+    assert(while_expr.body->stmts.size() == 1);
+    assert(while_expr.body->tail.has_value());
+
+    const auto& break_stmt = std::get<TyExprStmt>(while_expr.body->stmts[0]);
+    assert(std::holds_alternative<TyBreak>(break_stmt.expr->node));
+
+    const TyCall& dead_call = require_call(*while_expr.body->tail);
+    assert(dead_call.fn_name == Symbol::intern("assert"));
+}
+
+static void test_dead_tail_after_continue_is_not_folded() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+extern "lang" fn assert(condition: bool);
+runtime extern "lang" fn keep_running() -> bool;
+
+fn main() {
+    while keep_running() {
+        continue;
+        assert(false)
+    }
+}
+)");
+
+    const auto& while_expr = std::get<TyWhile>(require_tail(find_fn(program, "main"))->node);
+    assert(while_expr.body != nullptr);
+    assert(while_expr.body->stmts.size() == 1);
+    assert(while_expr.body->tail.has_value());
+
+    const auto& continue_stmt = std::get<TyExprStmt>(while_expr.body->stmts[0]);
+    assert(std::holds_alternative<TyContinue>(continue_stmt.expr->node));
+
+    const TyCall& dead_call = require_call(*while_expr.body->tail);
+    assert(dead_call.fn_name == Symbol::intern("assert"));
 }
 
 static void test_reached_assertion_failure_reports_error() {
@@ -695,6 +781,9 @@ int main() {
     test_dead_while_body_is_not_folded();
     test_dead_for_body_and_step_are_not_folded();
     test_dead_for_still_folds_reachable_init();
+    test_dead_stmt_after_return_is_not_folded();
+    test_dead_tail_after_break_is_not_folded();
+    test_dead_tail_after_continue_is_not_folded();
     test_reached_assertion_failure_reports_error();
     test_error_stack_records_called_function();
     test_assert_eq_requires_exact_runtime_equality();
