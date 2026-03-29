@@ -958,14 +958,22 @@ struct EvalContext {
 [[nodiscard]] inline std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     const ProgramView& program, const ValuePtr& value, const tyir::Ty& ty, SourceSpan span);
 
+[[nodiscard]] inline std::unexpected<EvalError>
+    materialization_error(SourceSpan span, std::string message) {
+    return std::unexpected(EvalError{span, std::move(message), {}});
+}
+
 [[nodiscard]] inline std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     const ProgramView& program, const ValuePtr& value, const tyir::Ty& ty, SourceSpan span) {
     if (value == nullptr)
-        return tyir::make_ty_expr(span, tyir::TyLiteral{}, tyir::ty::unit());
+        return materialization_error(
+            span, "missing compile-time value while materializing type '" + ty.display() + "'");
 
     if (ty.is_ref()) {
         if (value->kind != Value::Kind::Ref || value->referent == nullptr || ty.pointee == nullptr)
-            return tyir::make_ty_expr(span, tyir::TyLiteral{}, tyir::ty::unit());
+            return materialization_error(
+                span, "mismatched compile-time reference shape while materializing type '"
+                          + ty.display() + "'");
         const Value* referent = value->referent.get();
         if (referent->kind == Value::Kind::String
             && referent->string_ownership == Value::StringOwnership::BorrowedLiteral) {
@@ -987,7 +995,8 @@ struct EvalContext {
 
     const Value* actual = deref_value(value);
     if (actual == nullptr)
-        return tyir::make_ty_expr(span, tyir::TyLiteral{}, tyir::ty::unit());
+        return materialization_error(
+            span, "missing compile-time value while materializing type '" + ty.display() + "'");
 
     switch (actual->kind) {
     case Value::Kind::Num:

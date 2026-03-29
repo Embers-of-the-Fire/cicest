@@ -347,6 +347,47 @@ fn main() {
         != std::string::npos);
 }
 
+static void test_materialization_mismatch_reports_error() {
+    SymbolSession session;
+    const auto ast = cstc::parser::parse_source(R"(
+fn main() -> num {
+    1
+}
+)");
+    assert(ast.has_value());
+    auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+
+    bool mutated = false;
+    for (TyItem& item : tyir->items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("main"))
+            continue;
+        assert(fn->body != nullptr);
+        assert(fn->body->tail.has_value());
+        (*fn->body->tail)->ty = ty::ref(ty::num());
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(*tyir);
+    assert(!folded.has_value());
+    assert(
+        folded.error().message.find("mismatched compile-time reference shape")
+        != std::string::npos);
+}
+
+static void test_null_materialization_reports_error() {
+    SymbolSession session;
+    const cstc::tyir_interp::detail::ProgramView program;
+    const auto materialized =
+        cstc::tyir_interp::detail::value_to_expr(program, nullptr, ty::num(), {});
+    assert(!materialized.has_value());
+    assert(
+        materialized.error().message.find("missing compile-time value while materializing type")
+        != std::string::npos);
+}
+
 int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
@@ -364,5 +405,7 @@ int main() {
     test_infinite_for_reports_step_budget_error();
     test_bare_break_in_for_still_folds_to_unit();
     test_break_value_in_for_reports_const_eval_error();
+    test_materialization_mismatch_reports_error();
+    test_null_materialization_reports_error();
     return 0;
 }
