@@ -201,7 +201,7 @@ struct EvalState {
         return EvalState{Kind::Return, std::move(value)};
     }
 
-    [[nodiscard]] static EvalState from_break(ValuePtr value) {
+    [[nodiscard]] static EvalState from_break(ValuePtr value = nullptr) {
         return EvalState{Kind::Break, std::move(value)};
     }
 
@@ -836,8 +836,16 @@ struct EvalContext {
                         env.pop();
                         return *body;
                     }
-                    if (body->kind == EvalState::Kind::Break)
+                    if (body->kind == EvalState::Kind::Break) {
+                        if (body->value != nullptr) {
+                            env.pop();
+                            return make_error(
+                                ctx, expr->span,
+                                "'break' with a value is only allowed inside 'loop' during "
+                                "const-eval");
+                        }
                         break;
+                    }
 
                     if (node.step.has_value()) {
                         auto step = eval_expr(*node.step, env, ctx);
@@ -858,7 +866,7 @@ struct EvalContext {
 
             if constexpr (std::is_same_v<Node, tyir::TyBreak>) {
                 if (!node.value.has_value())
-                    return EvalState::from_break(make_unit());
+                    return EvalState::from_break();
                 auto value = eval_expr(*node.value, env, ctx);
                 if (!value)
                     return std::unexpected(std::move(value.error()));

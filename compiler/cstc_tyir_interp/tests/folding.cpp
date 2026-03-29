@@ -295,6 +295,58 @@ fn main() {
     assert(error.stack.empty());
 }
 
+static void test_bare_break_in_for_still_folds_to_unit() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn main() {
+    for (;;) { break; }
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Unit);
+}
+
+static void test_break_value_in_for_reports_const_eval_error() {
+    SymbolSession session;
+    const auto ast = cstc::parser::parse_source(R"(
+fn main() {
+    for (;;) { break; }
+}
+)");
+    assert(ast.has_value());
+    auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+
+    bool mutated = false;
+    for (TyItem& item : tyir->items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("main"))
+            continue;
+        assert(fn->body != nullptr);
+        assert(fn->body->tail.has_value());
+        auto* for_expr = std::get_if<TyFor>(&(*fn->body->tail)->node);
+        assert(for_expr != nullptr);
+        assert(for_expr->body != nullptr);
+        assert(for_expr->body->stmts.size() == 1);
+        assert(std::holds_alternative<TyExprStmt>(for_expr->body->stmts[0]));
+        TyExprPtr& break_node = std::get<TyExprStmt>(for_expr->body->stmts[0]).expr;
+        auto* break_expr = std::get_if<TyBreak>(&break_node->node);
+        assert(break_expr != nullptr);
+        break_expr->value = make_ty_expr(
+            break_node->span, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("42"), false},
+            ty::num());
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(*tyir);
+    assert(!folded.has_value());
+    assert(
+        folded.error().message.find("'break' with a value is only allowed inside 'loop'")
+        != std::string::npos);
+}
+
 int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
@@ -310,5 +362,7 @@ int main() {
     test_infinite_loop_reports_step_budget_error();
     test_infinite_while_reports_step_budget_error();
     test_infinite_for_reports_step_budget_error();
+    test_bare_break_in_for_still_folds_to_unit();
+    test_break_value_in_for_reports_const_eval_error();
     return 0;
 }
