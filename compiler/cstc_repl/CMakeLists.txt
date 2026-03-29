@@ -42,6 +42,10 @@ target_link_libraries(cstc_repl
         cicest_warnings
 )
 
+install(TARGETS cstc_repl
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
 if(CICEST_BUILD_TESTS)
     add_executable(cstc_repl_session
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/repl_session.cpp

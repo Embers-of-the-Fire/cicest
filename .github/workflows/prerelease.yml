@@ -1,0 +1,52 @@
+name: Prerelease
+
+on:
+  push:
+    tags:
+      - prerelease
+
+permissions:
+  contents: write
+
+jobs:
+  linux-prerelease:
+    name: Build and release Linux prerelease
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+
+      - name: Lint
+        shell: bash
+        env:
+          NIX_CONFIG: experimental-features = nix-command flakes
+        run: nix run .#lint --print-build-logs
+
+      - name: Test
+        shell: bash
+        env:
+          NIX_CONFIG: experimental-features = nix-command flakes
+        run: nix run .#tests --print-build-logs
+
+      - name: Build prerelease bundle
+        shell: bash
+        env:
+          NIX_CONFIG: experimental-features = nix-command flakes
+        run: nix run .#prerelease-bundle --print-build-logs
+
+      - name: Publish prerelease
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: prerelease
+          prerelease: true
+          make_latest: false
+          generate_release_notes: true
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: dist/cicest-x86_64-linux.tar.gz
