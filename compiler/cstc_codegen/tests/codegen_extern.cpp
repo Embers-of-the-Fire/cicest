@@ -50,7 +50,8 @@ static void test_extern_fn_with_return_type() {
 extern "lang" fn to_str(value: num) -> str;
 fn main() { }
 )");
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
+    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
+    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
 }
 
 static void test_extern_fn_multiple_params() {
@@ -59,7 +60,17 @@ static void test_extern_fn_multiple_params() {
 extern "lang" fn concat(a: &str, b: &str) -> str;
 fn main() { }
 )");
-    assert(ir_contains(ir, "declare ptr @concat(ptr, ptr)"));
+    assert(ir_contains(ir, "declare void @concat(ptr sret(%cstc.str) align 8, ptr, ptr)"));
+}
+
+static void test_extern_fn_with_owned_str_param() {
+    SymbolSession session;
+    const auto ir = must_codegen(R"(
+extern "lang" fn consume(value: str);
+fn main() { }
+)");
+    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
+    assert(ir_contains(ir, "declare void @consume(ptr byval(%cstc.str) align 8)"));
 }
 
 static void test_extern_fn_num_return() {
@@ -100,8 +111,8 @@ fn main() {
     let s: str = to_str(42);
 }
 )");
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
-    assert(ir_contains(ir, "call ptr @to_str(double"));
+    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
+    assert(ir_contains(ir, "call void @to_str(ptr sret(%cstc.str) align 8"));
 }
 
 static void test_call_chain_through_extern() {
@@ -114,10 +125,24 @@ fn main() {
     print(&s);
 }
 )");
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
+    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
     assert(ir_contains(ir, "declare void @print(ptr)"));
-    assert(ir_contains(ir, "call ptr @to_str(double"));
+    assert(ir_contains(ir, "call void @to_str(ptr sret(%cstc.str) align 8"));
     assert(ir_contains(ir, "call void @print(ptr"));
+}
+
+static void test_call_extern_fn_with_owned_str_param() {
+    SymbolSession session;
+    const auto ir = must_codegen(R"(
+extern "lang" fn to_str(value: num) -> str;
+extern "lang" fn consume(value: str);
+fn main() {
+    let s: str = to_str(42);
+    consume(s);
+}
+)");
+    assert(ir_contains(ir, "declare void @consume(ptr byval(%cstc.str) align 8)"));
+    assert(ir_contains(ir, "call void @consume(ptr byval(%cstc.str) align 8"));
 }
 
 static void test_extern_fn_custom_lang_link_name() {
@@ -157,7 +182,7 @@ fn main() { }
 )");
     assert(ir_contains(ir, "declare void @print(ptr)"));
     assert(ir_contains(ir, "declare void @println(ptr)"));
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
+    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
 }
 
 // ─── Extern struct + fn interaction ──────────────────────────────────────────
@@ -180,11 +205,13 @@ int main() {
     test_extern_fn_with_str_param();
     test_extern_fn_with_return_type();
     test_extern_fn_multiple_params();
+    test_extern_fn_with_owned_str_param();
     test_extern_fn_num_return();
     test_extern_fn_bool_param_and_return();
     test_call_extern_void_fn();
     test_call_extern_fn_with_return();
     test_call_chain_through_extern();
+    test_call_extern_fn_with_owned_str_param();
     test_extern_fn_custom_lang_link_name();
     test_extern_link_name_reuses_matching_function_definition();
     test_multiple_extern_declarations();

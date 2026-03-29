@@ -106,7 +106,8 @@ In LLVM IR, extern functions are emitted as `declare` (no body):
 
 ```llvm
 declare void @cstc_std_println(ptr)
-declare ptr @cstc_std_to_str(double)
+%cstc.str = type { ptr, i64, i8 }
+declare void @cstc_std_to_str(ptr sret(%cstc.str) align 8, double)
 ```
 
 ### Extern structs
@@ -148,18 +149,22 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 
 | Cicest declaration                     | LLVM IR                                            | C signature                                           |
 | -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
-| `runtime fn print(value: &str)`        | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const char*)`                    |
-| `runtime fn println(value: &str)`      | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const char*)`                  |
-| `fn to_str(value: num) -> str`         | `declare ptr @cstc_std_to_str(double)`             | `char* cstc_std_to_str(double)`                       |
-| `fn str_concat(a: &str, b: &str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)`     | `char* cstc_std_str_concat(const char*, const char*)` |
-| `fn str_len(value: &str) -> num`       | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const char*)`                |
-| `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr)`             | `void cstc_std_str_free(const char*)`                 |
+| `runtime fn print(value: &str)`        | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const cstc_rt_str*)`             |
+| `runtime fn println(value: &str)`      | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const cstc_rt_str*)`           |
+| `fn to_str(value: num) -> str`         | `declare void @cstc_std_to_str(ptr sret(%cstc.str) align 8, double)` | `cstc_rt_str cstc_std_to_str(double)`      |
+| `fn str_concat(a: &str, b: &str) -> str` | `declare void @cstc_std_str_concat(ptr sret(%cstc.str) align 8, ptr, ptr)` | `cstc_rt_str cstc_std_str_concat(const cstc_rt_str*, const cstc_rt_str*)` |
+| `fn str_len(value: &str) -> num`       | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const cstc_rt_str*)`         |
+| `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr byval(%cstc.str) align 8)` | `void cstc_std_str_free(cstc_rt_str)`      |
 | `fn assert(condition: bool)`           | `declare void @cstc_std_assert(i1)`                | `void cstc_std_assert(int)`                           |
 | `fn assert_eq(a: num, b: num)`         | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)`             |
 
 > **Note:** `str` is now an owned, move-only string value. The compiler inserts
 > automatic drop at scope exit, and `str_free(value: str)` is a low-level
 > consuming escape hatch. Borrowing APIs use `&str`.
+>
+> The runtime layout of `str` is `%cstc.str = type { ptr, i64, i8 }`:
+> byte pointer, byte length, and an ownership flag. `&str` is therefore a
+> pointer to that record, not a raw `char*`.
 
 ## Available functions
 

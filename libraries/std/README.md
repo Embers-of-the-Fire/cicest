@@ -58,23 +58,27 @@ linked into every executable produced by the compiler.
 
 | Cicest declaration                     | C signature                                           |
 | -------------------------------------- | ----------------------------------------------------- |
-| `runtime fn print(value: &str)`        | `void cstc_std_print(const char*)`                    |
-| `runtime fn println(value: &str)`      | `void cstc_std_println(const char*)`                  |
-| `fn to_str(value: num) -> str`         | `char* cstc_std_to_str(double)`                       |
-| `fn str_concat(a: &str, b: &str) -> str` | `char* cstc_std_str_concat(const char*, const char*)` |
-| `fn str_len(value: &str) -> num`       | `double cstc_std_str_len(const char*)`                |
-| `fn str_free(value: str)`              | `void cstc_std_str_free(const char*)`                 |
+| `runtime fn print(value: &str)`        | `void cstc_std_print(const cstc_rt_str*)`             |
+| `runtime fn println(value: &str)`      | `void cstc_std_println(const cstc_rt_str*)`           |
+| `fn to_str(value: num) -> str`         | `cstc_rt_str cstc_std_to_str(double)`                 |
+| `fn str_concat(a: &str, b: &str) -> str` | `cstc_rt_str cstc_std_str_concat(const cstc_rt_str*, const cstc_rt_str*)` |
+| `fn str_len(value: &str) -> num`       | `double cstc_std_str_len(const cstc_rt_str*)`         |
+| `fn str_free(value: str)`              | `void cstc_std_str_free(cstc_rt_str)`                 |
 | `fn assert(condition: bool)`           | `void cstc_std_assert(int)`                           |
 | `fn assert_eq(a: num, b: num)`         | `void cstc_std_assert_eq(double, double)`             |
 
 ### String Ownership
 
-Functions that return `str` (`to_str`, `str_concat`) allocate a new
-heap-allocated string via `malloc`. The caller owns the returned string and is
-responsible for releasing it with `str_free` when it is no longer needed.
+`str` is a runtime string record, not a raw `char*`. Its runtime layout stores
+the byte pointer, byte length, and an ownership flag. Borrowed `&str` values
+are pointers to that record.
 
-String literals (e.g. `"hello"`) are stored in read-only memory and must **not**
-be passed to `str_free`.
+Functions that return `str` (`to_str`, `str_concat`) allocate owned byte
+storage via `malloc`. The caller owns the returned `str`, and `str_free` only
+releases the underlying byte buffer when the ownership flag is set.
+
+String literals (for example `"hello"`) lower to borrowed runtime string
+records and therefore must **not** be treated as owning allocations.
 
 ## Adding New Functions
 

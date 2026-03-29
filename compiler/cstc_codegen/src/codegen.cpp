@@ -15,7 +15,9 @@
 
 #include <cstc_codegen/codegen.hpp>
 
+#include <array>
 #include <cassert>
+#include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <memory>
@@ -26,10 +28,12 @@
 #include <unordered_map>
 #include <vector>
 
+#include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/DerivedTypes.h>
 #include <llvm/IR/Function.h>
+#include <llvm/IR/GlobalVariable.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -40,6 +44,7 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/Alignment.h>
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/TargetSelect.h>
@@ -69,7 +74,9 @@ public:
     CodegenContext(const LirProgram& program, std::string_view module_name)
         : program_(program)
         , module_(std::string(module_name), context_)
-        , builder_(context_) {}
+        , builder_(context_) {
+        initialize_string_type();
+    }
 
     /// Executes lowering and serializes textual LLVM IR.
     std::string emit_llvm_ir_text() {
@@ -215,6 +222,121 @@ private:
 
     // ─── Type mapping ───────────────────────────────────────────────────────
 
+    void initialize_string_type() {
+        if (string_type_ != nullptr)
+            return;
+
+        string_type_ = llvm::StructType::create(
+            context_,
+            {
+                llvm::PointerType::getUnqual(context_),
+                llvm::Type::getInt64Ty(context_),
+                llvm::Type::getInt8Ty(context_),
+            },
+            "cstc.str");
+    }
+
+    [[nodiscard]] llvm::StructType* string_type() {
+        assert(string_type_ != nullptr && "string type must be initialized");
+        return string_type_;
+    }
+
+    [[nodiscard]] llvm::Constant* string_length_constant(std::size_t length) {
+        return llvm::ConstantInt::get(
+            llvm::Type::getInt64Ty(context_), static_cast<std::uint64_t>(length));
+    }
+
+    [[nodiscard]] llvm::Constant* string_ownership_constant(bool owns_bytes) {
+        return llvm::ConstantInt::get(
+            llvm::Type::getInt8Ty(context_), owns_bytes ? std::uint64_t{1} : std::uint64_t{0});
+    }
+
+    [[nodiscard]] llvm::Constant* create_static_string_bytes_ptr(std::string_view text) {
+        auto* bytes = llvm::ConstantDataArray::getString(context_, text, true);
+        auto* global = new llvm::GlobalVariable( // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+            module_, bytes->getType(), true, llvm::GlobalValue::PrivateLinkage, bytes);
+        global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+
+        auto* zero = llvm::ConstantInt::get(llvm::Type::getInt64Ty(context_), 0);
+        std::array<llvm::Constant*, 2> indices{zero, zero};
+        // LLVM inserts the global into the module and owns it from there.
+        // NOLINTNEXTLINE(clang-analyzer-cplusplus.NewDeleteLeaks)
+        return llvm::ConstantExpr::getInBoundsGetElementPtr(bytes->getType(), global, indices);
+    }
+
+    [[nodiscard]] llvm::Constant* create_string_record_constant(
+        llvm::Constant* data_ptr, std::size_t length, bool owns_bytes) {
+        return llvm::ConstantStruct::get(
+            string_type(), {
+                               data_ptr,
+                               string_length_constant(length),
+                               string_ownership_constant(owns_bytes),
+                           });
+    }
+
+    [[nodiscard]] llvm::Constant*
+        create_static_string_record_value(std::string_view text, bool owns_bytes) {
+        llvm::Constant* data_ptr = create_static_string_bytes_ptr(text);
+        return create_string_record_constant(data_ptr, text.size(), owns_bytes);
+    }
+
+    [[nodiscard]] llvm::GlobalVariable* create_static_string_record_global(std::string_view text) {
+        auto* initializer = create_static_string_record_value(text, false);
+        auto* global = new llvm::GlobalVariable( // NOLINT(clang-analyzer-cplusplus.NewDeleteLeaks)
+            module_, string_type(), true, llvm::GlobalValue::PrivateLinkage, initializer);
+        global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        return global;
+    }
+
+    [[nodiscard]] static constexpr llvm::Align string_abi_alignment() { return llvm::Align(8); }
+
+    [[nodiscard]] bool uses_extern_string_abi(const Ty& ty) const {
+        return ty.kind == tyir::TyKind::Str;
+    }
+
+    [[nodiscard]] bool returns_extern_string_indirectly(const LirExternFnDecl& ext) const {
+        return uses_extern_string_abi(ext.return_ty);
+    }
+
+    [[nodiscard]] llvm::Type* map_extern_param_type(const Ty& ty) {
+        if (uses_extern_string_abi(ty))
+            return llvm::PointerType::getUnqual(context_);
+        return map_type(ty);
+    }
+
+    [[nodiscard]] llvm::Type* map_extern_return_type(const Ty& ty) {
+        if (uses_extern_string_abi(ty))
+            return llvm::Type::getVoidTy(context_);
+        return map_return_type(ty);
+    }
+
+    template <typename CallableT>
+    void add_string_sret_attrs(CallableT* callable, unsigned arg_index) {
+        callable->addParamAttr(
+            arg_index, llvm::Attribute::getWithStructRetType(context_, string_type()));
+        callable->addParamAttr(
+            arg_index, llvm::Attribute::getWithAlignment(context_, string_abi_alignment()));
+    }
+
+    template <typename CallableT>
+    void add_string_byval_attrs(CallableT* callable, unsigned arg_index) {
+        callable->addParamAttr(
+            arg_index, llvm::Attribute::getWithByValType(context_, string_type()));
+        callable->addParamAttr(
+            arg_index, llvm::Attribute::getWithAlignment(context_, string_abi_alignment()));
+    }
+
+    [[nodiscard]] llvm::AllocaInst* create_stack_temporary(llvm::Type* ty, llvm::StringRef name) {
+        return builder_.CreateAlloca(ty, nullptr, name);
+    }
+
+    [[nodiscard]] llvm::AllocaInst*
+        spill_value_to_stack(llvm::Value* value, llvm::Type* ty, llvm::StringRef name) {
+        llvm::AllocaInst* slot = create_stack_temporary(ty, name);
+        builder_.CreateStore(value, slot);
+        return slot;
+    }
+
     /// Converts a TyIR type into its LLVM IR representation.
     ///
     /// Named types are resolved through previously declared struct/enum maps.
@@ -224,7 +346,7 @@ private:
         case tyir::TyKind::Ref: return llvm::PointerType::getUnqual(context_);
         case tyir::TyKind::Num: return llvm::Type::getDoubleTy(context_);
         case tyir::TyKind::Bool: return llvm::Type::getInt1Ty(context_);
-        case tyir::TyKind::Str: return llvm::PointerType::getUnqual(context_);
+        case tyir::TyKind::Str: return string_type();
         case tyir::TyKind::Unit:
         case tyir::TyKind::Never:
             // Unit and never-typed locals use an empty struct to avoid void alloca.
@@ -339,11 +461,14 @@ private:
     void declare_extern_functions() {
         for (const LirExternFnDecl& ext : program_.extern_fns) {
             std::vector<llvm::Type*> param_types;
-            param_types.reserve(ext.params.size());
+            param_types.reserve(
+                ext.params.size() + (returns_extern_string_indirectly(ext) ? 1 : 0));
+            if (returns_extern_string_indirectly(ext))
+                param_types.push_back(llvm::PointerType::getUnqual(context_));
             for (const LirParam& p : ext.params)
-                param_types.push_back(map_type(p.ty));
+                param_types.push_back(map_extern_param_type(p.ty));
 
-            llvm::Type* ret_ty = map_return_type(ext.return_ty);
+            llvm::Type* ret_ty = map_extern_return_type(ext.return_ty);
             auto* fn_ty = llvm::FunctionType::get(ret_ty, param_types, false);
             const Symbol link_name = ext.link_name.is_valid() ? ext.link_name : ext.name;
             const std::string symbol_name(link_name.as_str());
@@ -358,7 +483,17 @@ private:
                     fn_ty, llvm::Function::ExternalLinkage, symbol_name, &module_);
             }
 
+            unsigned abi_arg_index = 0;
+            if (returns_extern_string_indirectly(ext))
+                add_string_sret_attrs(llvm_fn, abi_arg_index++);
+            for (const LirParam& p : ext.params) {
+                if (uses_extern_string_abi(p.ty))
+                    add_string_byval_attrs(llvm_fn, abi_arg_index);
+                ++abi_arg_index;
+            }
+
             functions_[std::string(ext.name.as_str())] = llvm_fn;
+            extern_fn_decls_[std::string(ext.name.as_str())] = &ext;
         }
     }
 
@@ -653,20 +788,16 @@ private:
         case LirConst::Kind::Bool:
             return llvm::ConstantInt::get(llvm::Type::getInt1Ty(context_), c.bool_value ? 1 : 0);
         case LirConst::Kind::Str: {
-            // String literals: create a global constant and return a pointer
             std::string text(c.symbol.as_str());
-            // Strip surrounding quotes if present
             if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
                 text = text.substr(1, text.size() - 2);
-            return builder_.CreateGlobalString(text);
+            return create_static_string_record_global(text);
         }
         case LirConst::Kind::OwnedStr: {
             std::string text(c.symbol.as_str());
             if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
                 text = text.substr(1, text.size() - 2);
-            llvm::Value* borrowed = builder_.CreateGlobalString(text);
-            llvm::Value* empty = builder_.CreateGlobalString("");
-            return builder_.CreateCall(ensure_runtime_str_concat(), {empty, borrowed});
+            return create_static_string_record_value(text, false);
         }
         case LirConst::Kind::Unit:
             // Unit is an empty struct {}
@@ -690,9 +821,7 @@ private:
 
     /// Lowers a shared borrow.
     llvm::Value* lower_rvalue_node(const LirFnDef& fn, const LirBorrow& borrow) {
-        const Ty& borrowed_ty = place_ty(fn, borrow.place);
-        if (borrowed_ty.kind == tyir::TyKind::Str || borrowed_ty.kind == tyir::TyKind::Ref)
-            return lower_place_load(borrow.place);
+        (void)fn;
         return lower_place_addr(borrow.place);
     }
 
@@ -740,12 +869,56 @@ private:
     /// lowering to skip destination storage.
     llvm::Value* lower_rvalue_node(const LirFnDef& fn, const LirCall& call) {
         llvm::Function* callee = functions_[std::string(call.fn_name.as_str())];
-        std::vector<llvm::Value*> args;
-        args.reserve(call.args.size());
-        for (const LirOperand& arg : call.args)
-            args.push_back(lower_operand(fn, arg));
+        const auto ext_it = extern_fn_decls_.find(std::string(call.fn_name.as_str()));
+        if (ext_it == extern_fn_decls_.end()) {
+            std::vector<llvm::Value*> args;
+            args.reserve(call.args.size());
+            for (const LirOperand& arg : call.args)
+                args.push_back(lower_operand(fn, arg));
 
-        llvm::Value* result = builder_.CreateCall(callee, args);
+            llvm::Value* result = builder_.CreateCall(callee, args);
+
+            // If the callee returns void, return nullptr to signal "no value to store"
+            if (callee->getReturnType()->isVoidTy())
+                return nullptr;
+
+            return result;
+        }
+
+        const LirExternFnDecl& ext = *ext_it->second;
+        assert(ext.params.size() == call.args.size() && "extern call arg count must match");
+
+        std::vector<llvm::Value*> args;
+        args.reserve(call.args.size() + (returns_extern_string_indirectly(ext) ? 1 : 0));
+
+        llvm::AllocaInst* sret_slot = nullptr;
+        if (returns_extern_string_indirectly(ext)) {
+            sret_slot = create_stack_temporary(string_type(), "call.sret");
+            args.push_back(sret_slot);
+        }
+
+        for (std::size_t i = 0; i < call.args.size(); ++i) {
+            llvm::Value* arg = lower_operand(fn, call.args[i]);
+            if (uses_extern_string_abi(ext.params[i].ty)) {
+                args.push_back(spill_value_to_stack(arg, string_type(), "call.byval"));
+            } else {
+                args.push_back(arg);
+            }
+        }
+
+        auto* result = builder_.CreateCall(callee, args);
+
+        unsigned abi_arg_index = 0;
+        if (sret_slot != nullptr)
+            add_string_sret_attrs(result, abi_arg_index++);
+        for (const LirParam& param : ext.params) {
+            if (uses_extern_string_abi(param.ty))
+                add_string_byval_attrs(result, abi_arg_index);
+            ++abi_arg_index;
+        }
+
+        if (sret_slot != nullptr)
+            return builder_.CreateLoad(string_type(), sret_slot, "call.str");
 
         // If the callee returns void, return nullptr to signal "no value to store"
         if (callee->getReturnType()->isVoidTy())
@@ -808,6 +981,7 @@ private:
 
         if (llvm::Function* existing = module_.getFunction("cstc_std_str_free")) {
             runtime_str_free_ = existing;
+            add_string_byval_attrs(runtime_str_free_, 0);
             return runtime_str_free_;
         }
 
@@ -815,23 +989,8 @@ private:
             llvm::Type::getVoidTy(context_), {llvm::PointerType::getUnqual(context_)}, false);
         runtime_str_free_ = llvm::Function::Create(
             fn_ty, llvm::Function::ExternalLinkage, "cstc_std_str_free", &module_);
+        add_string_byval_attrs(runtime_str_free_, 0);
         return runtime_str_free_;
-    }
-
-    llvm::Function* ensure_runtime_str_concat() {
-        if (runtime_str_concat_ != nullptr)
-            return runtime_str_concat_;
-
-        if (llvm::Function* existing = module_.getFunction("cstc_std_str_concat")) {
-            runtime_str_concat_ = existing;
-            return runtime_str_concat_;
-        }
-
-        auto* ptr_ty = llvm::PointerType::getUnqual(context_);
-        auto* fn_ty = llvm::FunctionType::get(ptr_ty, {ptr_ty, ptr_ty}, false);
-        runtime_str_concat_ = llvm::Function::Create(
-            fn_ty, llvm::Function::ExternalLinkage, "cstc_std_str_concat", &module_);
-        return runtime_str_concat_;
     }
 
     void emit_drop_value(const Ty& ty, llvm::Value* value) {
@@ -839,7 +998,9 @@ private:
             return;
 
         if (ty.kind == tyir::TyKind::Str) {
-            builder_.CreateCall(ensure_runtime_str_free(), {value});
+            llvm::AllocaInst* byval_slot = spill_value_to_stack(value, string_type(), "drop.str");
+            auto* call = builder_.CreateCall(ensure_runtime_str_free(), {byval_slot});
+            add_string_byval_attrs(call, 0);
             return;
         }
 
@@ -965,16 +1126,17 @@ private:
     std::unordered_map<std::string, llvm::StructType*> enum_types_;
     std::unordered_map<std::string, const LirStructDecl*> struct_decls_;
     std::unordered_map<std::string, std::unordered_map<std::string, uint32_t>> enum_discriminants_;
+    llvm::StructType* string_type_ = nullptr;
 
     // Function map
     std::unordered_map<std::string, llvm::Function*> functions_;
+    std::unordered_map<std::string, const LirExternFnDecl*> extern_fn_decls_;
 
     // Per-function state
     llvm::Function* current_fn_ = nullptr;
     std::vector<llvm::AllocaInst*> local_allocas_;
     std::vector<llvm::AllocaInst*> local_drop_flags_;
     std::vector<llvm::BasicBlock*> basic_blocks_;
-    llvm::Function* runtime_str_concat_ = nullptr;
     llvm::Function* runtime_str_free_ = nullptr;
     bool is_built_ = false;
 };

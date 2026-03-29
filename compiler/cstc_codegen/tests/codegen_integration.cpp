@@ -70,15 +70,16 @@ fn main() {
     // All 5 extern fns should be declared
     assert(ir_contains(ir, "declare void @print(ptr)"));
     assert(ir_contains(ir, "declare void @println(ptr)"));
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
-    assert(ir_contains(ir, "declare ptr @str_concat(ptr, ptr)"));
+    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
+    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
+    assert(ir_contains(ir, "declare void @str_concat(ptr sret(%cstc.str) align 8, ptr, ptr)"));
     assert(ir_contains(ir, "declare double @str_len(ptr)"));
 
     // Calls should be emitted
     assert(ir_contains(ir, "call void @println(ptr"));
-    assert(ir_contains(ir, "call ptr @to_str(double"));
+    assert(ir_contains(ir, "call void @to_str(ptr sret(%cstc.str) align 8"));
     assert(ir_contains(ir, "call void @print(ptr"));
-    assert(ir_contains(ir, "call ptr @str_concat(ptr"));
+    assert(ir_contains(ir, "call void @str_concat(ptr sret(%cstc.str) align 8"));
     assert(ir_contains(ir, "call double @str_len(ptr"));
 
     // main should return i32
@@ -103,7 +104,7 @@ fn main() {
 }
 )");
     assert(ir_contains(ir, "declare void @println(ptr)"));
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
+    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
     assert(ir_contains(ir, "define void @greet(ptr"));
     assert(ir_contains(ir, "define i32 @main()"));
 }
@@ -156,7 +157,7 @@ fn main() {
 }
 )");
     assert(ir_contains(ir, "declare void @println(ptr)"));
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
+    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
     assert(ir_contains(ir, "%Point = type { double, double }"));
     assert(ir_contains(ir, "%Color = type { i32 }"));
 }
@@ -170,8 +171,8 @@ fn main() {
     let s: str = to_str(42);
 }
 )");
-    assert(ir_contains(ir, "declare void @cstc_std_str_free(ptr)"));
-    assert(ir_contains(ir, "call void @cstc_std_str_free(ptr"));
+    assert(ir_contains(ir, "declare void @cstc_std_str_free(ptr byval(%cstc.str) align 8)"));
+    assert(ir_contains(ir, "call void @cstc_std_str_free(ptr byval(%cstc.str) align 8"));
 }
 
 static void test_borrowed_str_literal_does_not_emit_runtime_str_free() {
@@ -186,8 +187,9 @@ fn main() {
 }
 )");
     assert(ir_contains(ir, "@0 = private unnamed_addr constant [3 x i8] c\"hi\\00\""));
-    assert(ir_contains(ir, "call void @print(ptr @0)"));
-    assert(!ir_contains(ir, "call void @cstc_std_str_free(ptr"));
+    assert(ir_contains(ir, "private unnamed_addr constant %cstc.str { ptr @0, i64 2, i8 0 }"));
+    assert(ir_contains(ir, "call void @print(ptr"));
+    assert(!ir_contains(ir, "call void @cstc_std_str_free(ptr byval(%cstc.str) align 8"));
 }
 
 static void test_auto_drop_recurses_through_struct_fields() {
@@ -204,8 +206,8 @@ fn main() {
     let p: Pair = Pair { left: to_str(1), right: to_str(2) };
 }
 )");
-    assert(ir_contains(ir, "%Pair = type { ptr, ptr }"));
-    assert(count_occurrences(ir, "call void @cstc_std_str_free(ptr") >= 2);
+    assert(ir_contains(ir, "%Pair = type { %cstc.str, %cstc.str }"));
+    assert(count_occurrences(ir, "call void @cstc_std_str_free(ptr byval(%cstc.str) align 8") >= 2);
 }
 
 static void test_nested_field_borrow_uses_projected_geps() {
@@ -246,9 +248,9 @@ fn main() {
     print(&rendered);
 }
 )");
-    assert(!ir_contains(ir, "call ptr @cstc_std_to_str(double"));
-    assert(ir_contains(ir, "declare ptr @cstc_std_str_concat(ptr, ptr)"));
-    assert(ir_contains(ir, "call ptr @cstc_std_str_concat(ptr"));
+    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
+    assert(!ir_contains(ir, "call void @cstc_std_to_str("));
+    assert(!ir_contains(ir, "@cstc_std_str_concat"));
     assert(ir_contains(ir, "call void @cstc_std_print(ptr"));
 }
 
