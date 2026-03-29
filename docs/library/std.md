@@ -66,6 +66,7 @@ pub extern "lang" struct Handle;
 
 | Component          | Description                                                                  |
 | ------------------ | ---------------------------------------------------------------------------- |
+| `runtime`          | Marks an extern function as runtime-backed; sugar for a `runtime` return type and preserved for const-eval |
 | `extern`           | Keyword introducing an external declaration                                  |
 | `"lang"`           | ABI string literal — `"lang"` denotes the cicest language runtime            |
 | `fn` / `struct`    | Declares a function signature or opaque struct type                          |
