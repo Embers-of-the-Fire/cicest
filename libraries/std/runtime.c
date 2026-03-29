@@ -43,13 +43,19 @@ static void cstc_rt_store_borrowed_empty(cstc_rt_str* out) {
         *out = cstc_rt_borrowed_empty();
 }
 
+static bool cstc_rt_str_is_missing_or_empty(const cstc_rt_str* value) {
+    return value == NULL || value->data == NULL || value->len == 0;
+}
+
 void cstc_std_print(const cstc_rt_str* value) {
-    if (value == NULL || value->data == NULL || value->len == 0)
+    if (cstc_rt_str_is_missing_or_empty(value))
         return;
     fwrite(value->data, 1, (size_t)value->len, stdout);
 }
 
 void cstc_std_println(const cstc_rt_str* value) {
+    if (cstc_rt_str_is_missing_or_empty(value))
+        return;
     cstc_std_print(value);
     fputc('\n', stdout);
 }
