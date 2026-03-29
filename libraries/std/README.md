@@ -56,8 +56,10 @@ is compiled into a static library (`libcicest_rt.a` on GNU-like toolchains,
 `cicest_rt.lib` on MSVC) by CMake and automatically
 linked into every executable produced by the compiler.
 
-Owned `str` entry points use explicit pointer-based C signatures so they match
-the compiler's emitted LLVM `sret` / `byval` ABI on every target.
+Owned `str` entry points use explicit pointer-based C signatures. The compiler
+lowers owned-string extern returns and parameters to ordinary `ptr`
+arguments, which keeps the runtime ABI stable across supported targets
+including macOS.
 
 | Cicest declaration                     | C signature                                           |
 | -------------------------------------- | ----------------------------------------------------- |

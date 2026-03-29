@@ -288,8 +288,6 @@ private:
         return global;
     }
 
-    [[nodiscard]] static constexpr llvm::Align string_abi_alignment() { return llvm::Align(8); }
-
     [[nodiscard]] bool uses_extern_string_abi(const Ty& ty) const {
         return ty.kind == tyir::TyKind::Str;
     }
@@ -308,22 +306,6 @@ private:
         if (uses_extern_string_abi(ty))
             return llvm::Type::getVoidTy(context_);
         return map_return_type(ty);
-    }
-
-    template <typename CallableT>
-    void add_string_sret_attrs(CallableT* callable, unsigned arg_index) {
-        callable->addParamAttr(
-            arg_index, llvm::Attribute::getWithStructRetType(context_, string_type()));
-        callable->addParamAttr(
-            arg_index, llvm::Attribute::getWithAlignment(context_, string_abi_alignment()));
-    }
-
-    template <typename CallableT>
-    void add_string_byval_attrs(CallableT* callable, unsigned arg_index) {
-        callable->addParamAttr(
-            arg_index, llvm::Attribute::getWithByValType(context_, string_type()));
-        callable->addParamAttr(
-            arg_index, llvm::Attribute::getWithAlignment(context_, string_abi_alignment()));
     }
 
     [[nodiscard]] llvm::AllocaInst* create_stack_temporary(llvm::Type* ty, llvm::StringRef name) {
@@ -481,15 +463,6 @@ private:
             } else {
                 llvm_fn = llvm::Function::Create(
                     fn_ty, llvm::Function::ExternalLinkage, symbol_name, &module_);
-            }
-
-            unsigned abi_arg_index = 0;
-            if (returns_extern_string_indirectly(ext))
-                add_string_sret_attrs(llvm_fn, abi_arg_index++);
-            for (const LirParam& p : ext.params) {
-                if (uses_extern_string_abi(p.ty))
-                    add_string_byval_attrs(llvm_fn, abi_arg_index);
-                ++abi_arg_index;
             }
 
             functions_[std::string(ext.name.as_str())] = llvm_fn;
@@ -908,15 +881,6 @@ private:
 
         auto* result = builder_.CreateCall(callee, args);
 
-        unsigned abi_arg_index = 0;
-        if (sret_slot != nullptr)
-            add_string_sret_attrs(result, abi_arg_index++);
-        for (const LirParam& param : ext.params) {
-            if (uses_extern_string_abi(param.ty))
-                add_string_byval_attrs(result, abi_arg_index);
-            ++abi_arg_index;
-        }
-
         if (sret_slot != nullptr)
             return builder_.CreateLoad(string_type(), sret_slot, "call.str");
 
@@ -979,17 +943,13 @@ private:
         if (runtime_str_free_ != nullptr)
             return runtime_str_free_;
 
-        if (llvm::Function* existing = module_.getFunction("cstc_std_str_free")) {
-            runtime_str_free_ = existing;
-            add_string_byval_attrs(runtime_str_free_, 0);
-            return runtime_str_free_;
-        }
+        if (llvm::Function* existing = module_.getFunction("cstc_std_str_free"))
+            return runtime_str_free_ = existing;
 
         auto* fn_ty = llvm::FunctionType::get(
             llvm::Type::getVoidTy(context_), {llvm::PointerType::getUnqual(context_)}, false);
         runtime_str_free_ = llvm::Function::Create(
             fn_ty, llvm::Function::ExternalLinkage, "cstc_std_str_free", &module_);
-        add_string_byval_attrs(runtime_str_free_, 0);
         return runtime_str_free_;
     }
 
@@ -999,8 +959,7 @@ private:
 
         if (ty.kind == tyir::TyKind::Str) {
             llvm::AllocaInst* byval_slot = spill_value_to_stack(value, string_type(), "drop.str");
-            auto* call = builder_.CreateCall(ensure_runtime_str_free(), {byval_slot});
-            add_string_byval_attrs(call, 0);
+            (void)builder_.CreateCall(ensure_runtime_str_free(), {byval_slot});
             return;
         }
 

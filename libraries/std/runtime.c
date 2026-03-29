@@ -55,6 +55,9 @@ void cstc_std_println(const cstc_rt_str* value) {
 }
 
 void cstc_std_to_str(cstc_rt_str* out, double value) {
+    if (out == NULL)
+        return;
+
     // snprintf with NULL to measure, then allocate + format.
     int len = snprintf(NULL, 0, "%g", value);
     if (len < 0)
@@ -67,10 +70,6 @@ void cstc_std_to_str(cstc_rt_str* out, double value) {
     }
 
     snprintf(buf, (size_t)len + 1, "%g", value);
-    if (out == NULL) {
-        free(buf);
-        return;
-    }
 
     out->data = buf;
     out->len = (uint64_t)len;
@@ -78,6 +77,9 @@ void cstc_std_to_str(cstc_rt_str* out, double value) {
 }
 
 void cstc_std_str_concat(cstc_rt_str* out, const cstc_rt_str* a, const cstc_rt_str* b) {
+    if (out == NULL)
+        return;
+
     const size_t la = a != NULL ? (size_t)a->len : 0;
     const size_t lb = b != NULL ? (size_t)b->len : 0;
     char* buf = (char*)malloc(la + lb + 1);
@@ -91,10 +93,6 @@ void cstc_std_str_concat(cstc_rt_str* out, const cstc_rt_str* a, const cstc_rt_s
     if (lb > 0 && b != NULL && b->data != NULL)
         memcpy(buf + la, b->data, lb);
     buf[la + lb] = '\0';
-    if (out == NULL) {
-        free(buf);
-        return;
-    }
 
     out->data = buf;
     out->len = (uint64_t)(la + lb);

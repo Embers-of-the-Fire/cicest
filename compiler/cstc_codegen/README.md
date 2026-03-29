@@ -78,7 +78,7 @@ The implementation performs these phases:
 |---|---|
 | `Ty::Num` | `double` |
 | `Ty::Bool` | `i1` |
-| `Ty::Str` | opaque pointer (`ptr`) |
+| `Ty::Str` | `%cstc.str = { ptr, i64, i8 }` |
 | `Ty::Unit` | empty struct for values, `void` for returns |
 | `LirPlace::Field` | `getelementptr` for stores / `extractvalue` for loads |
 | `LirBinaryOp` | FP arithmetic/comparisons, `and/or` for bool ops |
@@ -91,6 +91,8 @@ The implementation performs these phases:
 - This stage assumes LIR is valid and type-correct.
 - Enums currently use discriminant-only layout (`{ i32 }`).
 - String constants are emitted as LLVM global string constants.
+- Extern functions that return or consume owned `str` values use explicit
+  pointer parameters instead of target-specific aggregate-return attributes.
 - Native artifacts are emitted for the host default LLVM target triple.
 - Tests assert semantic patterns in emitted IR, not exact formatting.
 

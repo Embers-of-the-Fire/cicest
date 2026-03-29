@@ -50,8 +50,7 @@ static void test_extern_fn_with_return_type() {
 extern "lang" fn to_str(value: num) -> str;
 fn main() { }
 )");
-    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
-    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
+    assert(ir_contains(ir, "declare void @to_str(ptr, double)"));
 }
 
 static void test_extern_fn_multiple_params() {
@@ -60,7 +59,7 @@ static void test_extern_fn_multiple_params() {
 extern "lang" fn concat(a: &str, b: &str) -> str;
 fn main() { }
 )");
-    assert(ir_contains(ir, "declare void @concat(ptr sret(%cstc.str) align 8, ptr, ptr)"));
+    assert(ir_contains(ir, "declare void @concat(ptr, ptr, ptr)"));
 }
 
 static void test_extern_fn_with_owned_str_param() {
@@ -69,8 +68,7 @@ static void test_extern_fn_with_owned_str_param() {
 extern "lang" fn consume(value: str);
 fn main() { }
 )");
-    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
-    assert(ir_contains(ir, "declare void @consume(ptr byval(%cstc.str) align 8)"));
+    assert(ir_contains(ir, "declare void @consume(ptr)"));
 }
 
 static void test_extern_fn_num_return() {
@@ -111,8 +109,8 @@ fn main() {
     let s: str = to_str(42);
 }
 )");
-    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
-    assert(ir_contains(ir, "call void @to_str(ptr sret(%cstc.str) align 8"));
+    assert(ir_contains(ir, "declare void @to_str(ptr, double)"));
+    assert(ir_contains(ir, "call void @to_str(ptr"));
 }
 
 static void test_call_chain_through_extern() {
@@ -125,9 +123,9 @@ fn main() {
     print(&s);
 }
 )");
-    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
+    assert(ir_contains(ir, "declare void @to_str(ptr, double)"));
     assert(ir_contains(ir, "declare void @print(ptr)"));
-    assert(ir_contains(ir, "call void @to_str(ptr sret(%cstc.str) align 8"));
+    assert(ir_contains(ir, "call void @to_str(ptr"));
     assert(ir_contains(ir, "call void @print(ptr"));
 }
 
@@ -141,8 +139,8 @@ fn main() {
     consume(s);
 }
 )");
-    assert(ir_contains(ir, "declare void @consume(ptr byval(%cstc.str) align 8)"));
-    assert(ir_contains(ir, "call void @consume(ptr byval(%cstc.str) align 8"));
+    assert(ir_contains(ir, "declare void @consume(ptr)"));
+    assert(ir_contains(ir, "call void @consume(ptr"));
 }
 
 static void test_extern_fn_custom_lang_link_name() {
@@ -182,7 +180,7 @@ fn main() { }
 )");
     assert(ir_contains(ir, "declare void @print(ptr)"));
     assert(ir_contains(ir, "declare void @println(ptr)"));
-    assert(ir_contains(ir, "declare void @to_str(ptr sret(%cstc.str) align 8, double)"));
+    assert(ir_contains(ir, "declare void @to_str(ptr, double)"));
 }
 
 // ─── Extern struct + fn interaction ──────────────────────────────────────────
