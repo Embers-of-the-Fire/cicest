@@ -216,7 +216,7 @@ static void test_borrowed_str_free_intrinsic_is_noop() {
     assert((*result)->kind == cstc::tyir_interp::detail::Value::Kind::Unit);
 }
 
-static void test_borrow_of_folded_owned_string_preserves_local_alias() {
+static void test_borrow_of_folded_owned_string_keeps_folded_rhs() {
     SymbolSession session;
     const auto program = must_fold(R"(
 extern "lang" fn to_str(value: num) -> str;
@@ -243,8 +243,35 @@ fn main() {
     assert(print_call.args.size() == 1);
     assert(std::holds_alternative<TyBorrow>(print_call.args[0]->node));
     const auto& borrow = std::get<TyBorrow>(print_call.args[0]->node);
-    assert(std::holds_alternative<LocalRef>(borrow.rhs->node));
-    assert(std::get<LocalRef>(borrow.rhs->node).name == Symbol::intern("rendered"));
+    const TyLiteral& borrow_literal = require_literal(borrow.rhs);
+    assert(borrow_literal.kind == TyLiteral::Kind::OwnedStr);
+    assert(borrow_literal.symbol.as_str() == std::string_view{"\"42\""});
+}
+
+static void test_borrow_preserves_folded_rhs_when_ref_cannot_materialize() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+runtime extern "lang" fn sink(value: &num);
+
+fn main() {
+    sink(&(1 + 2));
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    assert(main_fn.body != nullptr);
+    assert(main_fn.body->stmts.size() == 1);
+
+    const auto& sink_stmt = std::get<TyExprStmt>(main_fn.body->stmts[0]);
+    assert(std::holds_alternative<TyCall>(sink_stmt.expr->node));
+    const auto& sink_call = std::get<TyCall>(sink_stmt.expr->node);
+    assert(sink_call.args.size() == 1);
+    assert(std::holds_alternative<TyBorrow>(sink_call.args[0]->node));
+
+    const auto& borrow = std::get<TyBorrow>(sink_call.args[0]->node);
+    const TyLiteral& literal = require_literal(borrow.rhs);
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"3"});
 }
 
 static void test_runtime_intrinsic_call_is_preserved() {
@@ -560,7 +587,8 @@ int main() {
     test_string_intrinsics_fold_to_owned_string();
     test_assert_intrinsics_fold_to_unit();
     test_borrowed_str_free_intrinsic_is_noop();
-    test_borrow_of_folded_owned_string_preserves_local_alias();
+    test_borrow_of_folded_owned_string_keeps_folded_rhs();
+    test_borrow_preserves_folded_rhs_when_ref_cannot_materialize();
     test_runtime_intrinsic_call_is_preserved();
     test_dead_if_body_is_not_folded();
     test_dead_while_body_is_not_folded();

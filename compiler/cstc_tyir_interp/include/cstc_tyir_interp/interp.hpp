@@ -1210,7 +1210,11 @@ struct NumericOperands {
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyBorrow>) {
-                return maybe_fold_constant(expr, program, env);
+                auto rhs = fold_expr(node.rhs, env, program);
+                if (!rhs)
+                    return std::unexpected(std::move(rhs.error()));
+                return maybe_fold_constant(
+                    tyir::make_ty_expr(expr->span, tyir::TyBorrow{*rhs}, expr->ty), program, env);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyUnary>) {
