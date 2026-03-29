@@ -80,8 +80,21 @@ void cstc_std_str_concat(cstc_rt_str* out, const cstc_rt_str* a, const cstc_rt_s
     if (out == NULL)
         return;
 
-    const size_t la = a != NULL ? (size_t)a->len : 0;
-    const size_t lb = b != NULL ? (size_t)b->len : 0;
+    const uint64_t raw_la = a != NULL ? a->len : 0;
+    const uint64_t raw_lb = b != NULL ? b->len : 0;
+
+    if (raw_la > (uint64_t)SIZE_MAX || raw_lb > (uint64_t)SIZE_MAX) {
+        cstc_rt_store_borrowed_empty(out);
+        return;
+    }
+
+    const size_t la = (size_t)raw_la;
+    const size_t lb = (size_t)raw_lb;
+    if (la >= SIZE_MAX - lb) {
+        cstc_rt_store_borrowed_empty(out);
+        return;
+    }
+
     char* buf = (char*)malloc(la + lb + 1);
     if (buf == NULL) {
         cstc_rt_store_borrowed_empty(out);
