@@ -210,14 +210,39 @@ struct EvalState {
     [[nodiscard]] static EvalState blocked() { return EvalState{}; }
 };
 
+inline constexpr std::size_t kDefaultEvalStepBudget = 4096;
+inline constexpr std::size_t kDefaultEvalCallDepth = 256;
+
 struct EvalContext {
     const ProgramView& program;
     std::vector<EvalStackFrame> stack;
+    std::size_t remaining_steps = kDefaultEvalStepBudget;
+    std::size_t remaining_call_depth = kDefaultEvalCallDepth;
 };
 
 [[nodiscard]] inline std::unexpected<EvalError>
     make_error(const EvalContext& ctx, SourceSpan span, std::string message) {
     return std::unexpected(EvalError{span, std::move(message), ctx.stack});
+}
+
+[[nodiscard]] inline std::expected<void, EvalError>
+    consume_step_budget(EvalContext& ctx, SourceSpan span, std::string_view activity) {
+    if (ctx.remaining_steps == 0)
+        return make_error(
+            ctx, span, "const-eval step budget exhausted while " + std::string(activity));
+    --ctx.remaining_steps;
+    return {};
+}
+
+[[nodiscard]] inline std::expected<void, EvalError>
+    consume_call_depth(EvalContext& ctx, SourceSpan span, Symbol fn_name) {
+    if (ctx.remaining_call_depth == 0) {
+        const std::string callee = fn_name.is_valid() ? std::string(fn_name.as_str()) : "<unknown>";
+        return make_error(
+            ctx, span, "const-eval call depth exhausted while calling '" + callee + "'");
+    }
+    --ctx.remaining_call_depth;
+    return {};
 }
 
 [[nodiscard]] inline std::string strip_quotes(std::string_view value) {
@@ -335,8 +360,8 @@ struct EvalContext {
 [[nodiscard]] inline std::expected<EvalState, EvalError>
     eval_expr(const tyir::TyExprPtr& expr, ConstEnv& env, EvalContext& ctx);
 
-[[nodiscard]] inline std::expected<EvalState, EvalError>
-    eval_block(const tyir::TyBlockPtr& block, ConstEnv& env, EvalContext& ctx);
+[[nodiscard]] inline std::expected<EvalState, EvalError> eval_block(
+    const tyir::TyBlockPtr& block, ConstEnv& env, EvalContext& ctx, bool consume_budget = true);
 
 [[nodiscard]] inline std::unexpected<EvalError>
     unsupported_value_error(const EvalContext& ctx, SourceSpan span, std::string_view what) {
@@ -630,9 +655,13 @@ struct EvalContext {
                     for (std::size_t index = 0; index < fn.params.size(); ++index)
                         fn_env.bind_known(fn.params[index].name, args[index]);
 
+                    auto call_budget = consume_call_depth(ctx, expr->span, fn.name);
+                    if (!call_budget)
+                        return std::unexpected(std::move(call_budget.error()));
                     ctx.stack.push_back(EvalStackFrame{fn.name, expr->span});
                     auto result = eval_block(fn.body, fn_env, ctx);
                     ctx.stack.pop_back();
+                    ++ctx.remaining_call_depth;
                     if (!result)
                         return std::unexpected(std::move(result.error()));
 
@@ -704,7 +733,11 @@ struct EvalContext {
 
             if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
                 while (true) {
-                    auto body = eval_block(node.body, env, ctx);
+                    auto iteration_budget =
+                        consume_step_budget(ctx, expr->span, "evaluating loop iteration");
+                    if (!iteration_budget)
+                        return std::unexpected(std::move(iteration_budget.error()));
+                    auto body = eval_block(node.body, env, ctx, false);
                     if (!body)
                         return std::unexpected(std::move(body.error()));
                     switch (body->kind) {
@@ -732,7 +765,11 @@ struct EvalContext {
                     if (!cond_value->bool_value)
                         return EvalState::from_value(make_unit());
 
-                    auto body = eval_block(node.body, env, ctx);
+                    auto iteration_budget =
+                        consume_step_budget(ctx, expr->span, "evaluating while iteration");
+                    if (!iteration_budget)
+                        return std::unexpected(std::move(iteration_budget.error()));
+                    auto body = eval_block(node.body, env, ctx, false);
                     if (!body)
                         return std::unexpected(std::move(body.error()));
                     switch (body->kind) {
@@ -783,7 +820,13 @@ struct EvalContext {
                             break;
                     }
 
-                    auto body = eval_block(node.body, env, ctx);
+                    auto iteration_budget =
+                        consume_step_budget(ctx, expr->span, "evaluating for iteration");
+                    if (!iteration_budget) {
+                        env.pop();
+                        return std::unexpected(std::move(iteration_budget.error()));
+                    }
+                    auto body = eval_block(node.body, env, ctx, false);
                     if (!body) {
                         env.pop();
                         return std::unexpected(std::move(body.error()));
@@ -844,8 +887,13 @@ struct EvalContext {
         expr->node);
 }
 
-[[nodiscard]] inline std::expected<EvalState, EvalError>
-    eval_block(const tyir::TyBlockPtr& block, ConstEnv& env, EvalContext& ctx) {
+[[nodiscard]] inline std::expected<EvalState, EvalError> eval_block(
+    const tyir::TyBlockPtr& block, ConstEnv& env, EvalContext& ctx, bool consume_budget) {
+    if (consume_budget) {
+        auto budget = consume_step_budget(ctx, block->span, "evaluating block");
+        if (!budget)
+            return std::unexpected(std::move(budget.error()));
+    }
     env.push();
     for (const tyir::TyStmt& stmt : block->stmts) {
         auto stmt_result = std::visit(

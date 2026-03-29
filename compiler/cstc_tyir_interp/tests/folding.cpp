@@ -245,6 +245,56 @@ fn main() {
     assert(error.stack[0].fn_name == Symbol::intern("check"));
 }
 
+static void test_recursive_const_eval_reports_call_depth_error() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+fn recur() -> num {
+    recur()
+}
+)");
+
+    assert(error.message.find("const-eval call depth exhausted") != std::string::npos);
+    assert(error.message.find("recur") != std::string::npos);
+    assert(!error.stack.empty());
+    assert(error.stack.back().fn_name == Symbol::intern("recur"));
+}
+
+static void test_infinite_loop_reports_step_budget_error() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+fn main() -> ! {
+    loop {}
+}
+)");
+
+    assert(error.message.find("const-eval step budget exhausted") != std::string::npos);
+    assert(error.stack.empty());
+}
+
+static void test_infinite_while_reports_step_budget_error() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+fn main() {
+    while true {}
+}
+)");
+
+    assert(error.message.find("const-eval step budget exhausted") != std::string::npos);
+    assert(error.stack.empty());
+}
+
+static void test_infinite_for_reports_step_budget_error() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+fn main() {
+    for (;;) {}
+}
+)");
+
+    assert(error.message.find("const-eval step budget exhausted") != std::string::npos);
+    assert(error.stack.empty());
+}
+
 int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
@@ -256,5 +306,9 @@ int main() {
     test_runtime_intrinsic_call_is_preserved();
     test_reached_assertion_failure_reports_error();
     test_error_stack_records_called_function();
+    test_recursive_const_eval_reports_call_depth_error();
+    test_infinite_loop_reports_step_budget_error();
+    test_infinite_while_reports_step_budget_error();
+    test_infinite_for_reports_step_budget_error();
     return 0;
 }
