@@ -151,10 +151,10 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 | -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
 | `runtime fn print(value: &str)`        | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const cstc_rt_str*)`             |
 | `runtime fn println(value: &str)`      | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const cstc_rt_str*)`           |
-| `fn to_str(value: num) -> str`         | `declare void @cstc_std_to_str(ptr sret(%cstc.str) align 8, double)` | `cstc_rt_str cstc_std_to_str(double)`      |
-| `fn str_concat(a: &str, b: &str) -> str` | `declare void @cstc_std_str_concat(ptr sret(%cstc.str) align 8, ptr, ptr)` | `cstc_rt_str cstc_std_str_concat(const cstc_rt_str*, const cstc_rt_str*)` |
+| `fn to_str(value: num) -> str`         | `declare void @cstc_std_to_str(ptr sret(%cstc.str) align 8, double)` | `void cstc_std_to_str(cstc_rt_str*, double)`      |
+| `fn str_concat(a: &str, b: &str) -> str` | `declare void @cstc_std_str_concat(ptr sret(%cstc.str) align 8, ptr, ptr)` | `void cstc_std_str_concat(cstc_rt_str*, const cstc_rt_str*, const cstc_rt_str*)` |
 | `fn str_len(value: &str) -> num`       | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const cstc_rt_str*)`         |
-| `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr byval(%cstc.str) align 8)` | `void cstc_std_str_free(cstc_rt_str)`      |
+| `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr byval(%cstc.str) align 8)` | `void cstc_std_str_free(const cstc_rt_str*)`      |
 | `fn assert(condition: bool)`           | `declare void @cstc_std_assert(i1)`                | `void cstc_std_assert(int)`                           |
 | `fn assert_eq(a: num, b: num)`         | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)`             |
 
@@ -164,7 +164,10 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 >
 > The runtime layout of `str` is `%cstc.str = type { ptr, i64, i8 }`:
 > byte pointer, byte length, and an ownership flag. `&str` is therefore a
-> pointer to that record, not a raw `char*`.
+> pointer to that record, not a raw `char*`. The runtime library exposes
+> pointer-based C entry points for owned-string operations so they line up
+> exactly with the compiler's explicit LLVM `sret` / `byval` ABI across
+> platforms.
 
 ## Available functions
 

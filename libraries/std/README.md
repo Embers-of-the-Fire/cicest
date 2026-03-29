@@ -56,14 +56,17 @@ is compiled into a static library (`libcicest_rt.a` on GNU-like toolchains,
 `cicest_rt.lib` on MSVC) by CMake and automatically
 linked into every executable produced by the compiler.
 
+Owned `str` entry points use explicit pointer-based C signatures so they match
+the compiler's emitted LLVM `sret` / `byval` ABI on every target.
+
 | Cicest declaration                     | C signature                                           |
 | -------------------------------------- | ----------------------------------------------------- |
 | `runtime fn print(value: &str)`        | `void cstc_std_print(const cstc_rt_str*)`             |
 | `runtime fn println(value: &str)`      | `void cstc_std_println(const cstc_rt_str*)`           |
-| `fn to_str(value: num) -> str`         | `cstc_rt_str cstc_std_to_str(double)`                 |
-| `fn str_concat(a: &str, b: &str) -> str` | `cstc_rt_str cstc_std_str_concat(const cstc_rt_str*, const cstc_rt_str*)` |
+| `fn to_str(value: num) -> str`         | `void cstc_std_to_str(cstc_rt_str*, double)`          |
+| `fn str_concat(a: &str, b: &str) -> str` | `void cstc_std_str_concat(cstc_rt_str*, const cstc_rt_str*, const cstc_rt_str*)` |
 | `fn str_len(value: &str) -> num`       | `double cstc_std_str_len(const cstc_rt_str*)`         |
-| `fn str_free(value: str)`              | `void cstc_std_str_free(cstc_rt_str)`                 |
+| `fn str_free(value: str)`              | `void cstc_std_str_free(const cstc_rt_str*)`          |
 | `fn assert(condition: bool)`           | `void cstc_std_assert(int)`                           |
 | `fn assert_eq(a: num, b: num)`         | `void cstc_std_assert_eq(double, double)`             |
 

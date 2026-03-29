@@ -7,10 +7,10 @@
 ///
 ///   cstc_std_print(ptr)          → void
 ///   cstc_std_println(ptr)        → void
-///   cstc_std_to_str(double)      → cstc.str
-///   cstc_std_str_concat(ptr,ptr) → cstc.str
+///   cstc_std_to_str(ptr,double)  → void
+///   cstc_std_str_concat(ptr,ptr,ptr) → void
 ///   cstc_std_str_len(ptr)        → double
-///   cstc_std_str_free(cstc.str)  → void
+///   cstc_std_str_free(ptr)       → void
 ///   cstc_std_assert(i1)          → void
 ///   cstc_std_assert_eq(double,double) → void
 
@@ -38,15 +38,9 @@ static cstc_rt_str cstc_rt_borrowed_empty(void) {
     };
 }
 
-static cstc_rt_str cstc_rt_make_owned(char* data, size_t len) {
-    if (data == NULL)
-        return cstc_rt_borrowed_empty();
-
-    return (cstc_rt_str){
-        .data = data,
-        .len = (uint64_t)len,
-        .owns_bytes = 1,
-    };
+static void cstc_rt_store_borrowed_empty(cstc_rt_str* out) {
+    if (out != NULL)
+        *out = cstc_rt_borrowed_empty();
 }
 
 void cstc_std_print(const cstc_rt_str* value) {
@@ -60,33 +54,51 @@ void cstc_std_println(const cstc_rt_str* value) {
     fputc('\n', stdout);
 }
 
-cstc_rt_str cstc_std_to_str(double value) {
+void cstc_std_to_str(cstc_rt_str* out, double value) {
     // snprintf with NULL to measure, then allocate + format.
     int len = snprintf(NULL, 0, "%g", value);
     if (len < 0)
         len = 0;
 
     char* buf = (char*)malloc((size_t)len + 1);
-    if (buf == NULL)
-        return cstc_rt_borrowed_empty();
+    if (buf == NULL) {
+        cstc_rt_store_borrowed_empty(out);
+        return;
+    }
 
     snprintf(buf, (size_t)len + 1, "%g", value);
-    return cstc_rt_make_owned(buf, (size_t)len);
+    if (out == NULL) {
+        free(buf);
+        return;
+    }
+
+    out->data = buf;
+    out->len = (uint64_t)len;
+    out->owns_bytes = 1;
 }
 
-cstc_rt_str cstc_std_str_concat(const cstc_rt_str* a, const cstc_rt_str* b) {
+void cstc_std_str_concat(cstc_rt_str* out, const cstc_rt_str* a, const cstc_rt_str* b) {
     const size_t la = a != NULL ? (size_t)a->len : 0;
     const size_t lb = b != NULL ? (size_t)b->len : 0;
     char* buf = (char*)malloc(la + lb + 1);
-    if (buf == NULL)
-        return cstc_rt_borrowed_empty();
+    if (buf == NULL) {
+        cstc_rt_store_borrowed_empty(out);
+        return;
+    }
 
     if (la > 0 && a != NULL && a->data != NULL)
         memcpy(buf, a->data, la);
     if (lb > 0 && b != NULL && b->data != NULL)
         memcpy(buf + la, b->data, lb);
     buf[la + lb] = '\0';
-    return cstc_rt_make_owned(buf, la + lb);
+    if (out == NULL) {
+        free(buf);
+        return;
+    }
+
+    out->data = buf;
+    out->len = (uint64_t)(la + lb);
+    out->owns_bytes = 1;
 }
 
 double cstc_std_str_len(const cstc_rt_str* value) {
@@ -95,9 +107,9 @@ double cstc_std_str_len(const cstc_rt_str* value) {
     return (double)value->len;
 }
 
-void cstc_std_str_free(cstc_rt_str value) {
-    if (value.owns_bytes != 0 && value.data != NULL)
-        free((void*)value.data);
+void cstc_std_str_free(const cstc_rt_str* value) {
+    if (value != NULL && value->owns_bytes != 0 && value->data != NULL)
+        free((void*)value->data);
 }
 
 void cstc_std_assert(int condition) {
