@@ -21,3 +21,7 @@ target_link_libraries(cstc_inspect
         cicest_options
         cicest_warnings
 )
+
+install(TARGETS cstc_inspect
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)

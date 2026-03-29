@@ -26,6 +26,10 @@ target_link_libraries(cstc
         cicest_warnings
 )
 
+install(TARGETS cstc
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
 if(CICEST_BUILD_TESTS)
     add_executable(cstc_linker_selection
         ${CMAKE_CURRENT_SOURCE_DIR}/tests/linker_selection.cpp

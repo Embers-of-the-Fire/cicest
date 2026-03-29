@@ -1,6 +1,7 @@
 # Continuous Integration (CI)
 
-This repository uses GitHub Actions for automated validation on pushes and pull requests.
+This repository uses GitHub Actions for automated validation on pushes and pull
+requests.
 
 ## Workflows
 
@@ -27,14 +28,15 @@ Behavior by platform:
   - **MinGW path**
     - Sets up MSYS2 + MinGW64 toolchain and dependencies
     - Runs `.github/scripts/run-platform-tests.sh windows`
-    - Configures CMake with `-DCICEST_BUILD_E2E_TESTS=OFF`, so the MinGW leg builds the
-      project and runs non-e2e tests only
+    - Configures CMake with `-DCICEST_BUILD_E2E_TESTS=OFF`, so the MinGW leg
+      builds the project and runs non-e2e tests only
   - **MSVC path**
     - Sets up the Visual Studio developer command environment
     - Installs LLVM (`choco install llvm`)
     - Runs `.github/scripts/run-msvc-tests.ps1`
     - If LLVM CMake metadata is unavailable, the script skips this optional run
-  - Both Windows legs are non-blocking (`continue-on-error`) so CI remains green if Windows support is temporarily unavailable
+  - Both Windows legs are non-blocking (`continue-on-error`) so CI remains
+    green if Windows support is temporarily unavailable
 
 ## 2) `Lint and Format` workflow
 
@@ -50,12 +52,43 @@ Runs on `ubuntu-latest` only.
   - Configures and builds with CMake + Ninja (`-Werror` enabled)
   - Runs `clang-format --dry-run --Werror` against tracked C/C++ sources
 
+## 3) `Prerelease` workflow
+
+File: `.github/workflows/prerelease.yml`
+
+Runs on pushes to the `main` branch and updates the fixed `prerelease` release
+with a fresh Linux-only prebuilt compiler bundle.
+
+- Installs Nix (`cachix/install-nix-action`)
+- Validates the tree with:
+  - `nix run .#lint --print-build-logs`
+  - `nix run .#tests --print-build-logs`
+- Builds a release bundle with `nix run .#prerelease-bundle`
+- Force-moves the `prerelease` tag to the current `main` commit
+- Publishes `dist/cicest-x86_64-linux.tar.gz` with
+  `softprops/action-gh-release`
+- Replaces the existing archive asset in that prerelease when a newer `main`
+  push arrives
+
+The tarball contains only the installed compiler toolchain needed to compile
+and inspect programs on `x86_64-linux`:
+
+- `bin/cstc`
+- `bin/cstc_inspect`
+- `bin/cstc_repl`
+- `lib/*.so*` runtime dependencies required by the Linux executables
+- `lib/cicest/libcicest_rt.a`
+- `share/cicest/std/*.cst`
+
 ## Trigger Rules
 
-Both workflows trigger on:
+The validation workflows trigger on:
 
 - Pushes to `main` or `master`
 - All pull requests
+
+The prerelease workflow triggers on pushes to `main` and updates the fixed
+`prerelease` tag/release.
 
 ## Local Reproduction
 
@@ -69,6 +102,12 @@ NIX_CONFIG='experimental-features = nix-command flakes' bash .github/scripts/run
 
 ```bash
 nix run .#lint
+```
+
+### Linux prerelease bundle
+
+```bash
+nix run .#prerelease-bundle
 ```
 
 ### Platform test script (manual use)

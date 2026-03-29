@@ -10,6 +10,20 @@ set_target_properties(cicest_rt PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 
+install(TARGETS cicest_rt
+    # The installed runtime probe resolves ../lib/cicest relative to the
+    # compiler binaries, so keep the archive in lib even on lib64 hosts.
+    ARCHIVE DESTINATION lib/cicest
+)
+
+install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/std/
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/cicest/std
+    FILES_MATCHING
+    PATTERN "tests" EXCLUDE
+    PATTERN "*.cst"
+)
+
 if(CICEST_BUILD_TESTS)
     file(GLOB glob_test_sources ${CMAKE_CURRENT_SOURCE_DIR}/std/tests/*.cpp)
 

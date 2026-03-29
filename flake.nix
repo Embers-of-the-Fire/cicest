@@ -32,6 +32,7 @@
         ninja
         llvmPackages_latest.clang
         llvmPackages_latest.clang-tools
+        patchelf
         pkg-config
       ];
       misc-dependencies = with pkgs; [
@@ -104,6 +105,18 @@
               '';
             }
           }/bin/lint";
+        };
+        prerelease-bundle = {
+          type = "app";
+          program = "${
+            pkgs.writeShellApplication {
+              name = "prerelease-bundle";
+              runtimeInputs = make-dependencies ++ llvm-dependencies ++ parser-dependencies;
+              text = ''
+                bash .github/scripts/build-prerelease-bundle.sh "$@"
+              '';
+            }
+          }/bin/prerelease-bundle";
         };
       };
 
