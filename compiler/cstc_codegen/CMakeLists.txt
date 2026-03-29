@@ -114,6 +114,7 @@ if(CICEST_BUILD_TESTS)
             PRIVATE
                 cstc_codegen
                 cstc_lir_builder
+                cstc_tyir_interp
                 cstc_tyir_builder
                 cstc_parser
                 cstc_lir

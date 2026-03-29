@@ -81,7 +81,8 @@ static void test_nested_field_access() {
         "struct Outer { inner: Inner }"
         "fn get_x(o: Outer) -> num { o.inner.x }");
     assert(ir_contains(ir, "%Outer = type { %Inner }"));
-    assert(ir_contains(ir, "%Inner = type { double, ptr }"));
+    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
+    assert(ir_contains(ir, "%Inner = type { double, %cstc.str }"));
     assert(ir_contains(ir, "getelementptr inbounds nuw %Outer"));
     assert(ir_contains(ir, "getelementptr inbounds nuw %Inner"));
 }

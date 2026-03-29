@@ -351,6 +351,9 @@ private:
                 switch (node.kind) {
                 case tyir::TyLiteral::Kind::Num: c = lir::LirConst::num(node.symbol); break;
                 case tyir::TyLiteral::Kind::Str: c = lir::LirConst::str(node.symbol); break;
+                case tyir::TyLiteral::Kind::OwnedStr:
+                    c = lir::LirConst::owned_str(node.symbol);
+                    break;
                 case tyir::TyLiteral::Kind::Bool: c = lir::LirConst::bool_(node.bool_value); break;
                 case tyir::TyLiteral::Kind::Unit: c = lir::LirConst::unit(); break;
                 }

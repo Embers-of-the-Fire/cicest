@@ -6,6 +6,7 @@
 #include <cstc_parser/parser.hpp>
 #include <cstc_symbol/symbol.hpp>
 #include <cstc_tyir_builder/builder.hpp>
+#include <cstc_tyir_interp/interp.hpp>
 
 using namespace cstc::symbol;
 
@@ -17,6 +18,17 @@ static std::string must_codegen(const char* source) {
     const auto tyir = cstc::tyir_builder::lower_program(*ast);
     assert(tyir.has_value());
     const auto lir = cstc::lir_builder::lower_program(*tyir);
+    return cstc::codegen::emit_llvm_ir(lir);
+}
+
+static std::string must_codegen_folded(const char* source) {
+    const auto ast = cstc::parser::parse_source(source);
+    assert(ast.has_value());
+    const auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+    const auto folded = cstc::tyir_interp::fold_program(*tyir);
+    assert(folded.has_value());
+    const auto lir = cstc::lir_builder::lower_program(*folded);
     return cstc::codegen::emit_llvm_ir(lir);
 }
 
@@ -58,15 +70,16 @@ fn main() {
     // All 5 extern fns should be declared
     assert(ir_contains(ir, "declare void @print(ptr)"));
     assert(ir_contains(ir, "declare void @println(ptr)"));
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
-    assert(ir_contains(ir, "declare ptr @str_concat(ptr, ptr)"));
+    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
+    assert(ir_contains(ir, "declare void @to_str(ptr, double)"));
+    assert(ir_contains(ir, "declare void @str_concat(ptr, ptr, ptr)"));
     assert(ir_contains(ir, "declare double @str_len(ptr)"));
 
     // Calls should be emitted
     assert(ir_contains(ir, "call void @println(ptr"));
-    assert(ir_contains(ir, "call ptr @to_str(double"));
+    assert(ir_contains(ir, "call void @to_str(ptr"));
     assert(ir_contains(ir, "call void @print(ptr"));
-    assert(ir_contains(ir, "call ptr @str_concat(ptr"));
+    assert(ir_contains(ir, "call void @str_concat(ptr"));
     assert(ir_contains(ir, "call double @str_len(ptr"));
 
     // main should return i32
@@ -91,7 +104,7 @@ fn main() {
 }
 )");
     assert(ir_contains(ir, "declare void @println(ptr)"));
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
+    assert(ir_contains(ir, "declare void @to_str(ptr, double)"));
     assert(ir_contains(ir, "define void @greet(ptr"));
     assert(ir_contains(ir, "define i32 @main()"));
 }
@@ -144,7 +157,7 @@ fn main() {
 }
 )");
     assert(ir_contains(ir, "declare void @println(ptr)"));
-    assert(ir_contains(ir, "declare ptr @to_str(double)"));
+    assert(ir_contains(ir, "declare void @to_str(ptr, double)"));
     assert(ir_contains(ir, "%Point = type { double, double }"));
     assert(ir_contains(ir, "%Color = type { i32 }"));
 }
@@ -174,7 +187,8 @@ fn main() {
 }
 )");
     assert(ir_contains(ir, "@0 = private unnamed_addr constant [3 x i8] c\"hi\\00\""));
-    assert(ir_contains(ir, "call void @print(ptr @0)"));
+    assert(ir_contains(ir, "private unnamed_addr constant %cstc.str { ptr @0, i64 2, i8 0 }"));
+    assert(ir_contains(ir, "call void @print(ptr"));
     assert(!ir_contains(ir, "call void @cstc_std_str_free(ptr"));
 }
 
@@ -192,7 +206,7 @@ fn main() {
     let p: Pair = Pair { left: to_str(1), right: to_str(2) };
 }
 )");
-    assert(ir_contains(ir, "%Pair = type { ptr, ptr }"));
+    assert(ir_contains(ir, "%Pair = type { %cstc.str, %cstc.str }"));
     assert(count_occurrences(ir, "call void @cstc_std_str_free(ptr") >= 2);
 }
 
@@ -221,6 +235,25 @@ fn main() {
     assert(ir_contains(ir, "call void @print(ptr"));
 }
 
+static void test_folded_owned_str_avoids_runtime_to_str_call() {
+    SymbolSession session;
+    const auto ir = must_codegen_folded(R"(
+[[lang = "cstc_std_to_str"]]
+extern "lang" fn to_str(value: num) -> str;
+[[lang = "cstc_std_print"]]
+runtime extern "lang" fn print(value: &str);
+
+fn main() {
+    let rendered: str = to_str(42);
+    print(&rendered);
+}
+)");
+    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
+    assert(!ir_contains(ir, "call void @cstc_std_to_str("));
+    assert(!ir_contains(ir, "@cstc_std_str_concat"));
+    assert(ir_contains(ir, "call void @cstc_std_print(ptr"));
+}
+
 int main() {
     test_program_with_full_prelude();
     test_user_fn_calling_extern();
@@ -230,5 +263,6 @@ int main() {
     test_borrowed_str_literal_does_not_emit_runtime_str_free();
     test_auto_drop_recurses_through_struct_fields();
     test_nested_field_borrow_uses_projected_geps();
+    test_folded_owned_str_avoids_runtime_to_str_call();
     return 0;
 }

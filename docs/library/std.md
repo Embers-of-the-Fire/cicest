@@ -58,14 +58,15 @@ All standard library functions use the `extern` declaration syntax:
 
 ```cicest
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: &str);
+pub runtime extern "lang" fn print(value: &str);
 [[lang = "cstc_std_println"]]
-pub extern "lang" fn println(value: &str);
+pub runtime extern "lang" fn println(value: &str);
 pub extern "lang" struct Handle;
 ```
 
 | Component          | Description                                                                  |
 | ------------------ | ---------------------------------------------------------------------------- |
+| `runtime`          | Marks an extern function as runtime-backed; sugar for a `runtime` return type and preserved for const-eval |
 | `extern`           | Keyword introducing an external declaration                                  |
 | `"lang"`           | ABI string literal — `"lang"` denotes the cicest language runtime            |
 | `fn` / `struct`    | Declares a function signature or opaque struct type                          |
@@ -85,7 +86,7 @@ resolved `link_name`.
 
 ```cicest
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: &str);
+pub runtime extern "lang" fn print(value: &str);
 ```
 
 Declarations that should flow through explicit imports or the implicit prelude
@@ -105,7 +106,8 @@ In LLVM IR, extern functions are emitted as `declare` (no body):
 
 ```llvm
 declare void @cstc_std_println(ptr)
-declare ptr @cstc_std_to_str(double)
+%cstc.str = type { ptr, i64, i8 }
+declare void @cstc_std_to_str(ptr sret(%cstc.str) align 8, double)
 ```
 
 ### Extern structs
@@ -147,18 +149,25 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 
 | Cicest declaration                     | LLVM IR                                            | C signature                                           |
 | -------------------------------------- | -------------------------------------------------- | ----------------------------------------------------- |
-| `fn print(value: &str)`                | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const char*)`                    |
-| `fn println(value: &str)`              | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const char*)`                  |
-| `fn to_str(value: num) -> str`         | `declare ptr @cstc_std_to_str(double)`             | `char* cstc_std_to_str(double)`                       |
-| `fn str_concat(a: &str, b: &str) -> str` | `declare ptr @cstc_std_str_concat(ptr, ptr)`     | `char* cstc_std_str_concat(const char*, const char*)` |
-| `fn str_len(value: &str) -> num`       | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const char*)`                |
-| `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr)`             | `void cstc_std_str_free(const char*)`                 |
+| `runtime fn print(value: &str)`        | `declare void @cstc_std_print(ptr)`                | `void cstc_std_print(const cstc_rt_str*)`             |
+| `runtime fn println(value: &str)`      | `declare void @cstc_std_println(ptr)`              | `void cstc_std_println(const cstc_rt_str*)`           |
+| `fn to_str(value: num) -> str`         | `declare void @cstc_std_to_str(ptr sret(%cstc.str) align 8, double)` | `void cstc_std_to_str(cstc_rt_str*, double)`      |
+| `fn str_concat(a: &str, b: &str) -> str` | `declare void @cstc_std_str_concat(ptr sret(%cstc.str) align 8, ptr, ptr)` | `void cstc_std_str_concat(cstc_rt_str*, const cstc_rt_str*, const cstc_rt_str*)` |
+| `fn str_len(value: &str) -> num`       | `declare double @cstc_std_str_len(ptr)`            | `double cstc_std_str_len(const cstc_rt_str*)`         |
+| `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr byval(%cstc.str) align 8)` | `void cstc_std_str_free(const cstc_rt_str*)`      |
 | `fn assert(condition: bool)`           | `declare void @cstc_std_assert(i1)`                | `void cstc_std_assert(int)`                           |
 | `fn assert_eq(a: num, b: num)`         | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)`             |
 
 > **Note:** `str` is now an owned, move-only string value. The compiler inserts
 > automatic drop at scope exit, and `str_free(value: str)` is a low-level
 > consuming escape hatch. Borrowing APIs use `&str`.
+>
+> The runtime layout of `str` is `%cstc.str = type { ptr, i64, i8 }`:
+> byte pointer, byte length, and an ownership flag. `&str` is therefore a
+> pointer to that record, not a raw `char*`. The runtime library exposes
+> pointer-based C entry points for owned-string operations so they line up
+> exactly with the compiler's explicit LLVM `sret` / `byval` ABI across
+> platforms.
 
 ## Available functions
 
@@ -168,8 +177,8 @@ The prelude currently provides the following functions:
 
 | Function  | Signature                | Description                                                    |
 | --------- | ------------------------ | -------------------------------------------------------------- |
-| `print`   | `fn print(value: &str)`   | Prints a borrowed string without a trailing newline. |
-| `println` | `fn println(value: &str)` | Prints a borrowed string followed by a newline.      |
+| `print`   | `runtime fn print(value: &str)`   | Prints a borrowed string without a trailing newline. |
+| `println` | `runtime fn println(value: &str)` | Prints a borrowed string followed by a newline.      |
 
 ### Conversion
 

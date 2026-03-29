@@ -147,7 +147,8 @@ Notes:
 - `extern` functions have no body; `extern` structs are opaque (no fields).
 - `runtime fn` and `runtime extern ... fn` are syntax sugar for wrapping the
   return type in `runtime`. For example, `runtime fn f() -> num` is equivalent
-  to `fn f() -> runtime num`.
+  to `fn f() -> runtime num`, and TyIR also preserves the declaration-level
+  runtime bit for const-eval.
 - `pub` marks a top-level item or import as exportable from its module.
 - `import *` is intentionally unavailable in source code. The compiler uses an
   internal equivalent only for the std prelude.
@@ -369,7 +370,7 @@ fn f(b: bool) -> num {
 ## 7. Valid Syntax Examples
 
 ```text
-extern "lang" fn print(value: &str);
+runtime extern "lang" fn print(value: &str);
 extern "lang" fn to_str(value: num) -> str;
 extern "lang" struct Handle;
 

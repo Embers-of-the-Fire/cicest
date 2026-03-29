@@ -77,8 +77,9 @@ static void test_fn_returns_bool() {
 static void test_fn_returns_str() {
     const std::string ir =
         must_codegen("extern \"lang\" fn to_str(value: num) -> str; fn f() -> str { to_str(0) }");
-    assert(ir_contains(ir, "define ptr @f()"));
-    assert(ir_contains(ir, "ret ptr"));
+    assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));
+    assert(ir_contains(ir, "define %cstc.str @f()"));
+    assert(ir_contains(ir, "ret %cstc.str"));
 }
 
 // ─── Function with params ────────────────────────────────────────────────────

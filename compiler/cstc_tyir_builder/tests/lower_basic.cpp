@@ -190,7 +190,7 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
     assert(fn.params.size() == 1);
     assert(!fn.params[0].ty.is_runtime);
     assert(fn.return_ty.is_runtime);
-    assert(!fn.body->ty.is_runtime);
+    assert(fn.body->ty.is_runtime);
 }
 
 static void test_runtime_return_annotation_accepts_plain_value() {
@@ -210,7 +210,7 @@ static void test_runtime_main_return_allowed() {
     const auto prog = must_lower("runtime fn main() -> num { 0 }");
     const auto& fn = std::get<TyFnDecl>(prog.items[0]);
     assert(fn.return_ty == ty::num(true));
-    assert(fn.body->ty == ty::num());
+    assert(fn.body->ty == ty::num(true));
 }
 
 static void test_duplicate_function_name_error() {

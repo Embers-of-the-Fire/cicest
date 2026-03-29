@@ -1,7 +1,7 @@
 [[lang = "cstc_std_print"]]
-pub extern "lang" fn print(value: &str);
+pub runtime extern "lang" fn print(value: &str);
 [[lang = "cstc_std_println"]]
-pub extern "lang" fn println(value: &str);
+pub runtime extern "lang" fn println(value: &str);
 [[lang = "cstc_std_to_str"]]
 pub extern "lang" fn to_str(value: num) -> str;
 [[lang = "cstc_std_str_concat"]]

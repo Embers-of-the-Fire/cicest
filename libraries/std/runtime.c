@@ -7,60 +7,127 @@
 ///
 ///   cstc_std_print(ptr)          → void
 ///   cstc_std_println(ptr)        → void
-///   cstc_std_to_str(double)      → ptr
-///   cstc_std_str_concat(ptr,ptr) → ptr
+///   cstc_std_to_str(ptr,double)  → void
+///   cstc_std_str_concat(ptr,ptr,ptr) → void
 ///   cstc_std_str_len(ptr)        → double
 ///   cstc_std_str_free(ptr)       → void
 ///   cstc_std_assert(i1)          → void
 ///   cstc_std_assert_eq(double,double) → void
 
 #include <math.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-void cstc_std_print(const char* value) { fputs(value, stdout); }
+typedef struct cstc_rt_str {
+    char* data;
+    uint64_t len;
+    uint8_t owns_bytes;
+} cstc_rt_str;
 
-void cstc_std_println(const char* value) { puts(value); }
+static char cstc_rt_empty_data[] = "";
 
-char* cstc_std_to_str(double value) {
+static cstc_rt_str cstc_rt_borrowed_empty(void) {
+    return (cstc_rt_str){
+        .data = cstc_rt_empty_data,
+        .len = 0,
+        .owns_bytes = 0,
+    };
+}
+
+static void cstc_rt_store_borrowed_empty(cstc_rt_str* out) {
+    if (out != NULL)
+        *out = cstc_rt_borrowed_empty();
+}
+
+static bool cstc_rt_str_is_missing_or_empty(const cstc_rt_str* value) {
+    return value == NULL || value->data == NULL || value->len == 0;
+}
+
+void cstc_std_print(const cstc_rt_str* value) {
+    if (cstc_rt_str_is_missing_or_empty(value))
+        return;
+    fwrite(value->data, 1, (size_t)value->len, stdout);
+}
+
+void cstc_std_println(const cstc_rt_str* value) {
+    if (cstc_rt_str_is_missing_or_empty(value))
+        return;
+    cstc_std_print(value);
+    fputc('\n', stdout);
+}
+
+void cstc_std_to_str(cstc_rt_str* out, double value) {
+    if (out == NULL)
+        return;
+
     // snprintf with NULL to measure, then allocate + format.
     int len = snprintf(NULL, 0, "%g", value);
     if (len < 0)
         len = 0;
+
     char* buf = (char*)malloc((size_t)len + 1);
     if (buf == NULL) {
-        // Allocation failure: return a heap-allocated empty string so that
-        // callers always receive a freeable pointer.
-        buf = (char*)malloc(1);
-        if (buf != NULL)
-            buf[0] = '\0';
-        return buf;
+        cstc_rt_store_borrowed_empty(out);
+        return;
     }
+
     snprintf(buf, (size_t)len + 1, "%g", value);
-    return buf;
+
+    out->data = buf;
+    out->len = (uint64_t)len;
+    out->owns_bytes = 1;
 }
 
-char* cstc_std_str_concat(const char* a, const char* b) {
-    size_t la = strlen(a);
-    size_t lb = strlen(b);
+void cstc_std_str_concat(cstc_rt_str* out, const cstc_rt_str* a, const cstc_rt_str* b) {
+    if (out == NULL)
+        return;
+
+    const uint64_t raw_la = a != NULL ? a->len : 0;
+    const uint64_t raw_lb = b != NULL ? b->len : 0;
+
+    if (raw_la > (uint64_t)SIZE_MAX || raw_lb > (uint64_t)SIZE_MAX) {
+        cstc_rt_store_borrowed_empty(out);
+        return;
+    }
+
+    const size_t la = (size_t)raw_la;
+    const size_t lb = (size_t)raw_lb;
+    if (la >= SIZE_MAX - lb) {
+        cstc_rt_store_borrowed_empty(out);
+        return;
+    }
+
     char* buf = (char*)malloc(la + lb + 1);
     if (buf == NULL) {
-        // Allocation failure: return a heap-allocated empty string.
-        buf = (char*)malloc(1);
-        if (buf != NULL)
-            buf[0] = '\0';
-        return buf;
+        cstc_rt_store_borrowed_empty(out);
+        return;
     }
-    memcpy(buf, a, la);
-    memcpy(buf + la, b, lb);
+
+    if (la > 0 && a != NULL && a->data != NULL)
+        memcpy(buf, a->data, la);
+    if (lb > 0 && b != NULL && b->data != NULL)
+        memcpy(buf + la, b->data, lb);
     buf[la + lb] = '\0';
-    return buf;
+
+    out->data = buf;
+    out->len = (uint64_t)(la + lb);
+    out->owns_bytes = 1;
 }
 
-double cstc_std_str_len(const char* value) { return (double)strlen(value); }
+double cstc_std_str_len(const cstc_rt_str* value) {
+    if (value == NULL)
+        return 0.0;
+    return (double)value->len;
+}
 
-void cstc_std_str_free(const char* value) { free((void*)value); }
+void cstc_std_str_free(const cstc_rt_str* value) {
+    if (value != NULL && value->owns_bytes != 0 && value->data != NULL)
+        free((void*)value->data);
+}
 
 void cstc_std_assert(int condition) {
     if (!condition) {

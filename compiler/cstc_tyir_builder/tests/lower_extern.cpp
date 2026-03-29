@@ -68,6 +68,7 @@ static void test_runtime_extern_fn_preserves_runtime_markers() {
     const auto prog = must_lower(R"(runtime extern "lang" fn print(value: &runtime str);)");
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
+    assert(decl.is_runtime);
     assert(decl.params.size() == 1);
     assert(decl.params[0].ty.is_ref());
     assert(decl.params[0].ty.pointee != nullptr);

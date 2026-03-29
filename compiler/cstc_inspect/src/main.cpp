@@ -10,7 +10,6 @@
 #include <cstc_span/span.hpp>
 #include <cstc_symbol/symbol.hpp>
 #include <cstc_tyir/printer.hpp>
-#include <cstc_tyir_builder/builder.hpp>
 
 #include <filesystem>
 #include <iostream>
@@ -136,11 +135,11 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     const auto merged =
         cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH);
 
-    const auto lowered = cstc::tyir_builder::lower_program(merged);
-    if (!lowered.has_value())
-        throw std::runtime_error(cstc::cli_support::format_type_error(source_map, lowered.error()));
+    const auto tyir = cstc::cli_support::lower_and_fold_program(source_map, merged);
+    if (!tyir.has_value())
+        throw std::runtime_error(tyir.error());
 
-    return cstc::tyir::format_program(*lowered);
+    return cstc::tyir::format_program(*tyir);
 }
 
 [[nodiscard]] std::string
@@ -148,11 +147,11 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     const auto merged =
         cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH);
 
-    const auto lowered = cstc::tyir_builder::lower_program(merged);
-    if (!lowered.has_value())
-        throw std::runtime_error(cstc::cli_support::format_type_error(source_map, lowered.error()));
+    const auto tyir = cstc::cli_support::lower_and_fold_program(source_map, merged);
+    if (!tyir.has_value())
+        throw std::runtime_error(tyir.error());
 
-    const auto lir = cstc::lir_builder::lower_program(*lowered);
+    const auto lir = cstc::lir_builder::lower_program(*tyir);
     return cstc::lir::format_program(lir);
 }
 
@@ -161,11 +160,11 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     const auto merged =
         cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH);
 
-    const auto lowered = cstc::tyir_builder::lower_program(merged);
-    if (!lowered.has_value())
-        throw std::runtime_error(cstc::cli_support::format_type_error(source_map, lowered.error()));
+    const auto tyir = cstc::cli_support::lower_and_fold_program(source_map, merged);
+    if (!tyir.has_value())
+        throw std::runtime_error(tyir.error());
 
-    const auto lir = cstc::lir_builder::lower_program(*lowered);
+    const auto lir = cstc::lir_builder::lower_program(*tyir);
     return cstc::codegen::emit_llvm_ir(lir);
 }
 

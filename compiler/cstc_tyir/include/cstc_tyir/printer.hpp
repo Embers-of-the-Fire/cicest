@@ -128,6 +128,10 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                     out << "TyLiteral(" << node.symbol.as_str() << "): " << expr->ty.display()
                         << "\n";
                     break;
+                case TyLiteral::Kind::OwnedStr:
+                    out << "TyLiteral(owned " << node.symbol.as_str() << "): " << expr->ty.display()
+                        << "\n";
+                    break;
                 case TyLiteral::Kind::Bool:
                     out << "TyLiteral(" << (node.bool_value ? "true" : "false")
                         << "): " << expr->ty.display() << "\n";

@@ -10,6 +10,7 @@ This directory contains the scoped Cicest compiler packages:
 - `cstc_module`: module graph loading and import resolution
 - `cstc_tyir`: typed intermediate representation model + formatter
 - `cstc_tyir_builder`: AST to TyIR lowering + type checking
+- `cstc_tyir_interp`: TyIR interpreter + const-folding pass
 - `cstc_codegen`: LIR to LLVM IR/native artifact backend
 - `cstc_cli_support`: shared CLI helpers for module loading and diagnostics
 - `cstc`: compiler CLI that emits `.s` / `.o` artifacts

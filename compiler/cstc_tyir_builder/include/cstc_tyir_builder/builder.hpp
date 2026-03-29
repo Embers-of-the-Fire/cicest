@@ -1758,10 +1758,13 @@ inline std::expected<void, LowerError> merge_loop_break_types(
                                + "' may fall through without returning a value of type '"
                                + sig.return_ty.display() + "'");
 
+    if (fn.is_runtime)
+        body->ty.is_runtime = true;
+
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
 
-    return tyir::TyFnDecl{
-        fn.name, std::move(ty_params), sig.return_ty, std::move(body_ptr), fn.span};
+    return tyir::TyFnDecl{fn.name, std::move(ty_params), sig.return_ty, std::move(body_ptr),
+                          fn.span, fn.is_runtime};
 }
 
 } // namespace detail
@@ -1915,6 +1918,7 @@ inline std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Progr
             ty_decl.link_name = *link_name;
             ty_decl.return_ty = sig.return_ty;
             ty_decl.span = ext_fn->span;
+            ty_decl.is_runtime = ext_fn->is_runtime;
             for (std::size_t i = 0; i < ext_fn->params.size(); ++i) {
                 ty_decl.params.push_back(
                     tyir::TyParam{
