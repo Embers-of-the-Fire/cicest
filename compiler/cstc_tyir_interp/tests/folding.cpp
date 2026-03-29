@@ -216,6 +216,37 @@ static void test_borrowed_str_free_intrinsic_is_noop() {
     assert((*result)->kind == cstc::tyir_interp::detail::Value::Kind::Unit);
 }
 
+static void test_borrow_of_folded_owned_string_preserves_local_alias() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+extern "lang" fn to_str(value: num) -> str;
+runtime extern "lang" fn println(value: &str);
+
+fn main() {
+    let rendered: str = to_str(42);
+    println(&rendered);
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    assert(main_fn.body != nullptr);
+    assert(main_fn.body->stmts.size() == 2);
+
+    const auto& rendered_stmt = std::get<TyLetStmt>(main_fn.body->stmts[0]);
+    const TyLiteral& rendered_literal = require_literal(rendered_stmt.init);
+    assert(rendered_literal.kind == TyLiteral::Kind::OwnedStr);
+    assert(rendered_literal.symbol.as_str() == std::string_view{"\"42\""});
+
+    const auto& print_stmt = std::get<TyExprStmt>(main_fn.body->stmts[1]);
+    assert(std::holds_alternative<TyCall>(print_stmt.expr->node));
+    const auto& print_call = std::get<TyCall>(print_stmt.expr->node);
+    assert(print_call.args.size() == 1);
+    assert(std::holds_alternative<TyBorrow>(print_call.args[0]->node));
+    const auto& borrow = std::get<TyBorrow>(print_call.args[0]->node);
+    assert(std::holds_alternative<LocalRef>(borrow.rhs->node));
+    assert(std::get<LocalRef>(borrow.rhs->node).name == Symbol::intern("rendered"));
+}
+
 static void test_runtime_intrinsic_call_is_preserved() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -529,6 +560,7 @@ int main() {
     test_string_intrinsics_fold_to_owned_string();
     test_assert_intrinsics_fold_to_unit();
     test_borrowed_str_free_intrinsic_is_noop();
+    test_borrow_of_folded_owned_string_preserves_local_alias();
     test_runtime_intrinsic_call_is_preserved();
     test_dead_if_body_is_not_folded();
     test_dead_while_body_is_not_folded();

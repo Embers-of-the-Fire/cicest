@@ -991,6 +991,21 @@ struct NumericOperands {
     return std::unexpected(EvalError{span, std::move(message), {}});
 }
 
+[[nodiscard]] inline bool can_fold_reference_expr(const tyir::Ty& ty, const ValuePtr& value) {
+    if (!ty.is_ref() || ty.pointee == nullptr)
+        return true;
+
+    if (value == nullptr || value->kind != Value::Kind::Ref || value->referent == nullptr)
+        return true;
+
+    const Value* actual = deref_value(value);
+    if (actual == nullptr)
+        return true;
+
+    return actual->kind == Value::Kind::String
+        && actual->string_ownership == Value::StringOwnership::BorrowedLiteral;
+}
+
 [[nodiscard]] inline std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     const ProgramView& program, const ValuePtr& value, const tyir::Ty& ty, SourceSpan span) {
     if (value == nullptr)
@@ -1161,6 +1176,8 @@ struct NumericOperands {
         return std::unexpected(std::move(value.error()));
     if (value->kind != EvalState::Kind::Value)
         return expr;
+    if (!can_fold_reference_expr(expr->ty, value->value))
+        return expr;
     auto folded = value_to_expr(program, value->value, expr->ty, expr->span);
     if (!folded)
         return std::unexpected(std::move(folded.error()));
@@ -1193,11 +1210,7 @@ struct NumericOperands {
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyBorrow>) {
-                auto rhs = fold_expr(node.rhs, env, program);
-                if (!rhs)
-                    return std::unexpected(std::move(rhs.error()));
-                return maybe_fold_constant(
-                    tyir::make_ty_expr(expr->span, tyir::TyBorrow{*rhs}, expr->ty), program, env);
+                return maybe_fold_constant(expr, program, env);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyUnary>) {
