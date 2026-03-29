@@ -212,6 +212,61 @@ fn main() {
     assert(std::get<TyCall>(expr->node).fn_name == Symbol::intern("println"));
 }
 
+static void test_dead_if_body_is_not_folded() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+extern "lang" fn assert(condition: bool);
+
+fn main() {
+    if false { assert(false); }
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Unit);
+}
+
+static void test_dead_while_body_is_not_folded() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+extern "lang" fn assert(condition: bool);
+
+fn main() {
+    while false { assert(false); }
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Unit);
+}
+
+static void test_dead_for_body_and_step_are_not_folded() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+extern "lang" fn assert(condition: bool);
+
+fn main() {
+    for (; false; assert(false)) { assert(false); }
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Unit);
+}
+
+static void test_dead_for_still_folds_reachable_init() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+extern "lang" fn assert(condition: bool);
+
+fn main() {
+    for (let _ = assert(false); false; assert(true)) { assert(true); }
+}
+)");
+
+    assert(error.message.find("compile-time assertion failed") != std::string::npos);
+}
+
 static void test_reached_assertion_failure_reports_error() {
     SymbolSession session;
     const auto error = must_fail_to_fold(R"(
@@ -397,6 +452,10 @@ int main() {
     test_string_intrinsics_fold_to_owned_string();
     test_assert_intrinsics_fold_to_unit();
     test_runtime_intrinsic_call_is_preserved();
+    test_dead_if_body_is_not_folded();
+    test_dead_while_body_is_not_folded();
+    test_dead_for_body_and_step_are_not_folded();
+    test_dead_for_still_folds_reachable_init();
     test_reached_assertion_failure_reports_error();
     test_error_stack_records_called_function();
     test_recursive_const_eval_reports_call_depth_error();

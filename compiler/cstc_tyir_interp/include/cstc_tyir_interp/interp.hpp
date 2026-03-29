@@ -1251,7 +1251,7 @@ struct EvalContext {
 
                 ConstEnv branch_env = env;
                 const auto cond_value = constant_bool(*condition, branch_env, program);
-                if (cond_value.has_value() && node.else_branch.has_value()) {
+                if (cond_value.has_value()) {
                     if (*cond_value) {
                         auto then_block = fold_block(*node.then_block, branch_env, program);
                         if (!then_block)
@@ -1260,7 +1260,13 @@ struct EvalContext {
                         return maybe_fold_constant(
                             tyir::make_ty_expr(expr->span, then_ptr, expr->ty), program, env);
                     }
-                    return fold_expr(*node.else_branch, branch_env, program);
+                    if (node.else_branch.has_value())
+                        return fold_expr(*node.else_branch, branch_env, program);
+                    return tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyLiteral{
+                            tyir::TyLiteral::Kind::Unit, cstc::symbol::kInvalidSymbol, false},
+                        expr->ty);
                 }
 
                 auto then_block = fold_block(*node.then_block, branch_env, program);
@@ -1274,14 +1280,6 @@ struct EvalContext {
                     if (!else_expr)
                         return std::unexpected(std::move(else_expr.error()));
                     else_branch = *else_expr;
-                }
-
-                if (cond_value.has_value() && !node.else_branch.has_value() && !*cond_value) {
-                    return tyir::make_ty_expr(
-                        expr->span,
-                        tyir::TyLiteral{
-                            tyir::TyLiteral::Kind::Unit, cstc::symbol::kInvalidSymbol, false},
-                        expr->ty);
                 }
 
                 return maybe_fold_constant(
@@ -1306,6 +1304,15 @@ struct EvalContext {
                 auto condition = fold_expr(node.condition, env, program);
                 if (!condition)
                     return std::unexpected(std::move(condition.error()));
+                ConstEnv loop_env = env;
+                const auto cond_value = constant_bool(*condition, loop_env, program);
+                if (cond_value.has_value() && !*cond_value) {
+                    return tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyLiteral{
+                            tyir::TyLiteral::Kind::Unit, cstc::symbol::kInvalidSymbol, false},
+                        expr->ty);
+                }
                 auto body = fold_block(*node.body, env, program);
                 if (!body)
                     return std::unexpected(std::move(body.error()));
@@ -1346,6 +1353,21 @@ struct EvalContext {
                     if (!cond)
                         return std::unexpected(std::move(cond.error()));
                     condition = *cond;
+                }
+
+                if (condition.has_value()) {
+                    ConstEnv cond_env = loop_env;
+                    const auto cond_value = constant_bool(*condition, cond_env, program);
+                    if (cond_value.has_value() && !*cond_value) {
+                        loop_env.pop();
+                        return maybe_fold_constant(
+                            tyir::make_ty_expr(
+                                expr->span,
+                                tyir::TyFor{
+                                    std::move(init), std::move(condition), node.step, node.body},
+                                expr->ty),
+                            program, env);
+                    }
                 }
 
                 std::optional<tyir::TyExprPtr> step;
