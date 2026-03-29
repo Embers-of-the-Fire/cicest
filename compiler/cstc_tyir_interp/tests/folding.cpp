@@ -443,6 +443,41 @@ static void test_null_materialization_reports_error() {
         != std::string::npos);
 }
 
+static void test_comparison_requires_numeric_operands() {
+    SymbolSession session;
+    const auto ast = cstc::parser::parse_source(R"(
+fn cmp(x: num, y: num) -> bool {
+    x < y
+}
+)");
+    assert(ast.has_value());
+    auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+
+    bool mutated = false;
+    for (TyItem& item : tyir->items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("cmp"))
+            continue;
+        assert(fn->body != nullptr);
+        assert(fn->body->tail.has_value());
+        auto* binary = std::get_if<TyBinary>(&(*fn->body->tail)->node);
+        assert(binary != nullptr);
+        binary->lhs = make_ty_expr(
+            binary->lhs->span, TyLiteral{TyLiteral::Kind::Bool, cstc::symbol::kInvalidSymbol, true},
+            ty::bool_());
+        binary->rhs = make_ty_expr(
+            binary->rhs->span,
+            TyLiteral{TyLiteral::Kind::Bool, cstc::symbol::kInvalidSymbol, false}, ty::bool_());
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(*tyir);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("numeric comparison operands") != std::string::npos);
+}
+
 int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
@@ -466,5 +501,6 @@ int main() {
     test_break_value_in_for_reports_const_eval_error();
     test_materialization_mismatch_reports_error();
     test_null_materialization_reports_error();
+    test_comparison_requires_numeric_operands();
     return 0;
 }

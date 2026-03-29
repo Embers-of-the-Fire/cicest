@@ -591,12 +591,32 @@ struct EvalContext {
                     }
                     break;
                 case Op::Lt:
+                    if (left == nullptr || right == nullptr || left->kind != Value::Kind::Num
+                        || right->kind != Value::Kind::Num) {
+                        return unsupported_value_error(
+                            ctx, expr->span, "numeric comparison operands");
+                    }
                     return EvalState::from_value(make_bool(left->num_value < right->num_value));
                 case Op::Le:
+                    if (left == nullptr || right == nullptr || left->kind != Value::Kind::Num
+                        || right->kind != Value::Kind::Num) {
+                        return unsupported_value_error(
+                            ctx, expr->span, "numeric comparison operands");
+                    }
                     return EvalState::from_value(make_bool(left->num_value <= right->num_value));
                 case Op::Gt:
+                    if (left == nullptr || right == nullptr || left->kind != Value::Kind::Num
+                        || right->kind != Value::Kind::Num) {
+                        return unsupported_value_error(
+                            ctx, expr->span, "numeric comparison operands");
+                    }
                     return EvalState::from_value(make_bool(left->num_value > right->num_value));
                 case Op::Ge:
+                    if (left == nullptr || right == nullptr || left->kind != Value::Kind::Num
+                        || right->kind != Value::Kind::Num) {
+                        return unsupported_value_error(
+                            ctx, expr->span, "numeric comparison operands");
+                    }
                     return EvalState::from_value(make_bool(left->num_value >= right->num_value));
                 case Op::Eq:
                     return EvalState::from_value(make_bool(values_equal(lhs->value, rhs->value)));
