@@ -56,16 +56,19 @@ Runs on `ubuntu-latest` only.
 
 File: `.github/workflows/prerelease.yml`
 
-Runs on pushes to the `prerelease` tag and publishes a Linux-only prebuilt
-compiler bundle.
+Runs on pushes to the `main` branch and updates the fixed `prerelease` release
+with a fresh Linux-only prebuilt compiler bundle.
 
 - Installs Nix (`cachix/install-nix-action`)
 - Validates the tree with:
   - `nix run .#lint --print-build-logs`
   - `nix run .#tests --print-build-logs`
 - Builds a release bundle with `nix run .#prerelease-bundle`
+- Force-moves the `prerelease` tag to the current `main` commit
 - Publishes `dist/cicest-x86_64-linux.tar.gz` with
   `softprops/action-gh-release`
+- Replaces the existing archive asset in that prerelease when a newer `main`
+  push arrives
 
 The tarball contains only the installed compiler toolchain needed to compile
 and inspect programs on `x86_64-linux`:
@@ -84,7 +87,8 @@ The validation workflows trigger on:
 - Pushes to `main` or `master`
 - All pull requests
 
-The prerelease workflow triggers on pushes to the literal `prerelease` tag.
+The prerelease workflow triggers on pushes to `main` and updates the fixed
+`prerelease` tag/release.
 
 ## Local Reproduction
 
