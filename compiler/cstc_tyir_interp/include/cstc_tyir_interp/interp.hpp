@@ -245,6 +245,17 @@ struct EvalContext {
     return {};
 }
 
+[[nodiscard]] inline std::expected<void, EvalError> require_call_arity(
+    const EvalContext& ctx, SourceSpan span, std::string_view callee_name, std::size_t expected,
+    std::size_t actual) {
+    if (expected == actual)
+        return {};
+    return make_error(
+        ctx, span,
+        "mismatched compile-time call arity for '" + std::string(callee_name) + "': expected "
+            + std::to_string(expected) + " argument(s), got " + std::to_string(actual));
+}
+
 [[nodiscard]] inline std::string strip_quotes(std::string_view value) {
     if (value.size() >= 2 && value.front() == '"' && value.back() == '"')
         return std::string(value.substr(1, value.size() - 2));
@@ -394,6 +405,15 @@ struct NumericOperands {
     SourceSpan span) {
     const Symbol resolved_name = decl.link_name.is_valid() ? decl.link_name : decl.name;
     const std::string_view name = resolved_name.as_str();
+    const std::string_view display_name = decl.name.is_valid() ? decl.name.as_str() : name;
+    const auto require_intrinsic_arity =
+        [&](std::size_t expected) -> std::expected<void, EvalError> {
+        return require_call_arity(ctx, span, display_name, expected, args.size());
+    };
+    auto declared_arity =
+        require_call_arity(ctx, span, display_name, decl.params.size(), args.size());
+    if (!declared_arity)
+        return std::unexpected(std::move(declared_arity.error()));
     const auto unwrap_string = [&](std::size_t index) -> std::expected<const Value*, EvalError> {
         const Value* value = deref_value(args[index]);
         if (value == nullptr || value->kind != Value::Kind::String)
@@ -402,6 +422,9 @@ struct NumericOperands {
     };
 
     if (name == "to_str" || name == "cstc_std_to_str") {
+        auto arity = require_intrinsic_arity(1);
+        if (!arity)
+            return std::unexpected(std::move(arity.error()));
         const Value* arg = deref_value(args[0]);
         if (arg == nullptr || arg->kind != Value::Kind::Num)
             return unsupported_value_error(ctx, span, "numeric argument");
@@ -409,6 +432,9 @@ struct NumericOperands {
     }
 
     if (name == "str_concat" || name == "cstc_std_str_concat") {
+        auto arity = require_intrinsic_arity(2);
+        if (!arity)
+            return std::unexpected(std::move(arity.error()));
         auto lhs = unwrap_string(0);
         if (!lhs)
             return std::unexpected(std::move(lhs.error()));
@@ -420,6 +446,9 @@ struct NumericOperands {
     }
 
     if (name == "str_len" || name == "cstc_std_str_len") {
+        auto arity = require_intrinsic_arity(1);
+        if (!arity)
+            return std::unexpected(std::move(arity.error()));
         auto value = unwrap_string(0);
         if (!value)
             return std::unexpected(std::move(value.error()));
@@ -427,6 +456,9 @@ struct NumericOperands {
     }
 
     if (name == "str_free" || name == "cstc_std_str_free") {
+        auto arity = require_intrinsic_arity(1);
+        if (!arity)
+            return std::unexpected(std::move(arity.error()));
         auto value = unwrap_string(0);
         if (!value)
             return std::unexpected(std::move(value.error()));
@@ -435,6 +467,9 @@ struct NumericOperands {
     }
 
     if (name == "assert" || name == "cstc_std_assert") {
+        auto arity = require_intrinsic_arity(1);
+        if (!arity)
+            return std::unexpected(std::move(arity.error()));
         const Value* value = deref_value(args[0]);
         if (value == nullptr || value->kind != Value::Kind::Bool)
             return unsupported_value_error(ctx, span, "boolean assertion argument");
@@ -444,6 +479,9 @@ struct NumericOperands {
     }
 
     if (name == "assert_eq" || name == "cstc_std_assert_eq") {
+        auto arity = require_intrinsic_arity(2);
+        if (!arity)
+            return std::unexpected(std::move(arity.error()));
         const Value* lhs = deref_value(args[0]);
         const Value* rhs = deref_value(args[1]);
         auto operands =
@@ -666,6 +704,10 @@ struct NumericOperands {
                     const tyir::TyFnDecl& fn = *fn_it->second;
                     if (fn.return_ty.is_runtime || fn.is_runtime)
                         return EvalState::blocked();
+                    auto arity = require_call_arity(
+                        ctx, expr->span, fn.name.as_str(), fn.params.size(), node.args.size());
+                    if (!arity)
+                        return std::unexpected(std::move(arity.error()));
 
                     std::vector<ValuePtr> args;
                     args.reserve(node.args.size());
@@ -721,6 +763,10 @@ struct NumericOperands {
                         ctx, expr->span,
                         "reached non-runtime extern call with unsupported ABI '"
                             + std::string(decl.abi.as_str()) + "'");
+                auto arity = require_call_arity(
+                    ctx, expr->span, decl.name.as_str(), decl.params.size(), node.args.size());
+                if (!arity)
+                    return std::unexpected(std::move(arity.error()));
 
                 std::vector<ValuePtr> args;
                 args.reserve(node.args.size());

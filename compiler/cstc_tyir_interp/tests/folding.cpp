@@ -206,6 +206,7 @@ static void test_borrowed_str_free_intrinsic_is_noop() {
     TyExternFnDecl decl;
     decl.name = Symbol::intern("str_free");
     decl.link_name = Symbol::intern("cstc_std_str_free");
+    decl.params.resize(1);
 
     auto result = cstc::tyir_interp::detail::eval_lang_intrinsic(
         decl,
@@ -392,6 +393,106 @@ fn main() {
 )");
 
     assert(error.message.find("compile-time assert_eq failed") != std::string::npos);
+}
+
+static void test_malformed_const_function_call_reports_arity_error() {
+    SymbolSession session;
+    const auto ast = cstc::parser::parse_source(R"(
+fn add(a: num, b: num) -> num {
+    a + b
+}
+
+fn main() -> num {
+    add(1, 2)
+}
+)");
+    assert(ast.has_value());
+    auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+
+    bool mutated = false;
+    for (TyItem& item : tyir->items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("main"))
+            continue;
+        assert(fn->body != nullptr);
+        assert(fn->body->tail.has_value());
+        auto* call = std::get_if<TyCall>(&(*fn->body->tail)->node);
+        assert(call != nullptr);
+        assert(call->args.size() == 2);
+        call->args.pop_back();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(*tyir);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("mismatched compile-time call arity") != std::string::npos);
+    assert(folded.error().message.find("add") != std::string::npos);
+    assert(folded.error().message.find("expected 2 argument(s), got 1") != std::string::npos);
+    assert(folded.error().stack.empty());
+}
+
+static void test_malformed_lang_call_reports_arity_error() {
+    SymbolSession session;
+    const auto ast = cstc::parser::parse_source(R"(
+extern "lang" fn assert_eq(a: num, b: num);
+
+fn main() {
+    assert_eq(1, 1);
+}
+)");
+    assert(ast.has_value());
+    auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+
+    bool mutated = false;
+    for (TyItem& item : tyir->items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("main"))
+            continue;
+        assert(fn->body != nullptr);
+        assert(fn->body->stmts.size() == 1);
+        assert(std::holds_alternative<TyExprStmt>(fn->body->stmts[0]));
+        auto& expr = std::get<TyExprStmt>(fn->body->stmts[0]).expr;
+        auto* call = std::get_if<TyCall>(&expr->node);
+        assert(call != nullptr);
+        assert(call->args.size() == 2);
+        call->args.push_back(make_ty_expr(
+            expr->span, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("3"), false}, ty::num()));
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(*tyir);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("mismatched compile-time call arity") != std::string::npos);
+    assert(folded.error().message.find("assert_eq") != std::string::npos);
+    assert(folded.error().message.find("expected 2 argument(s), got 3") != std::string::npos);
+    assert(folded.error().stack.empty());
+}
+
+static void test_intrinsic_decl_arity_mismatch_reports_error() {
+    SymbolSession session;
+    cstc::tyir_interp::detail::ProgramView program;
+    cstc::tyir_interp::detail::EvalContext ctx{
+        program,
+        {},
+        cstc::tyir_interp::detail::kDefaultEvalStepBudget,
+        cstc::tyir_interp::detail::kDefaultEvalCallDepth,
+    };
+    TyExternFnDecl decl;
+    decl.name = Symbol::intern("assert_eq");
+    decl.link_name = Symbol::intern("cstc_std_assert_eq");
+    decl.params.resize(1);
+
+    auto result = cstc::tyir_interp::detail::eval_lang_intrinsic(
+        decl, {cstc::tyir_interp::detail::make_num(1)}, ctx, {});
+    assert(!result.has_value());
+    assert(result.error().message.find("mismatched compile-time call arity") != std::string::npos);
+    assert(result.error().message.find("assert_eq") != std::string::npos);
+    assert(result.error().message.find("expected 2 argument(s), got 1") != std::string::npos);
+    assert(result.error().stack.empty());
 }
 
 static void test_recursive_const_eval_reports_call_depth_error() {
@@ -597,6 +698,9 @@ int main() {
     test_reached_assertion_failure_reports_error();
     test_error_stack_records_called_function();
     test_assert_eq_requires_exact_runtime_equality();
+    test_malformed_const_function_call_reports_arity_error();
+    test_malformed_lang_call_reports_arity_error();
+    test_intrinsic_decl_arity_mismatch_reports_error();
     test_recursive_const_eval_reports_call_depth_error();
     test_infinite_loop_reports_step_budget_error();
     test_infinite_while_reports_step_budget_error();
