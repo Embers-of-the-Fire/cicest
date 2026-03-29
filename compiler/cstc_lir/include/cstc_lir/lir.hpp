@@ -533,13 +533,14 @@ inline std::string LirConst::display() const {
     switch (kind) {
     case Kind::Num: return symbol.is_valid() ? std::string(symbol.as_str()) : "<num>";
     case Kind::Str: {
-        std::string text = symbol.is_valid() ? std::string(symbol.as_str()) : "";
+        std::string text = symbol.is_valid() ? std::string(symbol.as_str()) : "<invalid-symbol>";
         if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
             return text;
         return "\"" + text + "\"";
     }
     case Kind::OwnedStr: {
-        const std::string text = symbol.is_valid() ? std::string(symbol.as_str()) : "";
+        const std::string text =
+            symbol.is_valid() ? std::string(symbol.as_str()) : "<invalid-symbol>";
         if (text.size() >= 2 && text.front() == '"' && text.back() == '"')
             return "owned " + text;
         return "owned \"" + text + "\"";
