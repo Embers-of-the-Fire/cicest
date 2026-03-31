@@ -52,11 +52,11 @@ Runs on `ubuntu-latest` only.
   - Configures and builds with CMake + Ninja (`-Werror` enabled)
   - Runs `clang-format --dry-run --Werror` against tracked C/C++ sources
 
-## 3) `Prerelease` workflow
+## 3) `Nightly` workflow
 
 File: `.github/workflows/prerelease.yml`
 
-Runs on pushes to the `main` branch and updates the fixed `prerelease` release
+Runs on pushes to the `main` branch and updates the fixed `nightly` release
 with a fresh Linux-only prebuilt compiler bundle.
 
 - Installs Nix (`cachix/install-nix-action`)
@@ -64,10 +64,12 @@ with a fresh Linux-only prebuilt compiler bundle.
   - `nix run .#lint --print-build-logs`
   - `nix run .#tests --print-build-logs`
 - Builds a release bundle with `nix run .#prerelease-bundle`
-- Force-moves the `prerelease` tag to the current `main` commit
+- Ensures the `nightly` tag exists at the current `main` commit
+  - Creates the tag when it has been deleted
+  - Force-moves the tag on later pushes
 - Publishes `dist/cicest-x86_64-linux.tar.gz` with
   `softprops/action-gh-release`
-- Replaces the existing archive asset in that prerelease when a newer `main`
+- Replaces the existing archive asset in that nightly release when a newer `main`
   push arrives
 
 The tarball contains only the installed compiler toolchain needed to compile
@@ -87,8 +89,8 @@ The validation workflows trigger on:
 - Pushes to `main` or `master`
 - All pull requests
 
-The prerelease workflow triggers on pushes to `main` and updates the fixed
-`prerelease` tag/release.
+The nightly workflow triggers on pushes to `main` and updates the fixed
+`nightly` tag/release.
 
 ## Local Reproduction
 
