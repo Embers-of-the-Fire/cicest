@@ -64,7 +64,9 @@ with a fresh Linux-only prebuilt compiler bundle.
   - `nix run .#lint --print-build-logs`
   - `nix run .#tests --print-build-logs`
 - Builds a release bundle with `nix run .#prerelease-bundle`
-- Force-moves the `prerelease` tag to the current `main` commit
+- Ensures the `prerelease` tag exists at the current `main` commit
+  - Creates the tag when it has been deleted
+  - Force-moves the tag on later pushes
 - Publishes `dist/cicest-x86_64-linux.tar.gz` with
   `softprops/action-gh-release`
 - Replaces the existing archive asset in that prerelease when a newer `main`

@@ -52,6 +52,12 @@ jobs:
             const ref = "tags/prerelease";
 
             try {
+              await github.rest.git.getRef({
+                owner,
+                repo,
+                ref,
+              });
+
               await github.rest.git.updateRef({
                 owner,
                 repo,
@@ -76,6 +82,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: prerelease
+          target_commitish: ${{ github.sha }}
           name: prerelease
           prerelease: true
           make_latest: false
