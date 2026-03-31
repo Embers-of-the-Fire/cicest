@@ -13,7 +13,9 @@
 #include <utility>
 #include <vector>
 
+#include <cstc_ansi_color/ansi_color.hpp>
 #include <cstc_ast/ast.hpp>
+#include <cstc_error_report/report.hpp>
 #include <cstc_parser/parser.hpp>
 #include <cstc_resource_path/resource_path.hpp>
 #include <cstc_span/span.hpp>
@@ -28,13 +30,35 @@ struct ModuleError {
 
 [[nodiscard]] inline std::string
     format_module_error(const cstc::span::SourceMap& source_map, const ModuleError& error) {
+    cstc::error_report::SourceDatabase database;
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Error;
+    diagnostic.message = "module error: " + error.message;
+
     if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-        return "module error " + std::string(resolved->file_name) + ":"
-             + std::to_string(resolved->start.line) + ":" + std::to_string(resolved->start.column)
-             + ": " + error.message;
+        if (const cstc::span::SourceFile* file = source_map.file(resolved->file_id);
+            file != nullptr) {
+            const cstc::error_report::SourceId source_id =
+                database.add_source(file->name, file->source);
+            const auto report_span =
+                database.make_span(source_id, resolved->local.start, resolved->local.end);
+            if (report_span.has_value()) {
+                diagnostic.labels.push_back(
+                    cstc::error_report::Label{
+                        .span = *report_span,
+                        .message = error.message,
+                        .style = cstc::error_report::LabelStyle::Primary,
+                    });
+            }
+        }
     }
 
-    return "module error: " + error.message;
+    return cstc::error_report::render(
+        database, diagnostic,
+        cstc::error_report::RenderOptions{
+            .color = cstc::ansi_color::detect_emission(),
+            .context_lines = 1,
+        });
 }
 
 [[nodiscard]] inline std::expected<cstc::ast::Program, ModuleError> load_program(

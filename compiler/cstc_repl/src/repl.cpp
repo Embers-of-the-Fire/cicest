@@ -914,16 +914,11 @@ void write_text_file(const fs::path& path, std::string_view source) {
     const cstc::span::SourceFileId file_id = source_map.add_file("<repl>", std::string(input));
     const std::optional<cstc::span::SourceSpan> span =
         source_map.make_span(file_id, local_start, local_end);
-    if (!span.has_value()) {
-        return "parse error <repl>:1:1: " + error.message;
-    }
+    if (!span.has_value())
+        return "error: parse error: " + error.message;
 
-    const auto resolved = source_map.resolve_span(*span);
-    if (!resolved.has_value())
-        return "parse error <repl>:1:1: " + error.message;
-
-    return "parse error <repl>:" + std::to_string(resolved->start.line) + ":"
-         + std::to_string(resolved->start.column) + ": " + error.message;
+    return cstc::parser::format_parse_error(
+        source_map, cstc::parser::ParseError{.span = *span, .message = error.message});
 }
 
 [[nodiscard]] std::expected<void, std::string>

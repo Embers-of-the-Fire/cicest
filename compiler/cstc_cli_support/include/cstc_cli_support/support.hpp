@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstc_ansi_color/ansi_color.hpp>
+#include <cstc_error_report/report.hpp>
 #include <cstc_module/module.hpp>
 #include <cstc_parser/diagnostics.hpp>
 #include <cstc_resource_path/resource_path.hpp>
@@ -10,12 +12,44 @@
 #include <expected>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace cstc::cli_support {
+
+namespace detail {
+
+[[nodiscard]] inline std::optional<cstc::error_report::SourceSpan> append_report_span(
+    cstc::error_report::SourceDatabase& database, const cstc::span::SourceMap& source_map,
+    cstc::span::SourceSpan span) {
+    const auto resolved = source_map.resolve_span(span);
+    if (!resolved.has_value())
+        return std::nullopt;
+
+    const cstc::span::SourceFile* file = source_map.file(resolved->file_id);
+    if (file == nullptr)
+        return std::nullopt;
+
+    const cstc::error_report::SourceId source_id = database.add_source(file->name, file->source);
+    return database.make_span(source_id, resolved->local.start, resolved->local.end);
+}
+
+[[nodiscard]] inline std::string render_report(
+    const cstc::error_report::SourceDatabase& database,
+    const cstc::error_report::Diagnostic& diagnostic) {
+    return cstc::error_report::render(
+        database, diagnostic,
+        cstc::error_report::RenderOptions{
+            .color = cstc::ansi_color::detect_emission(),
+            .context_lines = 1,
+        });
+}
+
+} // namespace detail
 
 [[nodiscard]] inline std::string read_source_file(const std::filesystem::path& path) {
     std::ifstream file(path, std::ios::binary);
@@ -45,38 +79,62 @@ namespace cstc::cli_support {
 
 [[nodiscard]] inline std::string format_type_error(
     const cstc::span::SourceMap& source_map, const cstc::tyir_builder::LowerError& error) {
-    if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-        return "type error " + std::string(resolved->file_name) + ":"
-             + std::to_string(resolved->start.line) + ":" + std::to_string(resolved->start.column)
-             + ": " + error.message;
+    cstc::error_report::SourceDatabase database;
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Error;
+    diagnostic.message = "type error: " + error.message;
+
+    if (const auto report_span = detail::append_report_span(database, source_map, error.span);
+        report_span.has_value()) {
+        diagnostic.labels.push_back(
+            cstc::error_report::Label{
+                .span = *report_span,
+                .message = error.message,
+                .style = cstc::error_report::LabelStyle::Primary,
+            });
     }
 
-    return "type error: " + error.message;
+    return detail::render_report(database, diagnostic);
 }
 
 [[nodiscard]] inline std::string format_eval_error(
     const cstc::span::SourceMap& source_map, const cstc::tyir_interp::EvalError& error) {
-    std::ostringstream out;
-    if (const auto resolved = source_map.resolve_span(error.span); resolved.has_value()) {
-        out << "const-eval error " << resolved->file_name << ":" << resolved->start.line << ":"
-            << resolved->start.column << ": " << error.message;
-    } else {
-        out << "const-eval error: " << error.message;
+    cstc::error_report::SourceDatabase database;
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Error;
+    diagnostic.message = "const-eval error: " + error.message;
+
+    if (const auto report_span = detail::append_report_span(database, source_map, error.span);
+        report_span.has_value()) {
+        diagnostic.labels.push_back(
+            cstc::error_report::Label{
+                .span = *report_span,
+                .message = error.message,
+                .style = cstc::error_report::LabelStyle::Primary,
+            });
     }
 
-    if (!error.stack.empty()) {
-        out << "\nconst-eval stack:";
-        for (auto it = error.stack.rbegin(); it != error.stack.rend(); ++it) {
-            out << "\n  in "
-                << (it->fn_name.is_valid() ? std::string(it->fn_name.as_str()) : "<unknown>");
-            if (const auto resolved = source_map.resolve_span(it->span); resolved.has_value()) {
-                out << " at " << resolved->file_name << ":" << resolved->start.line << ":"
-                    << resolved->start.column;
-            }
+    for (auto it = error.stack.rbegin(); it != error.stack.rend(); ++it) {
+        std::string fn_name =
+            it->fn_name.is_valid() ? std::string(it->fn_name.as_str()) : "<unknown>";
+        cstc::error_report::Diagnostic child;
+        child.severity = cstc::error_report::Severity::Note;
+        child.message = "in function `" + fn_name + "`";
+
+        if (const auto report_span = detail::append_report_span(database, source_map, it->span);
+            report_span.has_value()) {
+            child.labels.push_back(
+                cstc::error_report::Label{
+                    .span = *report_span,
+                    .message = "called from here",
+                    .style = cstc::error_report::LabelStyle::Primary,
+                });
         }
+
+        diagnostic.children.push_back(std::move(child));
     }
 
-    return out.str();
+    return detail::render_report(database, diagnostic);
 }
 
 [[nodiscard]] inline std::expected<cstc::tyir::TyProgram, std::string> lower_and_fold_program(
