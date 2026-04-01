@@ -240,6 +240,10 @@ private:
     return lir::LirOperand::copy(place);
 }
 
+[[nodiscard]] static lir::LirOperand terminated_operand() {
+    return lir::LirOperand::from_const(lir::LirConst::unit());
+}
+
 [[nodiscard]] static lir::LirOperand operand_for_place(
     const lir::LirPlace& place, const tyir::Ty& ty,
     tyir::ValueUseKind use_kind = tyir::ValueUseKind::Copy) {
@@ -330,6 +334,8 @@ private:
                 si.type_name = node.type_name;
                 for (const tyir::TyStructInitField& f : node.fields) {
                     const lir::LirOperand val = lower_expr(builder, f.value);
+                    if (builder.is_terminated())
+                        return terminated_operand();
                     si.fields.push_back({f.name, val});
                 }
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
@@ -347,10 +353,14 @@ private:
                         return *borrowed_place;
 
                     const lir::LirOperand rhs = lower_expr(builder, node.rhs);
+                    if (builder.is_terminated())
+                        return lir::LirPlace{};
                     const lir::LirLocalId owner_tmp =
                         materialize_operand(builder, rhs, node.rhs->ty, expr->span);
                     return lir::LirPlace::local(owner_tmp);
                 }();
+                if (builder.is_terminated())
+                    return terminated_operand();
 
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
                 builder.emit_stmt(
@@ -363,6 +373,8 @@ private:
             // ── Unary operation ───────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, tyir::TyUnary>) {
                 const lir::LirOperand operand = lower_expr(builder, node.rhs);
+                if (builder.is_terminated())
+                    return terminated_operand();
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
                 builder.emit_stmt(
                     lir::LirAssign{
@@ -374,7 +386,11 @@ private:
             // ── Binary operation ──────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, tyir::TyBinary>) {
                 const lir::LirOperand lhs = lower_expr(builder, node.lhs);
+                if (builder.is_terminated())
+                    return terminated_operand();
                 const lir::LirOperand rhs = lower_expr(builder, node.rhs);
+                if (builder.is_terminated())
+                    return terminated_operand();
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
                 builder.emit_stmt(
                     lir::LirAssign{
@@ -391,10 +407,15 @@ private:
                         return base_place->project(node.field);
                     }
 
-                    const lir::LirLocalId base_local = materialize_operand(
-                        builder, lower_expr(builder, node.base), node.base->ty, expr->span);
+                    const lir::LirOperand base_operand = lower_expr(builder, node.base);
+                    if (builder.is_terminated())
+                        return lir::LirPlace{};
+                    const lir::LirLocalId base_local =
+                        materialize_operand(builder, base_operand, node.base->ty, expr->span);
                     return lir::LirPlace::field(base_local, node.field);
                 }();
+                if (builder.is_terminated())
+                    return terminated_operand();
 
                 const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
                 builder.emit_stmt(
@@ -410,8 +431,11 @@ private:
             else if constexpr (std::is_same_v<N, tyir::TyCall>) {
                 std::vector<lir::LirOperand> arg_ops;
                 arg_ops.reserve(node.args.size());
-                for (const tyir::TyExprPtr& arg : node.args)
+                for (const tyir::TyExprPtr& arg : node.args) {
                     arg_ops.push_back(lower_expr(builder, arg));
+                    if (builder.is_terminated())
+                        return terminated_operand();
+                }
                 if (expr->ty.is_unit()) {
                     const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
                     builder.emit_stmt(
