@@ -11,6 +11,7 @@ target_link_libraries(cstc_lexer
     PUBLIC
         cstc_symbol
         cstc_span
+    PRIVATE
         cicest_options
         cicest_warnings
 )
