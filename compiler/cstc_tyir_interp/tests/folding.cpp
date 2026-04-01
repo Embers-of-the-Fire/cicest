@@ -9,6 +9,7 @@
 #include <cstc_symbol/symbol.hpp>
 #include <cstc_tyir/tyir.hpp>
 #include <cstc_tyir_builder/builder.hpp>
+#include <cstc_tyir_interp/detail.hpp>
 #include <cstc_tyir_interp/interp.hpp>
 
 using namespace cstc::symbol;

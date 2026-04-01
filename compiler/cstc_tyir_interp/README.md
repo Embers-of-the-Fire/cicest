@@ -10,6 +10,7 @@ const-evaluable subtrees back into TyIR before LIR lowering.
 ## Public API
 
 - Header: `include/cstc_tyir_interp/interp.hpp`
+- Implementation: `src/interp.cpp`
 - Types:
   - `cstc::tyir_interp::EvalStackFrame`
   - `cstc::tyir_interp::EvalError`
@@ -32,6 +33,6 @@ const-evaluable subtrees back into TyIR before LIR lowering.
 
 ## CMake
 
-- Target: `cstc_tyir_interp` (`INTERFACE`)
+- Target: `cstc_tyir_interp` (`STATIC`)
 - Alias: `cicest::compiler::tyir_interp`
 - Depends on: `cstc_tyir`, `cstc_ast`, `cstc_symbol`, `cstc_span`

@@ -1,13 +1,15 @@
-add_library(cstc_tyir_builder INTERFACE)
+add_library(cstc_tyir_builder STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/builder.cpp
+)
 add_library(cicest::compiler::tyir_builder ALIAS cstc_tyir_builder)
 
 target_include_directories(cstc_tyir_builder
-    INTERFACE
+    PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
 target_link_libraries(cstc_tyir_builder
-    INTERFACE
+    PUBLIC
         cstc_tyir
         cstc_ast
         cstc_symbol
