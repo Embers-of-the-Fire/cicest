@@ -25,15 +25,15 @@ void cstc_std_println(const cstc_rt_str* value);
 namespace {
 
 #ifdef _WIN32
-constexpr auto dup_fd = _dup;
-constexpr auto dup2_fd = _dup2;
-constexpr auto close_fd = _close;
-constexpr auto file_number = _fileno;
+int dup_fd(int fd) { return _dup(fd); }
+int dup2_fd(int src, int dst) { return _dup2(src, dst); }
+int close_fd(int fd) { return _close(fd); }
+int file_number(FILE* file) { return _fileno(file); }
 #else
-constexpr auto dup_fd = dup;
-constexpr auto dup2_fd = dup2;
-constexpr auto close_fd = close;
-constexpr auto file_number = fileno;
+int dup_fd(int fd) { return dup(fd); }
+int dup2_fd(int src, int dst) { return dup2(src, dst); }
+int close_fd(int fd) { return close(fd); }
+int file_number(FILE* file) { return fileno(file); }
 #endif
 
 [[nodiscard]] std::string normalize_newlines(std::string text) {
