@@ -6,6 +6,7 @@
 #include <cstc_lexer/lexer.hpp>
 #include <cstc_lir_builder/builder.hpp>
 #include <cstc_module/module.hpp>
+#include <cstc_parser/diagnostics.hpp>
 #include <cstc_resource_path/resource_path.hpp>
 #include <cstc_span/span.hpp>
 #include <cstc_symbol/symbol.hpp>

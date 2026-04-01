@@ -1,4 +1,4 @@
-# `library`
+# `libraries`
 
 Standalone libraries that are reusable outside the compiler package tree.
 
