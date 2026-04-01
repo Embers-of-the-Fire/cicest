@@ -1,13 +1,15 @@
-add_library(cstc_parser INTERFACE)
+add_library(cstc_parser STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/parser.cpp
+)
 add_library(cicest::compiler::parser ALIAS cstc_parser)
 
 target_include_directories(cstc_parser
-    INTERFACE
+    PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
 target_link_libraries(cstc_parser
-    INTERFACE
+    PUBLIC
         cstc_ast
         cstc_error_report
         cstc_lexer
