@@ -1,14 +1,17 @@
-add_library(cstc_error_report INTERFACE)
+add_library(cstc_error_report STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/report.cpp
+)
 add_library(cicest::library::error_report ALIAS cstc_error_report)
 
 target_include_directories(cstc_error_report
-    INTERFACE
+    PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
 target_link_libraries(cstc_error_report
-    INTERFACE
+    PUBLIC
         cstc_ansi_color
+    PRIVATE
         cicest_options
         cicest_warnings
 )

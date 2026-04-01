@@ -1,6 +1,6 @@
 # `cstc_error_report`
 
-Header-only Rust-like diagnostic renderer.
+Compiled Rust-like diagnostic renderer.
 
 ## Purpose
 
@@ -15,6 +15,7 @@ offsets and can render:
 ## Public API
 
 - Header: `include/cstc_error_report/report.hpp`
+- Implementation: `src/report.cpp`
 - `cstc::error_report::SourceId`
 - `cstc::error_report::Offset`
 - `cstc::error_report::SourcePoint`
@@ -36,6 +37,8 @@ offsets and can render:
 
 - `SourceDatabase` owns source text and precomputes line starts so byte offsets
   resolve to stable `line:column` pairs without any compiler-specific types.
+- The public header exposes the data model and database methods, while rendering
+  internals now live in `src/report.cpp` to reduce transitive compile cost.
 - Labels and comments are grouped per source file at render time, which lets a
   single diagnostic tree reference more than one file.
 - Rendering is intentionally simple and deterministic: each relevant source line
@@ -45,7 +48,7 @@ offsets and can render:
 
 ## CMake
 
-- Target: `cstc_error_report` (`INTERFACE`)
+- Target: `cstc_error_report` (`STATIC`)
 - Alias: `cicest::library::error_report`
 
 ## Tests
