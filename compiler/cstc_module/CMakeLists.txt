@@ -9,6 +9,7 @@ target_include_directories(cstc_module
 target_link_libraries(cstc_module
     INTERFACE
         cstc_ast
+        cstc_error_report
         cstc_parser
         cstc_resource_path
         cstc_span
