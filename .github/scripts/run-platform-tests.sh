@@ -16,8 +16,10 @@ case "${platform}" in
     export PATH="/mingw64/bin:${PATH}"
     export PKG_CONFIG_PATH="/mingw64/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
     export CMAKE_PREFIX_PATH="/mingw64"
+    export CC="clang"
+    export CXX="clang++"
     build_e2e_tests=OFF
-    echo "Skipping end-to-end tests on Windows MinGW; running build and non-e2e tests only."
+    echo "Skipping end-to-end tests on Windows MinGW; running build and non-e2e tests only with clang."
     ;;
   *)
     echo "Unsupported platform '${platform}'. Expected linux, macos, or windows."
