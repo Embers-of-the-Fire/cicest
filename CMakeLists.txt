@@ -10,6 +10,13 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_library(cicest_options INTERFACE)
 target_compile_features(cicest_options INTERFACE cxx_std_23)
 
+if(MINGW AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    target_compile_options(cicest_options INTERFACE
+        $<$<COMPILE_LANGUAGE:C>:-Wa,-mbig-obj>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wa,-mbig-obj>
+    )
+endif()
+
 add_library(cicest_warnings INTERFACE)
 if(MSVC)
     target_compile_options(cicest_warnings INTERFACE /W4)
