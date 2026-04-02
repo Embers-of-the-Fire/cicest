@@ -1434,11 +1434,21 @@ private:
                 init_expr.type_name = identifier.symbol;
                 init_expr.display_name = identifier.symbol;
 
+                std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> seen_fields;
+
                 if (!check(TokenKind::RBrace)) {
                     while (true) {
                         auto field_name = consume_identifier("expected struct field name");
                         if (!field_name.has_value())
                             return std::unexpected(field_name.error());
+
+                        if (!seen_fields.insert(field_name->symbol).second) {
+                            const std::string field_name_text =
+                                std::string(token_text(*field_name));
+                            return std::unexpected(make_error_token(
+                                *field_name,
+                                "duplicate struct field `" + field_name_text + "` in initializer"));
+                        }
 
                         auto colon = consume(TokenKind::Colon, "expected `:` after field name");
                         if (!colon.has_value())

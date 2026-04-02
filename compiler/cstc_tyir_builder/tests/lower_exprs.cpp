@@ -844,10 +844,9 @@ static void test_struct_init_unknown_field_error() {
 }
 
 static void test_struct_init_duplicate_field_error() {
-    must_fail_with_message(
+    must_fail(
         "struct Point { x: num, y: num }"
-        "fn f() -> Point { Point { x: 0, x: 1 } }",
-        "duplicate field 'x'");
+        "fn f() -> Point { Point { x: 0, x: 1 } }");
 }
 
 static void test_struct_init_missing_field_error() {

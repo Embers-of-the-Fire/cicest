@@ -94,6 +94,11 @@ void test_error_struct_duplicate_field() {
     expect_error("struct Foo { x: num, x: num }", "duplicate struct field");
 }
 
+void test_error_struct_initializer_duplicate_field() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f() { Foo { x: 1, x: 2 } }", "duplicate struct field");
+}
+
 void test_error_struct_missing_colon() {
     cstc::symbol::SymbolSession session;
     expect_error("struct Foo { x num }", "expected `:` after field name");
@@ -262,6 +267,7 @@ int main() {
     test_error_struct_missing_brace_or_semi();
     test_error_struct_missing_close_brace();
     test_error_struct_duplicate_field();
+    test_error_struct_initializer_duplicate_field();
     test_error_struct_missing_colon();
     test_error_enum_missing_name();
     test_error_enum_missing_open_brace();
