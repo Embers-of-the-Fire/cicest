@@ -256,6 +256,16 @@ struct ResolvedComment {
     return {start_column, end_column};
 }
 
+[[nodiscard]] static std::size_t rendered_end_line(const ResolvedSpan& resolved) {
+    if (resolved.span.length() == 0)
+        return resolved.start.line;
+
+    if (resolved.start.line != resolved.end.line && resolved.end.column == 1)
+        return resolved.end.line - 1;
+
+    return resolved.end.line;
+}
+
 [[nodiscard]] static bool render_source_group(
     std::ostringstream& out, const SourceDatabase& database, const Diagnostic& diagnostic,
     const SourceGroup& group, const RenderOptions& options) {
@@ -321,8 +331,7 @@ struct ResolvedComment {
     };
 
     for (const ResolvedLabel& label : resolved_labels) {
-        const std::size_t end_line =
-            label.span.span.length() == 0 ? label.span.start.line : label.span.end.line;
+        const std::size_t end_line = rendered_end_line(label.span);
         add_context_lines(label.span.start.line, end_line);
     }
 
@@ -348,8 +357,7 @@ struct ResolvedComment {
             << database.line_text(group.source_id, line_number) << '\n';
 
         for (const ResolvedLabel& label : resolved_labels) {
-            const std::size_t end_line =
-                label.span.span.length() == 0 ? label.span.start.line : label.span.end.line;
+            const std::size_t end_line = rendered_end_line(label.span);
             if (line_number < label.span.start.line || line_number > end_line)
                 continue;
 

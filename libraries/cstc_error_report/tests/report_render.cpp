@@ -170,6 +170,35 @@ void test_render_ignores_label_with_invalid_public_span() {
     assert(rendered.find("should be ignored") == std::string::npos);
 }
 
+void test_render_treats_next_line_column_one_as_exclusive() {
+    cstc::error_report::SourceDatabase database;
+    const std::string source = "alpha\nbeta\n";
+    const auto source_id = database.add_source("exclusive.cst", source);
+    const auto span = database.make_span(source_id, 1, source.find("beta"));
+    assert(span.has_value());
+
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Error;
+    diagnostic.message = "exclusive end";
+    diagnostic.labels.push_back(
+        cstc::error_report::Label{
+            .span = *span,
+            .message = "highlight first line only",
+            .style = cstc::error_report::LabelStyle::Primary,
+        });
+
+    const std::string rendered = cstc::error_report::render(
+        database, diagnostic,
+        cstc::error_report::RenderOptions{
+            .color = cstc::ansi_color::Emission::Never,
+            .context_lines = 0,
+        });
+
+    assert(rendered.find("1 | alpha") != std::string::npos);
+    assert(rendered.find("highlight first line only") != std::string::npos);
+    assert(rendered.find("2 | beta") == std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -179,5 +208,6 @@ int main() {
     test_render_uses_color_when_explicitly_enabled();
     test_render_ignores_comment_with_invalid_public_point();
     test_render_ignores_label_with_invalid_public_span();
+    test_render_treats_next_line_column_one_as_exclusive();
     return 0;
 }
