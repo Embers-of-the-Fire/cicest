@@ -436,6 +436,16 @@ private:
                     if (builder.is_terminated())
                         return terminated_operand();
                 }
+                if (expr->ty.is_never()) {
+                    const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
+                    builder.emit_stmt(
+                        lir::LirAssign{
+                            lir::LirPlace::local(tmp),
+                            lir::LirRvalue{lir::LirCall{node.fn_name, std::move(arg_ops)}},
+                            expr->span});
+                    builder.seal_block(lir::LirTerminator{lir::LirUnreachable{}, expr->span});
+                    return terminated_operand();
+                }
                 if (expr->ty.is_unit()) {
                     const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
                     builder.emit_stmt(

@@ -199,6 +199,15 @@ static std::size_t count_return_terminators(const LirFnDef& fn) {
     return count;
 }
 
+static std::size_t count_unreachable_terminators(const LirFnDef& fn) {
+    std::size_t count = 0;
+    for (const LirBasicBlock& block : fn.blocks) {
+        if (std::holds_alternative<LirUnreachable>(block.terminator.node))
+            ++count;
+    }
+    return count;
+}
+
 // ─── If (no else) ─────────────────────────────────────────────────────────────
 
 static void test_if_no_else() {
@@ -487,6 +496,53 @@ static void test_break_never_payload_skips_outer_break_lowering() {
     assert(find_local_assigned_num(fn, "2") != kInvalidLocal);
 }
 
+static void test_never_call_seals_block() {
+    const Symbol panic_now = Symbol::intern("panic_now");
+    const Symbol b = Symbol::intern("b");
+    const cstc::span::SourceSpan span{};
+
+    const auto cond =
+        cstc::tyir::make_ty_expr(span, cstc::tyir::LocalRef{b}, cstc::tyir::ty::bool_());
+    const auto call =
+        cstc::tyir::make_ty_expr(span, cstc::tyir::TyCall{panic_now, {}}, cstc::tyir::ty::never());
+    const auto then_block = std::make_shared<cstc::tyir::TyBlock>(cstc::tyir::TyBlock{
+        {cstc::tyir::TyExprStmt{call, span}},
+        std::nullopt,
+        cstc::tyir::ty::never(),
+        span,
+    });
+    const auto if_expr = cstc::tyir::make_ty_expr(
+        span, cstc::tyir::TyIf{cond, then_block, std::nullopt}, cstc::tyir::ty::unit());
+    const auto tail = cstc::tyir::make_ty_expr(
+        span, cstc::tyir::TyLiteral{cstc::tyir::TyLiteral::Kind::Num, Symbol::intern("1")},
+        cstc::tyir::ty::num());
+
+    cstc::tyir::TyProgram program;
+    program.items.push_back(
+        cstc::tyir::TyFnDecl{
+            Symbol::intern("f"),
+            {cstc::tyir::TyParam{b, cstc::tyir::ty::bool_(), span}},
+            cstc::tyir::ty::num(),
+            std::make_shared<cstc::tyir::TyBlock>(cstc::tyir::TyBlock{
+                {cstc::tyir::TyExprStmt{if_expr, span}},
+                tail,
+                cstc::tyir::ty::num(),
+                span,
+            }),
+            span,
+            false,
+        });
+
+    const LirProgram prog = lower_program(program);
+    const LirFnDef& fn = first_fn(prog);
+
+    assert(count_unreachable_terminators(fn) == 1);
+    assert(count_return_terminators(fn) == 1);
+    assert(output_contains(prog, "Call(panic_now"));
+    assert(output_contains(prog, "unreachable"));
+    assert(output_contains(prog, "switchBool"));
+}
+
 static void test_param_shadowing_in_fn_body() {
     const LirProgram prog = must_lower("fn f(x: num) -> num { let x = 2; x }");
     const LirFnDef& fn = first_fn(prog);
@@ -659,6 +715,7 @@ int main() {
     test_return_never_payload_preserves_inner_returns();
     test_never_let_initializer_skips_binding();
     test_break_never_payload_skips_outer_break_lowering();
+    test_never_call_seals_block();
     test_param_shadowing_in_fn_body();
     test_nested_block_shadowing_prefers_inner_binding();
     test_terminated_block_skips_tail_expr();
