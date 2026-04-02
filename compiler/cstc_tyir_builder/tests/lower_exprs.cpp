@@ -943,6 +943,25 @@ static void test_copy_ref_binding_keeps_borrow() {
     assert(std::get<LocalRef>(copy_stmt.init->node).use_kind == ValueUseKind::Copy);
 }
 
+static void test_for_step_move_does_not_poison_body() {
+    must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "extern \"lang\" fn print(value: &str);"
+        "extern \"lang\" fn flag() -> bool;"
+        "fn f() { let s: str = to_str(1); for (; flag(); consume(s)) { print(&s); break; } }");
+}
+
+static void test_for_body_move_reaches_step() {
+    must_fail_with_message(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "extern \"lang\" fn print(value: &str);"
+        "extern \"lang\" fn flag() -> bool;"
+        "fn f() { let s: str = to_str(1); for (; flag(); print(&s)) { consume(s); } }",
+        "use of moved value 's'");
+}
+
 int main() {
     SymbolSession session;
 
@@ -1067,6 +1086,8 @@ int main() {
     test_move_after_move_error();
     test_move_while_borrowed_error();
     test_copy_ref_binding_keeps_borrow();
+    test_for_step_move_does_not_poison_body();
+    test_for_body_move_reaches_step();
 
     return 0;
 }

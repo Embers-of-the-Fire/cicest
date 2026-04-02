@@ -1492,26 +1492,28 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     lowered_cond = std::move(cond->expr);
                 }
 
+                LowerCtx loop_ctx = ctx;
+
+                loop_ctx.push_loop(LoopKind::For);
+                auto body = lower_block(*node.body, loop_ctx);
+                if (!body) {
+                    loop_ctx.pop_loop();
+                    ctx.scope.pop();
+                    return std::unexpected(std::move(body.error()));
+                }
+                loop_ctx.pop_loop();
+                auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
+
                 std::optional<tyir::TyExprPtr> lowered_step;
                 if (node.step.has_value()) {
-                    auto step = lower_expr(*node.step, ctx);
+                    auto step = lower_expr(*node.step, loop_ctx);
                     if (!step) {
                         ctx.scope.pop();
                         return std::unexpected(std::move(step.error()));
                     }
-                    release_temp_borrows(ctx, step->temp_borrows);
+                    release_temp_borrows(loop_ctx, step->temp_borrows);
                     lowered_step = std::move(step->expr);
                 }
-
-                ctx.push_loop(LoopKind::For);
-                auto body = lower_block(*node.body, ctx);
-                if (!body) {
-                    ctx.pop_loop();
-                    ctx.scope.pop();
-                    return std::unexpected(std::move(body.error()));
-                }
-                ctx.pop_loop();
-                auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
 
                 ctx.scope.pop();
 
