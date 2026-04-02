@@ -11,6 +11,9 @@ const-evaluable subtrees back into TyIR before LIR lowering.
 
 - Header: `include/cstc_tyir_interp/interp.hpp`
 - Implementation: `src/interp.cpp`
+- Internal/testing-only header: `include/cstc_tyir_interp/detail.hpp`
+  - Exposes interpreter implementation details used by in-tree tests.
+  - Not a supported consumer-facing API and may change without notice.
 - Types:
   - `cstc::tyir_interp::EvalStackFrame`
   - `cstc::tyir_interp::EvalError`
