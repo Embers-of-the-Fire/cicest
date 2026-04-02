@@ -47,7 +47,7 @@ std::optional<SourceSpan> SourceDatabase::make_span(SourceId id, Offset start, O
 
 std::optional<ResolvedPoint> SourceDatabase::resolve_point(SourcePoint point) const {
     const SourceFile* file = source(point.source_id);
-    if (file == nullptr)
+    if (file == nullptr || point.offset > file->size())
         return std::nullopt;
     return ResolvedPoint{
         .source_id = point.source_id,
@@ -59,7 +59,8 @@ std::optional<ResolvedPoint> SourceDatabase::resolve_point(SourcePoint point) co
 
 std::optional<ResolvedSpan> SourceDatabase::resolve_span(SourceSpan span) const {
     const SourceFile* file = source(span.source_id);
-    if (file == nullptr || span.end < span.start || span.end > file->size())
+    if (file == nullptr || span.end < span.start || span.start > file->size()
+        || span.end > file->size())
         return std::nullopt;
     return ResolvedSpan{
         .source_id = span.source_id,
