@@ -914,15 +914,35 @@ private:
         return parse_logical_or();
     }
 
-    /// Parses an expression with struct-initializer syntax suppressed.
-    /// Used for control-flow conditions (`if cond { }`, `while cond { }`)
-    /// to avoid the `ident { }` ambiguity.
-    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_expression_no_struct() {
-        const bool prev = restrict_struct_init_;
-        restrict_struct_init_ = true;
-        auto result = parse_expression();
-        restrict_struct_init_ = prev;
-        return result;
+    [[nodiscard]] bool condition_starts_with_struct_init_ambiguity() const {
+        if (!check(TokenKind::Identifier) || peek(1).kind != TokenKind::LBrace)
+            return false;
+
+        if (peek(2).kind == TokenKind::RBrace)
+            return true;
+
+        if (peek(2).kind != TokenKind::Identifier)
+            return false;
+
+        return peek(3).kind == TokenKind::Colon;
+    }
+
+    /// Parses an `if`/`while` condition, resolving only the leading `ident { }`
+    /// ambiguity in favor of the following block.
+    [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_condition_expression() {
+        if (!condition_starts_with_struct_init_ambiguity())
+            return parse_expression();
+
+        auto identifier = consume_identifier("expected condition expression");
+        if (!identifier.has_value())
+            return std::unexpected(identifier.error());
+
+        return ast::make_expr(
+            identifier->span, ast::PathExpr{
+                                  .head = identifier->symbol,
+                                  .tail = std::nullopt,
+                                  .display_head = identifier->symbol,
+                              });
     }
 
     [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_logical_or() {
@@ -1154,7 +1174,7 @@ private:
     }
 
     [[nodiscard]] std::expected<ast::ExprPtr, ParseError> parse_if_expr(const Token& if_kw) {
-        auto condition = parse_expression_no_struct();
+        auto condition = parse_condition_expression();
         if (!condition.has_value())
             return std::unexpected(condition.error());
 
@@ -1335,7 +1355,7 @@ private:
 
         if (match(TokenKind::KwWhile)) {
             const Token while_kw = previous();
-            auto condition = parse_expression_no_struct();
+            auto condition = parse_condition_expression();
             if (!condition.has_value())
                 return std::unexpected(condition.error());
 
@@ -1405,7 +1425,7 @@ private:
                     });
             }
 
-            if (!restrict_struct_init_ && looks_like_struct_initializer()) {
+            if (looks_like_struct_initializer()) {
                 auto open = consume(TokenKind::LBrace, "expected `{` in struct initializer");
                 if (!open.has_value())
                     return std::unexpected(open.error());
@@ -1465,10 +1485,6 @@ private:
 
     std::vector<Token> tokens_;
     std::size_t cursor_ = 0;
-
-    /// When true, suppress struct-initializer parsing to resolve the
-    /// `if ident { }` ambiguity (Rust-style parenthesis-free conditions).
-    bool restrict_struct_init_ = false;
 };
 
 } // namespace

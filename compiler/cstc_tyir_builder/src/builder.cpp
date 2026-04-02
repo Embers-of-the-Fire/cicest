@@ -124,16 +124,20 @@ public:
         frames_.pop_back();
     }
 
-    void insert(
+    [[nodiscard]] bool insert(
         cstc::symbol::Symbol name, tyir::Ty ty,
         std::optional<std::size_t> borrowed_local = std::nullopt) {
         assert(!frames_.empty());
+        if (frames_.back().bindings.contains(name))
+            return false;
+
         if (borrowed_local.has_value())
             locals_.at(*borrowed_local).active_borrows += 1;
 
         const std::size_t index = locals_.size();
         locals_.push_back(LocalState{std::move(ty), false, 0, borrowed_local});
         frames_.back().bindings.emplace(name, index);
+        return true;
     }
 
     [[nodiscard]] std::optional<std::size_t> lookup_local(cstc::symbol::Symbol name) const {
@@ -615,8 +619,10 @@ static void consume_temp_borrow(std::vector<std::size_t>& borrows, std::size_t o
                         "this reference value cannot be stored in a local yet; bind a direct "
                         "borrow instead");
                 }
-                if (!s.discard && s.name.is_valid())
-                    ctx.scope.insert(s.name, binding_ty, borrowed_local);
+                if (!s.discard && s.name.is_valid()
+                    && !ctx.scope.insert(s.name, binding_ty, borrowed_local))
+                    return make_error(
+                        s.span, "duplicate local binding '" + std::string(s.name.as_str()) + "'");
 
                 release_temp_borrows(ctx, init->temp_borrows);
 
@@ -1372,20 +1378,18 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
             // ── While ─────────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::WhileExpr>) {
-                ctx.push_loop(LoopKind::While);
                 auto cond = lower_expr(node.condition, ctx);
                 if (!cond) {
-                    ctx.pop_loop();
                     return std::unexpected(std::move(cond.error()));
                 }
                 if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
-                    ctx.pop_loop();
                     return make_error(
                         node.condition->span, "'while' condition must have type 'bool', found '"
                                                   + cond->expr->ty.display() + "'");
                 }
                 release_temp_borrows(ctx, cond->temp_borrows);
 
+                ctx.push_loop(LoopKind::While);
                 auto body = lower_block(*node.body, ctx);
                 if (!body) {
                     ctx.pop_loop();
@@ -1407,7 +1411,6 @@ static std::expected<void, LowerError> merge_loop_break_types(
             else if constexpr (std::is_same_v<N, ast::ForExpr>) {
                 // The for-init introduces a new scope that outlives the header
                 ctx.scope.push();
-                ctx.push_loop(LoopKind::For);
 
                 std::optional<tyir::TyForInit> lowered_init;
 
@@ -1416,7 +1419,6 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (const auto* init_let = std::get_if<ast::ForInitLet>(&init_var)) {
                         auto init_expr = lower_expr(init_let->initializer, ctx);
                         if (!init_expr) {
-                            ctx.pop_loop();
                             ctx.scope.pop();
                             return std::unexpected(std::move(init_expr.error()));
                         }
@@ -1425,12 +1427,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             auto ann =
                                 lower_type(*init_let->type_annotation, ctx.env, init_let->span);
                             if (!ann) {
-                                ctx.pop_loop();
                                 ctx.scope.pop();
                                 return std::unexpected(std::move(ann.error()));
                             }
                             if (!compatible(init_expr->expr->ty, *ann)) {
-                                ctx.pop_loop();
                                 ctx.scope.pop();
                                 return make_error(
                                     init_let->span, "for-init type mismatch: expected '"
@@ -1447,8 +1447,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             borrowed_local = init_expr->persistent_borrow_owner;
                             consume_temp_borrow(init_expr->temp_borrows, borrowed_local.value());
                         }
-                        if (!init_let->discard && init_let->name.is_valid())
-                            ctx.scope.insert(init_let->name, init_ty, borrowed_local);
+                        if (!init_let->discard && init_let->name.is_valid()
+                            && !ctx.scope.insert(init_let->name, init_ty, borrowed_local)) {
+                            ctx.scope.pop();
+                            return make_error(
+                                init_let->span, "duplicate local binding '"
+                                                    + std::string(init_let->name.as_str()) + "'");
+                        }
                         release_temp_borrows(ctx, init_expr->temp_borrows);
                         lowered_init = tyir::TyForInit{
                             init_let->discard, init_let->name, init_ty, std::move(init_expr->expr),
@@ -1458,7 +1463,6 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         const auto& init_expr_ptr = std::get<ast::ExprPtr>(init_var);
                         auto init_expr = lower_expr(init_expr_ptr, ctx);
                         if (!init_expr) {
-                            ctx.pop_loop();
                             ctx.scope.pop();
                             return std::unexpected(std::move(init_expr.error()));
                         }
@@ -1474,12 +1478,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 if (node.condition.has_value()) {
                     auto cond = lower_expr(*node.condition, ctx);
                     if (!cond) {
-                        ctx.pop_loop();
                         ctx.scope.pop();
                         return std::unexpected(std::move(cond.error()));
                     }
                     if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
-                        ctx.pop_loop();
                         ctx.scope.pop();
                         return make_error(
                             (*node.condition)->span,
@@ -1494,7 +1496,6 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 if (node.step.has_value()) {
                     auto step = lower_expr(*node.step, ctx);
                     if (!step) {
-                        ctx.pop_loop();
                         ctx.scope.pop();
                         return std::unexpected(std::move(step.error()));
                     }
@@ -1502,6 +1503,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     lowered_step = std::move(step->expr);
                 }
 
+                ctx.push_loop(LoopKind::For);
                 auto body = lower_block(*node.body, ctx);
                 if (!body) {
                     ctx.pop_loop();
@@ -1664,8 +1666,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
     // Set up lowering context with params in scope
     LowerCtx ctx{env, {}, sig.return_ty, {}};
     ctx.scope.push();
-    for (const tyir::TyParam& p : ty_params)
-        ctx.scope.insert(p.name, p.ty);
+    for (const tyir::TyParam& p : ty_params) {
+        if (!ctx.scope.insert(p.name, p.ty))
+            return make_error(p.span, "duplicate parameter '" + std::string(p.name.as_str()) + "'");
+    }
 
     auto body = lower_block(*fn.body, ctx);
     ctx.scope.pop();
