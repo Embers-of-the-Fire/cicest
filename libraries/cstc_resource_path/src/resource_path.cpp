@@ -18,7 +18,7 @@
 
 namespace cstc::resource_path {
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 const char* const rt_library_filename = "cicest_rt.lib";
 #else
 const char* const rt_library_filename = "libcicest_rt.a";
