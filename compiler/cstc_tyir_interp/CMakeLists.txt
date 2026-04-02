@@ -1,13 +1,15 @@
-add_library(cstc_tyir_interp INTERFACE)
+add_library(cstc_tyir_interp STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/interp.cpp
+)
 add_library(cicest::compiler::tyir_interp ALIAS cstc_tyir_interp)
 
 target_include_directories(cstc_tyir_interp
-    INTERFACE
+    PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
 target_link_libraries(cstc_tyir_interp
-    INTERFACE
+    PUBLIC
         cstc_tyir
         cstc_ast
         cstc_symbol

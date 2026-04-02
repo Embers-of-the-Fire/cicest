@@ -1,14 +1,17 @@
-add_library(cstc_lexer INTERFACE)
+add_library(cstc_lexer STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/lexer.cpp
+)
 add_library(cicest::compiler::lexer ALIAS cstc_lexer)
 
-target_include_directories(cstc_lexer INTERFACE
+target_include_directories(cstc_lexer PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
 target_link_libraries(cstc_lexer
-    INTERFACE
+    PUBLIC
         cstc_symbol
         cstc_span
+    PRIVATE
         cicest_options
         cicest_warnings
 )

@@ -284,6 +284,26 @@ void test_while() {
     assert(std::holds_alternative<cstc::ast::PathExpr>(wh.condition->node));
 }
 
+void test_if_condition_allows_nested_struct_literal_argument() {
+    cstc::symbol::SymbolSession session;
+    const auto& expr = tail_of("if predicate(Foo { x: 1 }) { 0 }");
+    const auto& if_expr = std::get<cstc::ast::IfExpr>(expr.node);
+    const auto& call = std::get<cstc::ast::CallExpr>(if_expr.condition->node);
+    assert(call.args.size() == 1);
+    assert(std::holds_alternative<cstc::ast::StructInitExpr>(call.args[0]->node));
+}
+
+void test_while_condition_allows_nested_struct_literal_field_access() {
+    cstc::symbol::SymbolSession session;
+    const auto& expr = tail_of("while cmp((Foo { x: 1 }).x) { continue }");
+    const auto& wh = std::get<cstc::ast::WhileExpr>(expr.node);
+    const auto& call = std::get<cstc::ast::CallExpr>(wh.condition->node);
+    assert(call.args.size() == 1);
+    assert(std::holds_alternative<cstc::ast::FieldAccessExpr>(call.args[0]->node));
+    const auto& field = std::get<cstc::ast::FieldAccessExpr>(call.args[0]->node);
+    assert(std::holds_alternative<cstc::ast::StructInitExpr>(field.base->node));
+}
+
 void test_for_full() {
     cstc::symbol::SymbolSession session;
     const auto& expr = tail_of("for (let i = 0; i < 10; i) { i; }");
@@ -382,6 +402,8 @@ int main() {
     test_if_else_if_chain();
     test_loop();
     test_while();
+    test_if_condition_allows_nested_struct_literal_argument();
+    test_while_condition_allows_nested_struct_literal_field_access();
     test_for_full();
     test_for_all_parts_empty();
     test_for_expr_init();

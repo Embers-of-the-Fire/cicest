@@ -102,6 +102,15 @@ Common errors:
 | Duplicate top-level declaration | `"duplicate function name 'main'"` |
 | Invalid main return type | `"'main' function must return 'Unit', 'num', or '!' (never), found 'str'"` |
 
+## Public API
+
+- Header: `include/cstc_tyir_builder/builder.hpp`
+- Implementation: `src/builder.cpp`
+- Types:
+  - `cstc::tyir_builder::LowerError`
+- Functions:
+  - `cstc::tyir_builder::lower_program(...)`
+
 ## Usage
 
 ```cpp
@@ -121,6 +130,12 @@ if (!tyir) {
 
 std::cout << cstc::tyir::format_program(*tyir);
 ```
+
+## CMake
+
+- Target: `cstc_tyir_builder` (`STATIC`)
+- Alias: `cicest::compiler::tyir_builder`
+- Depends on: `cstc_tyir`, `cstc_ast`, `cstc_symbol`, `cstc_span`
 
 ## Dependencies
 

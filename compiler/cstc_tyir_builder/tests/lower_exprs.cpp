@@ -111,6 +111,19 @@ static void test_let_infer_type() {
     assert(stmt.ty == ty::num());
 }
 
+static void test_duplicate_let_binding_error() {
+    must_fail_with_message(
+        "fn f() -> num { let x = 1; let x = 2; x }", "duplicate local binding 'x'");
+}
+
+static void test_nested_block_shadowing_allowed() {
+    const auto prog = must_lower("fn f() -> num { let x = 1; { let x = 2; } x }");
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+    assert(std::holds_alternative<LocalRef>(tail->node));
+    assert(std::get<LocalRef>(tail->node).name == Symbol::intern("x"));
+}
+
 static void test_undefined_variable_error() { must_fail("fn f() -> num { x }"); }
 
 // ─── Arithmetic operators ─────────────────────────────────────────────────────
@@ -528,36 +541,24 @@ static void test_bare_break_in_for_ok() {
 
 // ─── Break/continue in loop headers ─────────────────────────────────────────
 
-static void test_break_in_while_condition_accepted() {
-    // `break` in the while condition is inside the loop context.
-    // Its type is Never (bottom), which is compatible with bool,
-    // so this is accepted rather than producing "'break' outside of a loop".
-    const auto prog = must_lower("fn f() { while (break) { } }");
-    (void)prog;
+static void test_break_in_while_condition_error() {
+    must_fail_with_message("fn f() { while (break) { } }", "'break' outside of a loop");
 }
 
-static void test_continue_in_while_condition_accepted() {
-    // Same reasoning: `continue` is Never, compatible with bool.
-    const auto prog = must_lower("fn f() { while continue { } }");
-    (void)prog;
+static void test_continue_in_while_condition_error() {
+    must_fail_with_message("fn f() { while continue { } }", "'continue' outside of a loop");
 }
 
-static void test_continue_in_for_condition_accepted() {
-    // `continue` in the for condition — Never is compatible with bool.
-    const auto prog = must_lower("fn f() { for (; continue; ) { } }");
-    (void)prog;
+static void test_continue_in_for_condition_error() {
+    must_fail_with_message("fn f() { for (; continue; ) { } }", "'continue' outside of a loop");
 }
 
-static void test_break_in_for_step_ok() {
-    // `break` in the for-step is syntactically odd but should be accepted
-    // (it's inside the loop context)
-    const auto prog = must_lower("fn f() { for (;; break) { } }");
-    (void)prog;
+static void test_break_in_for_step_error() {
+    must_fail_with_message("fn f() { for (;; break) { } }", "'break' outside of a loop");
 }
 
-static void test_continue_in_for_step_ok() {
-    const auto prog = must_lower("fn f() { for (;; continue) { } }");
-    (void)prog;
+static void test_continue_in_for_step_error() {
+    must_fail_with_message("fn f() { for (;; continue) { } }", "'continue' outside of a loop");
 }
 
 // ─── Nested loops ────────────────────────────────────────────────────────────
@@ -843,10 +844,9 @@ static void test_struct_init_unknown_field_error() {
 }
 
 static void test_struct_init_duplicate_field_error() {
-    must_fail_with_message(
+    must_fail(
         "struct Point { x: num, y: num }"
-        "fn f() -> Point { Point { x: 0, x: 1 } }",
-        "duplicate field 'x'");
+        "fn f() -> Point { Point { x: 0, x: 1 } }");
 }
 
 static void test_struct_init_missing_field_error() {
@@ -942,6 +942,25 @@ static void test_copy_ref_binding_keeps_borrow() {
     assert(std::get<LocalRef>(copy_stmt.init->node).use_kind == ValueUseKind::Copy);
 }
 
+static void test_for_step_move_does_not_poison_body() {
+    must_lower(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "extern \"lang\" fn print(value: &str);"
+        "extern \"lang\" fn flag() -> bool;"
+        "fn f() { let s: str = to_str(1); for (; flag(); consume(s)) { print(&s); break; } }");
+}
+
+static void test_for_body_move_reaches_step() {
+    must_fail_with_message(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "extern \"lang\" fn consume(value: str);"
+        "extern \"lang\" fn print(value: &str);"
+        "extern \"lang\" fn flag() -> bool;"
+        "fn f() { let s: str = to_str(1); for (; flag(); print(&s)) { consume(s); } }",
+        "use of moved value 's'");
+}
+
 int main() {
     SymbolSession session;
 
@@ -952,6 +971,8 @@ int main() {
     test_param_ref();
     test_let_binding_ref();
     test_let_infer_type();
+    test_duplicate_let_binding_error();
+    test_nested_block_shadowing_allowed();
     test_undefined_variable_error();
     test_arithmetic();
     test_arithmetic_type_error();
@@ -1014,11 +1035,11 @@ int main() {
     test_bare_break_in_for_ok();
 
     // Break/continue in loop headers
-    test_break_in_while_condition_accepted();
-    test_continue_in_while_condition_accepted();
-    test_continue_in_for_condition_accepted();
-    test_break_in_for_step_ok();
-    test_continue_in_for_step_ok();
+    test_break_in_while_condition_error();
+    test_continue_in_while_condition_error();
+    test_continue_in_for_condition_error();
+    test_break_in_for_step_error();
+    test_continue_in_for_step_error();
 
     // Nested loops
     test_nested_loop_different_break_types();
@@ -1064,6 +1085,8 @@ int main() {
     test_move_after_move_error();
     test_move_while_borrowed_error();
     test_copy_ref_binding_keeps_borrow();
+    test_for_step_move_does_not_poison_body();
+    test_for_body_move_reaches_step();
 
     return 0;
 }

@@ -120,6 +120,85 @@ void test_render_uses_color_when_explicitly_enabled() {
     assert(rendered.find("\x1b[") != std::string::npos);
 }
 
+void test_render_ignores_comment_with_invalid_public_point() {
+    cstc::error_report::SourceDatabase database;
+    const std::string source = "let answer = 41;\n";
+    const auto source_id = database.add_source("comment.cst", source);
+    const cstc::error_report::SourcePoint invalid_point{
+        .source_id = source_id,
+        .offset = source.size() + 1,
+    };
+
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Warning;
+    diagnostic.message = "suspicious literal";
+    diagnostic.comments.push_back(
+        cstc::error_report::Comment{
+            .point = invalid_point,
+            .message = "consider naming this constant",
+        });
+
+    const std::string rendered = cstc::error_report::render(database, diagnostic);
+    assert(rendered.find("warning: suspicious literal") != std::string::npos);
+    assert(rendered.find("comment.cst") == std::string::npos);
+    assert(rendered.find("consider naming this constant") == std::string::npos);
+}
+
+void test_render_ignores_label_with_invalid_public_span() {
+    cstc::error_report::SourceDatabase database;
+    const std::string source = "let x = 0;\n";
+    const auto source_id = database.add_source("label.cst", source);
+    const cstc::error_report::SourceSpan invalid_span{
+        .source_id = source_id,
+        .start = source.size() + 1,
+        .end = source.size() + 1,
+    };
+
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Error;
+    diagnostic.message = "broken span";
+    diagnostic.labels.push_back(
+        cstc::error_report::Label{
+            .span = invalid_span,
+            .message = "should be ignored",
+            .style = cstc::error_report::LabelStyle::Primary,
+        });
+
+    const std::string rendered = cstc::error_report::render(database, diagnostic);
+    assert(rendered.find("error: broken span") != std::string::npos);
+    assert(rendered.find("label.cst") == std::string::npos);
+    assert(rendered.find("should be ignored") == std::string::npos);
+}
+
+void test_render_treats_next_line_column_one_as_exclusive() {
+    cstc::error_report::SourceDatabase database;
+    const std::string source = "alpha\nbeta\n";
+    const auto source_id = database.add_source("exclusive.cst", source);
+    const auto span = database.make_span(source_id, 1, source.find("beta"));
+    assert(span.has_value());
+
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Error;
+    diagnostic.message = "exclusive end";
+    diagnostic.labels.push_back(
+        cstc::error_report::Label{
+            .span = *span,
+            .message = "highlight first line only",
+            .style = cstc::error_report::LabelStyle::Primary,
+        });
+
+    const std::string rendered = cstc::error_report::render(
+        database, diagnostic,
+        cstc::error_report::RenderOptions{
+            .color = cstc::ansi_color::Emission::Never,
+            .context_lines = 0,
+        });
+
+    assert(rendered.find("1 | alpha") != std::string::npos);
+    assert(rendered.find("highlight first line only") != std::string::npos);
+    assert(rendered.find("2 | beta") == std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -127,5 +206,8 @@ int main() {
     test_render_comment_from_token_offset();
     test_render_nested_diagnostic_tree();
     test_render_uses_color_when_explicitly_enabled();
+    test_render_ignores_comment_with_invalid_public_point();
+    test_render_ignores_label_with_invalid_public_span();
+    test_render_treats_next_line_column_one_as_exclusive();
     return 0;
 }

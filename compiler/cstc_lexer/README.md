@@ -1,6 +1,6 @@
 # `cstc_lexer`
 
-Header-only lexer package for Cicest source files.
+Compiled lexer package for Cicest source files.
 
 ## Purpose
 
@@ -13,6 +13,8 @@ All token text is interned into a shared symbol table.
 - Headers:
   - `include/cstc_lexer/token.hpp`
   - `include/cstc_lexer/lexer.hpp`
+- Implementation:
+  - `src/lexer.cpp`
 - Core types:
   - `cstc::lexer::TokenKind`
   - `cstc::lexer::Token`
@@ -24,7 +26,7 @@ All token text is interned into a shared symbol table.
 
 ## CMake
 
-- Target: `cstc_lexer` (`INTERFACE`)
+- Target: `cstc_lexer` (`STATIC`)
 - Alias: `cicest::compiler::lexer`
 - Depends on: `cstc_symbol`, `cstc_span`
 

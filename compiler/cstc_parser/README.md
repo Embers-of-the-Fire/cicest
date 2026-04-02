@@ -1,6 +1,6 @@
 # `cstc_parser`
 
-Header-only recursive-descent parser package.
+Compiled recursive-descent parser package.
 
 ## Purpose
 
@@ -11,6 +11,7 @@ All textual values are interned into a shared symbol table.
 ## Public API
 
 - Header: `include/cstc_parser/parser.hpp`
+- Implementation: `src/parser.cpp`
 - Types:
   - `cstc::parser::ParseError`
 - Functions:
@@ -20,7 +21,7 @@ All textual values are interned into a shared symbol table.
 
 ## CMake
 
-- Target: `cstc_parser` (`INTERFACE`)
+- Target: `cstc_parser` (`STATIC`)
 - Alias: `cicest::compiler::parser`
 - Depends on: `cstc_ast`, `cstc_lexer`, `cstc_symbol`, `cstc_span`
 

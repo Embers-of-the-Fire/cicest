@@ -203,6 +203,24 @@ static void test_expr_stmt_side_effects() {
     assert(output_contains(prog, "BinOp(+"));
 }
 
+static void test_struct_init_stops_after_returning_field() {
+    const LirProgram prog = must_lower(
+        "struct Pair { x: num, y: num }"
+        "fn f() -> num { let pair = Pair { x: { return 7; }, y: 2 }; 0 }");
+    const std::string out = format_program(prog);
+    assert(out.find("StructInit(Pair") == std::string::npos);
+    assert(out.find("return 7") != std::string::npos);
+}
+
+static void test_call_stops_after_returning_argument() {
+    const LirProgram prog = must_lower(
+        "fn id(x: num) -> num { x }"
+        "fn f() -> num { id({ return 7; }); 0 }");
+    const std::string out = format_program(prog);
+    assert(out.find("Call(id") == std::string::npos);
+    assert(out.find("return 7") != std::string::npos);
+}
+
 int main() {
     SymbolSession session;
 
@@ -226,6 +244,8 @@ int main() {
     test_struct_param();
     test_struct_return_ty();
     test_expr_stmt_side_effects();
+    test_struct_init_stops_after_returning_field();
+    test_call_stops_after_returning_argument();
 
     return 0;
 }

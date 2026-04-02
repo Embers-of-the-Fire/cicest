@@ -1,13 +1,15 @@
-add_library(cstc_lir_builder INTERFACE)
+add_library(cstc_lir_builder STATIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/builder.cpp
+)
 add_library(cicest::compiler::lir_builder ALIAS cstc_lir_builder)
 
 target_include_directories(cstc_lir_builder
-    INTERFACE
+    PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 
 target_link_libraries(cstc_lir_builder
-    INTERFACE
+    PUBLIC
         cstc_lir
         cstc_tyir
         cstc_ast
