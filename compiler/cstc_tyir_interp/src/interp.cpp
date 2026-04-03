@@ -180,6 +180,39 @@ struct EvalState {
     return quoted;
 }
 
+using TypeSubstitution = std::unordered_map<Symbol, tyir::Ty, SymbolHash>;
+
+[[nodiscard]] static tyir::Ty
+    apply_substitution(const tyir::Ty& ty, const TypeSubstitution& subst) {
+    if (ty.kind == tyir::TyKind::Ref) {
+        if (ty.pointee == nullptr)
+            return ty;
+        tyir::Ty rewritten = ty;
+        rewritten.pointee = std::make_shared<tyir::Ty>(apply_substitution(*ty.pointee, subst));
+        return rewritten;
+    }
+    if (ty.kind != tyir::TyKind::Named)
+        return ty;
+
+    if (ty.generic_args.empty()) {
+        const auto it = subst.find(ty.name);
+        if (it != subst.end()) {
+            tyir::Ty rewritten = it->second;
+            rewritten.is_runtime = rewritten.is_runtime || ty.is_runtime;
+            if (!rewritten.display_name.is_valid())
+                rewritten.display_name = ty.display_name;
+            return rewritten;
+        }
+    }
+
+    tyir::Ty rewritten = ty;
+    rewritten.generic_args.clear();
+    rewritten.generic_args.reserve(ty.generic_args.size());
+    for (const tyir::Ty& arg : ty.generic_args)
+        rewritten.generic_args.push_back(apply_substitution(arg, subst));
+    return rewritten;
+}
+
 [[nodiscard]] static std::string format_num(double value) {
     std::ostringstream out;
     out << std::setprecision(17) << value;
@@ -1017,6 +1050,15 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     {},
                 });
 
+        TypeSubstitution substitution;
+        const auto& generic_params = decl_it->second->generic_params;
+        if (!generic_params.empty()) {
+            assert(generic_params.size() == ty.generic_args.size());
+            substitution.reserve(generic_params.size());
+            for (std::size_t index = 0; index < generic_params.size(); ++index)
+                substitution.emplace(generic_params[index].name, ty.generic_args[index]);
+        }
+
         std::vector<tyir::TyStructInitField> fields;
         for (const tyir::TyFieldDecl& field_decl : decl_it->second->fields) {
             ValuePtr field_value = find_struct_field_ptr(*actual, field_decl.name);
@@ -1029,7 +1071,10 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         {},
                     });
             }
-            auto expr_value = value_to_expr(program, field_value, field_decl.ty, span);
+            tyir::Ty field_ty = field_decl.ty;
+            if (!substitution.empty())
+                field_ty = apply_substitution(field_ty, substitution);
+            auto expr_value = value_to_expr(program, field_value, field_ty, span);
             if (!expr_value)
                 return std::unexpected(std::move(expr_value.error()));
             fields.push_back({field_decl.name, *expr_value, span});
