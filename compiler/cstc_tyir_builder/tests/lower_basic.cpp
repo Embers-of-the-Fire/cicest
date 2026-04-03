@@ -231,7 +231,7 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
 }
 
 static void test_fn_preserves_generic_metadata() {
-    const auto prog = must_lower("fn id<T>(value: T) -> T where true, value == value { value }");
+    const auto prog = must_lower("fn id<T>(value: T) -> T where true, 1 == 1 { value }");
     const auto& fn = std::get<TyFnDecl>(prog.items[0]);
     assert(fn.generic_params.size() == 1);
     assert(fn.generic_params[0].name == Symbol::intern("T"));
@@ -241,6 +241,12 @@ static void test_fn_preserves_generic_metadata() {
     assert(fn.lowered_where_clause.size() == 2);
     assert(std::holds_alternative<cstc::ast::LiteralExpr>(fn.where_clause[0].expr->node));
     assert(std::holds_alternative<cstc::ast::BinaryExpr>(fn.where_clause[1].expr->node));
+}
+
+static void test_fn_where_clause_rejects_parameter_references() {
+    must_fail_with_message(
+        "fn id<T>(value: T) -> T where value == value { value }",
+        "function where clauses cannot reference parameter 'value'");
 }
 
 static void test_fn_where_clause_lowers_generic_type_args() {
@@ -434,6 +440,7 @@ int main() {
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
     test_fn_preserves_generic_metadata();
+    test_fn_where_clause_rejects_parameter_references();
     test_fn_where_clause_lowers_generic_type_args();
     test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();

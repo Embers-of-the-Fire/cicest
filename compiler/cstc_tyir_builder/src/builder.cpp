@@ -770,6 +770,182 @@ static void consume_temp_borrow(std::vector<std::size_t>& borrows, std::size_t o
         borrows.erase(it);
 }
 
+using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash>;
+
+[[nodiscard]] static bool
+    has_local_binding(const std::vector<LocalNameSet>& scopes, cstc::symbol::Symbol name) {
+    for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+        if (it->contains(name))
+            return true;
+    }
+    return false;
+}
+
+[[nodiscard]] static std::optional<LowerError> find_param_reference_in_expr(
+    const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes);
+
+[[nodiscard]] static std::optional<LowerError> find_param_reference_in_block(
+    const ast::BlockPtr& block, const LocalNameSet& param_names,
+    std::vector<LocalNameSet>& scopes) {
+    if (block == nullptr)
+        return std::nullopt;
+
+    scopes.emplace_back();
+    for (const ast::Stmt& stmt : block->statements) {
+        auto result = std::visit(
+            [&](const auto& node) -> std::optional<LowerError> {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<Node, ast::LetStmt>) {
+                    auto init = find_param_reference_in_expr(node.initializer, param_names, scopes);
+                    if (init.has_value())
+                        return init;
+                    if (!node.discard && node.name.is_valid())
+                        scopes.back().insert(node.name);
+                    return std::nullopt;
+                } else {
+                    return find_param_reference_in_expr(node.expr, param_names, scopes);
+                }
+            },
+            stmt);
+        if (result.has_value()) {
+            scopes.pop_back();
+            return result;
+        }
+    }
+
+    if (block->tail.has_value()) {
+        auto tail = find_param_reference_in_expr(*block->tail, param_names, scopes);
+        if (tail.has_value()) {
+            scopes.pop_back();
+            return tail;
+        }
+    }
+
+    scopes.pop_back();
+    return std::nullopt;
+}
+
+[[nodiscard]] static std::optional<LowerError> find_param_reference_in_expr(
+    const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes) {
+    if (expr == nullptr)
+        return std::nullopt;
+
+    return std::visit(
+        [&](const auto& node) -> std::optional<LowerError> {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (
+                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::ContinueExpr>) {
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, ast::PathExpr>) {
+                if (!node.tail.has_value() && param_names.contains(node.head)
+                    && !has_local_binding(scopes, node.head)) {
+                    return LowerError{
+                        expr->span,
+                        "function where clauses cannot reference parameter '"
+                            + display_symbol(node.display_head, node.head) + "'",
+                    };
+                }
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
+                for (const ast::StructInitField& field : node.fields) {
+                    auto result = find_param_reference_in_expr(field.value, param_names, scopes);
+                    if (result.has_value())
+                        return result;
+                }
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, ast::GenericAppExpr>) {
+                return find_param_reference_in_expr(node.callee, param_names, scopes);
+            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
+                return find_param_reference_in_expr(node.rhs, param_names, scopes);
+            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
+                auto lhs = find_param_reference_in_expr(node.lhs, param_names, scopes);
+                if (lhs.has_value())
+                    return lhs;
+                return find_param_reference_in_expr(node.rhs, param_names, scopes);
+            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
+                return find_param_reference_in_expr(node.base, param_names, scopes);
+            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
+                auto callee = find_param_reference_in_expr(node.callee, param_names, scopes);
+                if (callee.has_value())
+                    return callee;
+                for (const ast::ExprPtr& arg : node.args) {
+                    auto result = find_param_reference_in_expr(arg, param_names, scopes);
+                    if (result.has_value())
+                        return result;
+                }
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
+                return find_param_reference_in_block(node, param_names, scopes);
+            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
+                auto condition = find_param_reference_in_expr(node.condition, param_names, scopes);
+                if (condition.has_value())
+                    return condition;
+                auto then_block =
+                    find_param_reference_in_block(node.then_block, param_names, scopes);
+                if (then_block.has_value())
+                    return then_block;
+                if (node.else_branch.has_value())
+                    return find_param_reference_in_expr(*node.else_branch, param_names, scopes);
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
+                return find_param_reference_in_block(node.body, param_names, scopes);
+            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
+                auto condition = find_param_reference_in_expr(node.condition, param_names, scopes);
+                if (condition.has_value())
+                    return condition;
+                return find_param_reference_in_block(node.body, param_names, scopes);
+            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
+                scopes.emplace_back();
+                if (node.init.has_value()) {
+                    auto init = std::visit(
+                        [&](const auto& init_node) -> std::optional<LowerError> {
+                            using InitNode = std::decay_t<decltype(init_node)>;
+                            if constexpr (std::is_same_v<InitNode, ast::ForInitLet>) {
+                                auto result = find_param_reference_in_expr(
+                                    init_node.initializer, param_names, scopes);
+                                if (result.has_value())
+                                    return result;
+                                if (!init_node.discard && init_node.name.is_valid())
+                                    scopes.back().insert(init_node.name);
+                                return std::nullopt;
+                            } else {
+                                return find_param_reference_in_expr(init_node, param_names, scopes);
+                            }
+                        },
+                        *node.init);
+                    if (init.has_value()) {
+                        scopes.pop_back();
+                        return init;
+                    }
+                }
+                if (node.condition.has_value()) {
+                    auto condition =
+                        find_param_reference_in_expr(*node.condition, param_names, scopes);
+                    if (condition.has_value()) {
+                        scopes.pop_back();
+                        return condition;
+                    }
+                }
+                if (node.step.has_value()) {
+                    auto step = find_param_reference_in_expr(*node.step, param_names, scopes);
+                    if (step.has_value()) {
+                        scopes.pop_back();
+                        return step;
+                    }
+                }
+                auto body = find_param_reference_in_block(node.body, param_names, scopes);
+                scopes.pop_back();
+                return body;
+            } else if constexpr (
+                std::is_same_v<Node, ast::BreakExpr> || std::is_same_v<Node, ast::ReturnExpr>) {
+                if (node.value.has_value())
+                    return find_param_reference_in_expr(*node.value, param_names, scopes);
+                return std::nullopt;
+            }
+        },
+        expr->node);
+}
+
 [[nodiscard]] static std::expected<std::vector<tyir::TyGenericConstraint>, LowerError>
     lower_where_clause(
         const std::vector<cstc::ast::GenericConstraint>& constraints, const TypeEnv& env,
@@ -779,12 +955,17 @@ static void consume_temp_borrow(std::vector<std::size_t>& borrows, std::size_t o
     LowerCtx ctx{env, {}, make_generic_param_set(generic_params), current_return_ty, {}};
     ctx.scope.push();
     if (params != nullptr) {
-        for (const tyir::TyParam& param : *params) {
-            if (!ctx.scope.insert(param.name, param.ty)) {
+        LocalNameSet param_names;
+        param_names.reserve(params->size());
+        for (const tyir::TyParam& param : *params)
+            param_names.insert(param.name);
+
+        std::vector<LocalNameSet> scopes;
+        for (const cstc::ast::GenericConstraint& constraint : constraints) {
+            auto param_ref = find_param_reference_in_expr(constraint.expr, param_names, scopes);
+            if (param_ref.has_value()) {
                 ctx.scope.pop();
-                return make_error(
-                    param.span, "duplicate parameter '" + std::string(param.name.as_str())
-                                    + "' in constraint scope");
+                return std::unexpected(std::move(*param_ref));
             }
         }
     }

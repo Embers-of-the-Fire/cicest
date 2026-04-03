@@ -35,6 +35,14 @@ static cstc::tyir_interp::EvalError must_fail_to_fold(const char* source) {
     return folded.error();
 }
 
+static cstc::tyir_builder::LowerError must_fail_to_lower(const char* source) {
+    const auto ast = cstc::parser::parse_source(source);
+    assert(ast.has_value());
+    const auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(!tyir.has_value());
+    return tyir.error();
+}
+
 static const TyFnDecl& find_fn(const TyProgram& program, std::string_view name) {
     const Symbol fn_name = Symbol::intern(name);
     for (const TyItem& item : program.items) {
@@ -836,9 +844,9 @@ fn main() -> num {
     assert(error.message.find("function 'id'") != std::string::npos);
 }
 
-static void test_generic_where_unknown_value_reports_not_const_evaluable() {
+static void test_generic_where_parameter_references_are_rejected_while_lowering() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_lower(R"(
 fn id<T>(value: T) -> T where value == value {
     value
 }
@@ -848,8 +856,9 @@ fn main() -> num {
 }
 )");
 
-    assert(error.message.find("could not be const-evaluated") != std::string::npos);
-    assert(error.message.find("function 'id'") != std::string::npos);
+    assert(
+        error.message.find("function where clauses cannot reference parameter 'value'")
+        != std::string::npos);
 }
 
 static void test_generic_where_runtime_call_reports_runtime_only() {
@@ -963,7 +972,7 @@ int main() {
     test_numeric_equality_treats_nan_as_not_equal();
     test_generic_where_true_allows_instantiation();
     test_generic_where_false_reports_constraint_failure();
-    test_generic_where_unknown_value_reports_not_const_evaluable();
+    test_generic_where_parameter_references_are_rejected_while_lowering();
     test_generic_where_runtime_call_reports_runtime_only();
     test_generic_where_runtime_loop_reports_runtime_only();
     test_generic_where_runtime_while_reports_runtime_only();
