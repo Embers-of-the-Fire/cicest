@@ -556,6 +556,8 @@ struct TyParam {
 struct TyFnDecl {
     /// Function name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Declared generic parameter list preserved from the AST.
+    std::vector<cstc::ast::GenericParam> generic_params;
     /// Typed parameter list.
     std::vector<TyParam> params;
     /// Resolved return type (defaults to `Unit` when absent in source).
@@ -566,6 +568,8 @@ struct TyFnDecl {
     cstc::span::SourceSpan span;
     /// True when the function was declared with the `runtime` item modifier.
     bool is_runtime = false;
+    /// Optional generic `where` constraints preserved from the AST.
+    std::vector<cstc::ast::GenericConstraint> where_clause;
 };
 
 /// Typed extern function declaration (no body).

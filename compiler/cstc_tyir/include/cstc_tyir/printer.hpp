@@ -18,6 +18,7 @@
 
 #include <string>
 
+#include <cstc_ast/printer.hpp>
 #include <cstc_tyir/tyir.hpp>
 
 namespace cstc::tyir {
@@ -285,13 +286,16 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 }
             } else if constexpr (std::is_same_v<T, TyFnDecl>) {
                 indent(out, level);
-                out << "TyFnDecl " << node.name.as_str() << "(";
+                out << "TyFnDecl " << node.name.as_str();
+                cstc::ast::detail::print_generic_params(out, node.generic_params);
+                out << "(";
                 for (std::size_t i = 0; i < node.params.size(); ++i) {
                     if (i > 0)
                         out << ", ";
                     out << node.params[i].name.as_str() << ": " << node.params[i].ty.display();
                 }
                 out << ") -> " << node.return_ty.display() << "\n";
+                cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
                 print_ty_block(out, node.body, level + 1);
             } else if constexpr (std::is_same_v<T, TyExternFnDecl>) {
                 indent(out, level);

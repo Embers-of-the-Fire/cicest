@@ -1735,8 +1735,16 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
 
-    return tyir::TyFnDecl{fn.name, std::move(ty_params), sig.return_ty, std::move(body_ptr),
-                          fn.span, fn.is_runtime};
+    tyir::TyFnDecl lowered_fn;
+    lowered_fn.name = fn.name;
+    lowered_fn.generic_params = fn.generic_params;
+    lowered_fn.params = std::move(ty_params);
+    lowered_fn.return_ty = sig.return_ty;
+    lowered_fn.body = std::move(body_ptr);
+    lowered_fn.span = fn.span;
+    lowered_fn.is_runtime = fn.is_runtime;
+    lowered_fn.where_clause = fn.where_clause;
+    return lowered_fn;
 }
 
 } // namespace detail
