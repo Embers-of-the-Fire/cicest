@@ -22,6 +22,7 @@ struct FnSignature {
     std::vector<tyir::Ty> param_types;
     tyir::Ty return_ty;
     cstc::span::SourceSpan span;
+    std::vector<cstc::ast::GenericParam> generic_params;
 };
 
 /// Global type and function environment built during the collection passes.
@@ -38,6 +39,10 @@ struct TypeEnv {
 
     /// Maps each function name → its signature.
     std::unordered_map<cstc::symbol::Symbol, FnSignature, cstc::symbol::SymbolHash> fn_signatures;
+
+    /// Declared generic arity for each named type.
+    std::unordered_map<cstc::symbol::Symbol, std::size_t, cstc::symbol::SymbolHash>
+        type_generic_arity;
 
     /// Names of extern (opaque) struct types. These are valid as type
     /// annotations but cannot be constructed via struct-init expressions.
@@ -93,6 +98,17 @@ struct TypeEnv {
         return false;
     }
 };
+
+using GenericParamSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash>;
+
+[[nodiscard]] static GenericParamSet
+    make_generic_param_set(const std::vector<cstc::ast::GenericParam>& generic_params) {
+    GenericParamSet params;
+    params.reserve(generic_params.size());
+    for (const cstc::ast::GenericParam& param : generic_params)
+        params.insert(param.name);
+    return params;
+}
 
 // ─── Scope (local variable environment) ─────────────────────────────────────
 
@@ -465,14 +481,15 @@ template <typename Decl>
 
 /// Converts an AST `TypeRef` to a `tyir::Ty` shape, validating named types
 /// against the type environment.
-[[nodiscard]] static std::expected<tyir::Ty, LowerError>
-    lower_type_shape(const ast::TypeRef& ref, const TypeEnv& env, cstc::span::SourceSpan span) {
+[[nodiscard]] static std::expected<tyir::Ty, LowerError> lower_type_shape(
+    const ast::TypeRef& ref, const TypeEnv& env, cstc::span::SourceSpan span,
+    const GenericParamSet& generic_params = {}) {
     switch (ref.kind) {
     case ast::TypeKind::Ref:
         if (ref.pointee == nullptr)
             return make_error(span, "invalid reference type");
         {
-            auto pointee = lower_type_shape(*ref.pointee, env, span);
+            auto pointee = lower_type_shape(*ref.pointee, env, span, generic_params);
             if (!pointee)
                 return std::unexpected(std::move(pointee.error()));
             return tyir::ty::ref(*pointee, ref.is_runtime);
@@ -485,19 +502,46 @@ template <typename Decl>
     case ast::TypeKind::Named:
         if (!ref.symbol.is_valid())
             return make_error(span, "invalid named type reference");
+        if (generic_params.contains(ref.symbol)) {
+            if (!ref.generic_args.empty()) {
+                return make_error(
+                    span, "generic parameter '" + display_symbol(ref.display_name, ref.symbol)
+                              + "' cannot take generic arguments");
+            }
+            return tyir::ty::named(
+                ref.symbol, ref.display_name, tyir::ValueSemantics::Move, ref.is_runtime);
+        }
         if (!env.is_named_type(ref.symbol))
             return make_error(
                 span, "undefined type '" + display_symbol(ref.display_name, ref.symbol) + "'");
+        const std::size_t expected_arity =
+            env.type_generic_arity.contains(ref.symbol) ? env.type_generic_arity.at(ref.symbol) : 0;
+        if (ref.generic_args.size() != expected_arity) {
+            return make_error(
+                span, "type '" + display_symbol(ref.display_name, ref.symbol) + "' expects "
+                          + std::to_string(expected_arity) + " generic argument(s), "
+                          + std::to_string(ref.generic_args.size()) + " provided");
+        }
+        std::vector<tyir::Ty> lowered_generic_args;
+        lowered_generic_args.reserve(ref.generic_args.size());
+        for (const ast::TypeRef& generic_arg : ref.generic_args) {
+            auto lowered_arg = lower_type_shape(generic_arg, env, span, generic_params);
+            if (!lowered_arg)
+                return std::unexpected(std::move(lowered_arg.error()));
+            lowered_generic_args.push_back(std::move(*lowered_arg));
+        }
         return tyir::ty::named(
-            ref.symbol, ref.display_name, tyir::ValueSemantics::Move, ref.is_runtime);
+            ref.symbol, ref.display_name, tyir::ValueSemantics::Move, ref.is_runtime,
+            std::move(lowered_generic_args));
     }
     assert(false && "unhandled ast::TypeKind in lower_type_shape");
     __builtin_unreachable();
 }
 
-[[nodiscard]] static std::expected<tyir::Ty, LowerError>
-    lower_type(const ast::TypeRef& ref, const TypeEnv& env, cstc::span::SourceSpan span) {
-    auto ty = lower_type_shape(ref, env, span);
+[[nodiscard]] static std::expected<tyir::Ty, LowerError> lower_type(
+    const ast::TypeRef& ref, const TypeEnv& env, cstc::span::SourceSpan span,
+    const GenericParamSet& generic_params = {}) {
+    auto ty = lower_type_shape(ref, env, span, generic_params);
     if (!ty)
         return std::unexpected(std::move(ty.error()));
     return annotate_type_semantics(std::move(*ty), env);
@@ -538,11 +582,14 @@ struct LoweredPlace {
 
 [[nodiscard]] static std::expected<FnSignature, LowerError> resolve_fn_signature(
     const std::vector<ast::Param>& params, const std::optional<ast::TypeRef>& return_type,
-    cstc::span::SourceSpan span, const TypeEnv& env, bool is_runtime) {
+    cstc::span::SourceSpan span, const TypeEnv& env, bool is_runtime,
+    const std::vector<ast::GenericParam>& generic_params = {}) {
     FnSignature sig;
     sig.span = span;
+    sig.generic_params = generic_params;
+    const GenericParamSet generic_param_set = make_generic_param_set(generic_params);
     if (return_type.has_value()) {
-        auto t = lower_type(*return_type, env, span);
+        auto t = lower_type(*return_type, env, span, generic_param_set);
         if (!t)
             return std::unexpected(std::move(t.error()));
         if (is_runtime)
@@ -554,7 +601,7 @@ struct LoweredPlace {
         sig.return_ty = tyir::ty::unit(is_runtime);
     }
     for (const ast::Param& p : params) {
-        auto pt = lower_type(p.type, env, p.span);
+        auto pt = lower_type(p.type, env, p.span, generic_param_set);
         if (!pt)
             return std::unexpected(std::move(pt.error()));
         sig.param_types.push_back(*pt);
@@ -1770,6 +1817,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     struct_decl->span,
                     "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
+            env.type_generic_arity.emplace(struct_decl->name, struct_decl->generic_params.size());
         } else if (const auto* enum_decl = std::get_if<ast::EnumDecl>(&item)) {
             if (env.struct_fields.count(enum_decl->name) > 0
                 || env.extern_struct_names.count(enum_decl->name) > 0)
@@ -1783,6 +1831,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     enum_decl->span,
                     "duplicate enum name '" + detail::display_decl_name(*enum_decl) + "'");
+            env.type_generic_arity.emplace(enum_decl->name, enum_decl->generic_params.size());
         } else if (const auto* extern_struct = std::get_if<ast::ExternStructDecl>(&item)) {
             // Validate the ABI string.
             if (auto err = detail::validate_abi(extern_struct->abi, extern_struct->span))
@@ -1795,6 +1844,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                     "duplicate type name '" + detail::display_decl_name(*extern_struct) + "'");
 
             env.extern_struct_names.insert(extern_struct->name);
+            env.type_generic_arity.emplace(extern_struct->name, 0);
         }
     }
 
@@ -1802,8 +1852,10 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
     for (const ast::Item& item : program.items) {
         if (const auto* s = std::get_if<ast::StructDecl>(&item)) {
             auto& fields = env.struct_fields.at(s->name);
+            const detail::GenericParamSet generic_params =
+                detail::make_generic_param_set(s->generic_params);
             for (const ast::FieldDecl& f : s->fields) {
-                auto ty = detail::lower_type_shape(f.type, env, f.span);
+                auto ty = detail::lower_type_shape(f.type, env, f.span, generic_params);
                 if (!ty)
                     return std::unexpected(std::move(ty.error()));
                 if (ty->is_ref())
@@ -1824,7 +1876,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
     for (const ast::Item& item : program.items) {
         if (const auto* fn = std::get_if<ast::FnDecl>(&item)) {
             auto sig = detail::resolve_fn_signature(
-                fn->params, fn->return_type, fn->span, env, fn->is_runtime);
+                fn->params, fn->return_type, fn->span, env, fn->is_runtime, fn->generic_params);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
@@ -1873,15 +1925,19 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
         if (const auto* s = std::get_if<ast::StructDecl>(&item)) {
             tyir::TyStructDecl ty_decl;
             ty_decl.name = s->name;
+            ty_decl.generic_params = s->generic_params;
             ty_decl.is_zst = s->is_zst;
             ty_decl.span = s->span;
             ty_decl.fields = env.struct_fields.at(s->name);
+            ty_decl.where_clause = s->where_clause;
             result.items.push_back(std::move(ty_decl));
         } else if (const auto* e = std::get_if<ast::EnumDecl>(&item)) {
             tyir::TyEnumDecl ty_decl;
             ty_decl.name = e->name;
+            ty_decl.generic_params = e->generic_params;
             ty_decl.span = e->span;
             ty_decl.variants = env.enum_variants.at(e->name);
+            ty_decl.where_clause = e->where_clause;
             result.items.push_back(std::move(ty_decl));
         } else if (const auto* fn = std::get_if<ast::FnDecl>(&item)) {
             auto fn_result = detail::lower_fn(*fn, env);

@@ -66,6 +66,18 @@ static void test_zst_struct() {
     assert(decl.fields.empty());
 }
 
+static void test_generic_struct_decl_preserves_metadata_and_field_type() {
+    const auto prog = must_lower("struct Box<T> where ready { value: T }");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyStructDecl>(prog.items[0]);
+    assert(decl.generic_params.size() == 1);
+    assert(decl.generic_params[0].name == Symbol::intern("T"));
+    assert(decl.where_clause.size() == 1);
+    assert(decl.fields.size() == 1);
+    assert(decl.fields[0].ty.name == Symbol::intern("T"));
+    assert(decl.fields[0].ty.generic_args.empty());
+}
+
 static void test_struct_with_named_field() {
     const auto prog = must_lower(
         "struct Color;"
@@ -108,6 +120,16 @@ static void test_duplicate_enum_name_error() {
         "enum Dir { North }"
         "enum Dir { South }",
         "duplicate enum name 'Dir'");
+}
+
+static void test_generic_enum_decl_preserves_metadata() {
+    const auto prog = must_lower("enum Result<T, E> where ready { Ok, Err }");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyEnumDecl>(prog.items[0]);
+    assert(decl.generic_params.size() == 2);
+    assert(decl.generic_params[0].name == Symbol::intern("T"));
+    assert(decl.generic_params[1].name == Symbol::intern("E"));
+    assert(decl.where_clause.size() == 1);
 }
 
 static void test_enum_struct_name_collision_error() {
@@ -194,13 +216,27 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
 }
 
 static void test_fn_preserves_generic_metadata() {
-    const auto prog = must_lower("fn id<T>(value: num) -> num where T, value == value { value }");
+    const auto prog = must_lower("fn id<T>(value: T) -> T where T, value == value { value }");
     const auto& fn = std::get<TyFnDecl>(prog.items[0]);
     assert(fn.generic_params.size() == 1);
     assert(fn.generic_params[0].name == Symbol::intern("T"));
+    assert(fn.params[0].ty.name == Symbol::intern("T"));
+    assert(fn.return_ty.name == Symbol::intern("T"));
     assert(fn.where_clause.size() == 2);
     assert(std::holds_alternative<cstc::ast::PathExpr>(fn.where_clause[0].expr->node));
     assert(std::holds_alternative<cstc::ast::BinaryExpr>(fn.where_clause[1].expr->node));
+}
+
+static void test_generic_type_arguments_lower_in_signatures() {
+    const auto prog = must_lower(
+        "struct Box<T> { value: T }"
+        "fn wrap(value: Box<num>) -> Box<num> { value }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    const Ty expected =
+        ty::named(Symbol::intern("Box"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()});
+    assert(fn.params[0].ty == expected);
+    assert(fn.return_ty == expected);
 }
 
 static void test_runtime_return_annotation_accepts_plain_value() {
@@ -350,12 +386,14 @@ int main() {
     test_empty_program();
     test_struct_decl();
     test_zst_struct();
+    test_generic_struct_decl_preserves_metadata_and_field_type();
     test_struct_with_named_field();
     test_struct_undefined_type_error();
     test_struct_ref_field_error();
     test_duplicate_struct_name_error();
     test_enum_decl();
     test_duplicate_enum_name_error();
+    test_generic_enum_decl_preserves_metadata();
     test_enum_struct_name_collision_error();
     test_struct_enum_name_collision_error();
     test_fn_no_return();
@@ -366,6 +404,7 @@ int main() {
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
     test_fn_preserves_generic_metadata();
+    test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();
     test_runtime_return_type_mismatch_rejected();
     test_runtime_main_return_allowed();
