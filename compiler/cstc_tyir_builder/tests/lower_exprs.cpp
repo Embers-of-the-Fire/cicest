@@ -44,6 +44,19 @@ static const TyFnDecl& first_fn(const TyProgram& prog) {
     __builtin_unreachable();
 }
 
+static const TyFnDecl& second_fn(const TyProgram& prog) {
+    std::size_t seen = 0;
+    for (const auto& item : prog.items) {
+        if (const auto* fn = std::get_if<TyFnDecl>(&item)) {
+            if (seen == 1)
+                return *fn;
+            ++seen;
+        }
+    }
+    assert(false && "second function not found in program");
+    __builtin_unreachable();
+}
+
 // ─── Literals ─────────────────────────────────────────────────────────────────
 
 static void test_num_literal() {
@@ -803,10 +816,22 @@ static void test_call_arg_type_error() {
     must_fail("fn g(x: num) -> num { x } fn f() -> num { g(true) }");
 }
 
-static void test_call_explicit_generic_args_not_supported_yet() {
-    must_fail_with_message(
-        "fn id(x: num) -> num { x } fn f() -> num { id::<num>(1) }",
-        "explicit generic arguments in function calls are not supported yet");
+static void test_call_explicit_generic_args() {
+    const auto prog = must_lower("fn id<T>(x: T) -> T { x } fn f() -> num { id::<num>(1) }");
+    const auto& tail = *second_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+    const auto& call = std::get<TyCall>(tail->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+}
+
+static void test_call_infers_generic_args_from_arguments() {
+    const auto prog = must_lower("fn id<T>(x: T) -> T { x } fn f() -> num { id(1) }");
+    const auto& tail = *second_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+    const auto& call = std::get<TyCall>(tail->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
 }
 
 // ─── Enum variant reference ───────────────────────────────────────────────────
@@ -835,6 +860,19 @@ static void test_struct_init() {
     const auto& tail = *first_fn(prog).body->tail;
     assert(tail->ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy));
     assert(std::holds_alternative<TyStructInit>(tail->node));
+}
+
+static void test_generic_struct_init() {
+    const auto prog = must_lower(
+        "struct Box<T> { value: T }"
+        "fn wrap() -> Box<num> { Box<num> { value: 0 } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    const Ty expected =
+        ty::named(Symbol::intern("Box"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()});
+    assert(tail->ty == expected);
+    const auto& init = std::get<TyStructInit>(tail->node);
+    assert(init.generic_args.size() == 1);
+    assert(init.generic_args[0] == ty::num());
 }
 
 static void test_struct_init_field_type_error() {
@@ -1076,10 +1114,12 @@ int main() {
     test_call_undefined_fn_error();
     test_call_arg_count_error();
     test_call_arg_type_error();
-    test_call_explicit_generic_args_not_supported_yet();
+    test_call_explicit_generic_args();
+    test_call_infers_generic_args_from_arguments();
     test_enum_variant_ref();
     test_unknown_variant_error();
     test_struct_init();
+    test_generic_struct_init();
     test_struct_init_field_type_error();
     test_struct_init_unknown_field_error();
     test_struct_init_duplicate_field_error();

@@ -44,6 +44,11 @@ struct TypeEnv {
     std::unordered_map<cstc::symbol::Symbol, std::size_t, cstc::symbol::SymbolHash>
         type_generic_arity;
 
+    /// Declared generic parameters for each named type.
+    std::unordered_map<
+        cstc::symbol::Symbol, std::vector<cstc::ast::GenericParam>, cstc::symbol::SymbolHash>
+        type_generic_params;
+
     /// Names of extern (opaque) struct types. These are valid as type
     /// annotations but cannot be constructed via struct-init expressions.
     std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> extern_struct_names;
@@ -100,6 +105,11 @@ struct TypeEnv {
 };
 
 using GenericParamSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash>;
+using TypeSubstitution =
+    std::unordered_map<cstc::symbol::Symbol, tyir::Ty, cstc::symbol::SymbolHash>;
+
+[[nodiscard]] static std::unexpected<LowerError>
+    make_error(cstc::span::SourceSpan span, std::string msg);
 
 [[nodiscard]] static GenericParamSet
     make_generic_param_set(const std::vector<cstc::ast::GenericParam>& generic_params) {
@@ -108,6 +118,100 @@ using GenericParamSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::S
     for (const cstc::ast::GenericParam& param : generic_params)
         params.insert(param.name);
     return params;
+}
+
+[[nodiscard]] static bool
+    is_generic_param_ty(const tyir::Ty& ty, const GenericParamSet& generic_params) {
+    return ty.kind == tyir::TyKind::Named && ty.generic_args.empty()
+        && generic_params.contains(ty.name);
+}
+
+[[nodiscard]] static tyir::Ty
+    apply_substitution(const tyir::Ty& ty, const TypeSubstitution& subst) {
+    if (ty.kind == tyir::TyKind::Ref) {
+        if (ty.pointee == nullptr)
+            return ty;
+        tyir::Ty rewritten = ty;
+        rewritten.pointee = std::make_shared<tyir::Ty>(apply_substitution(*ty.pointee, subst));
+        return rewritten;
+    }
+    if (ty.kind != tyir::TyKind::Named)
+        return ty;
+
+    if (ty.generic_args.empty()) {
+        const auto it = subst.find(ty.name);
+        if (it != subst.end()) {
+            tyir::Ty rewritten = it->second;
+            rewritten.is_runtime = rewritten.is_runtime || ty.is_runtime;
+            if (!rewritten.display_name.is_valid())
+                rewritten.display_name = ty.display_name;
+            return rewritten;
+        }
+    }
+
+    tyir::Ty rewritten = ty;
+    rewritten.generic_args.clear();
+    rewritten.generic_args.reserve(ty.generic_args.size());
+    for (const tyir::Ty& arg : ty.generic_args)
+        rewritten.generic_args.push_back(apply_substitution(arg, subst));
+    return rewritten;
+}
+
+[[nodiscard]] static std::expected<TypeSubstitution, LowerError> build_substitution(
+    const std::vector<cstc::ast::GenericParam>& generic_params,
+    const std::vector<tyir::Ty>& generic_args, cstc::span::SourceSpan span,
+    std::string_view owner_kind, std::string_view owner_name) {
+    if (generic_params.size() != generic_args.size()) {
+        return make_error(
+            span, std::string(owner_kind) + " '" + std::string(owner_name) + "' expects "
+                      + std::to_string(generic_params.size()) + " generic argument(s), "
+                      + std::to_string(generic_args.size()) + " provided");
+    }
+
+    TypeSubstitution subst;
+    subst.reserve(generic_params.size());
+    for (std::size_t index = 0; index < generic_params.size(); ++index)
+        subst.emplace(generic_params[index].name, generic_args[index]);
+    return subst;
+}
+
+[[nodiscard]] static std::expected<void, LowerError> infer_substitution(
+    const tyir::Ty& pattern, const tyir::Ty& actual, const GenericParamSet& generic_params,
+    TypeSubstitution& subst, cstc::span::SourceSpan span, std::string_view owner_name) {
+    if (is_generic_param_ty(pattern, generic_params)) {
+        const auto found = subst.find(pattern.name);
+        if (found == subst.end()) {
+            subst.emplace(pattern.name, actual);
+            return {};
+        }
+        if (found->second == actual)
+            return {};
+        return make_error(
+            span, "conflicting inferred types for generic parameter '"
+                      + std::string(pattern.name.as_str()) + "' in '" + std::string(owner_name)
+                      + "'");
+    }
+
+    if (pattern.kind != actual.kind)
+        return {};
+    if (pattern.kind == tyir::TyKind::Ref) {
+        if (pattern.pointee != nullptr && actual.pointee != nullptr)
+            return infer_substitution(
+                *pattern.pointee, *actual.pointee, generic_params, subst, span, owner_name);
+        return {};
+    }
+    if (pattern.kind != tyir::TyKind::Named || pattern.name != actual.name
+        || pattern.generic_args.size() != actual.generic_args.size()) {
+        return {};
+    }
+    for (std::size_t index = 0; index < pattern.generic_args.size(); ++index) {
+        auto result = infer_substitution(
+            pattern.generic_args[index], actual.generic_args[index], generic_params, subst, span,
+            owner_name);
+        if (!result)
+            return result;
+    }
+    return {};
 }
 
 // ─── Scope (local variable environment) ─────────────────────────────────────
@@ -851,6 +955,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
             if constexpr (std::is_same_v<N, ast::PathExpr>) {
                 const std::string display_head = display_symbol(node.display_head, node.head);
+                if (!node.generic_args.empty()) {
+                    return make_error(
+                        expr->span, "explicit generic arguments are only supported in function "
+                                    "call or type positions");
+                }
                 if (node.tail.has_value())
                     return make_error(expr->span, "enum variants cannot be borrowed directly");
 
@@ -878,11 +987,22 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         expr->span,
                         "field access on non-struct type '" + base->expr->ty.display() + "'");
 
-                const auto field_ty = ctx.env.field_ty(base->expr->ty.name, node.field);
+                auto field_ty = ctx.env.field_ty(base->expr->ty.name, node.field);
                 if (!field_ty)
                     return make_error(
                         expr->span, "no field '" + std::string(node.field.as_str())
                                         + "' in struct '" + base->expr->ty.display() + "'");
+                if (!base->expr->ty.generic_args.empty()) {
+                    const auto generic_params_it =
+                        ctx.env.type_generic_params.find(base->expr->ty.name);
+                    assert(generic_params_it != ctx.env.type_generic_params.end());
+                    auto subst = build_substitution(
+                        generic_params_it->second, base->expr->ty.generic_args, expr->span, "type",
+                        base->expr->ty.name.as_str());
+                    if (!subst)
+                        return std::unexpected(std::move(subst.error()));
+                    field_ty = apply_substitution(*field_ty, *subst);
+                }
                 tyir::Ty lowered_field_ty =
                     propagate_runtime_tag(*field_ty, base->expr->ty.is_runtime);
 
@@ -1018,6 +1138,21 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         expr->span, "'" + display_type_name + "' is not a struct type");
 
                 const auto& expected_fields = ctx.env.struct_fields.at(type_name);
+                std::vector<tyir::Ty> lowered_generic_args;
+                lowered_generic_args.reserve(node.generic_args.size());
+                for (const ast::TypeRef& arg : node.generic_args) {
+                    auto lowered_arg = lower_type(arg, ctx.env, expr->span);
+                    if (!lowered_arg)
+                        return std::unexpected(std::move(lowered_arg.error()));
+                    lowered_generic_args.push_back(std::move(*lowered_arg));
+                }
+                const auto generic_params_it = ctx.env.type_generic_params.find(type_name);
+                assert(generic_params_it != ctx.env.type_generic_params.end());
+                auto subst = build_substitution(
+                    generic_params_it->second, lowered_generic_args, expr->span, "type",
+                    display_type_name);
+                if (!subst)
+                    return std::unexpected(std::move(subst.error()));
 
                 // Validate: no extra/duplicate fields, each field type matches
                 std::vector<tyir::TyStructInitField> lowered_fields;
@@ -1029,11 +1164,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 seen_fields.reserve(node.fields.size());
 
                 for (const ast::StructInitField& field : node.fields) {
-                    const auto expected_ty = ctx.env.field_ty(type_name, field.name);
+                    auto expected_ty = ctx.env.field_ty(type_name, field.name);
                     if (!expected_ty)
                         return make_error(
                             field.span, "no field '" + std::string(field.name.as_str())
                                             + "' in struct '" + display_type_name + "'");
+                    expected_ty = apply_substitution(*expected_ty, *subst);
 
                     const auto [_, inserted] = seen_fields.emplace(field.name, field.span);
                     if (!inserted)
@@ -1067,11 +1203,16 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 + "' in struct initializer for '" + display_type_name + "'");
                 }
 
-                const tyir::Ty result_ty =
-                    annotate_type_semantics(tyir::ty::named(type_name, node.display_name), ctx.env);
+                const tyir::Ty result_ty = annotate_type_semantics(
+                    tyir::ty::named(
+                        type_name, node.display_name, tyir::ValueSemantics::Move, false,
+                        lowered_generic_args),
+                    ctx.env);
                 auto lowered = LoweredExpr{
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyStructInit{type_name, {}, std::move(lowered_fields)},
+                        expr->span,
+                        tyir::TyStructInit{
+                            type_name, std::move(lowered_generic_args), std::move(lowered_fields)},
                         result_ty),
                     {},
                     std::nullopt,
@@ -1271,12 +1412,14 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 // Cicest has no first-class functions; callee must be a plain
                 // PathExpr resolving to a top-level function name.
                 const ast::PathExpr* callee_path = nullptr;
+                std::vector<tyir::Ty> explicit_generic_args;
                 if (const auto* generic_app =
                         std::get_if<ast::GenericAppExpr>(&node.callee->node)) {
                     for (const ast::TypeRef& arg : generic_app->args) {
                         auto lowered_arg = lower_type(arg, ctx.env, node.callee->span);
                         if (!lowered_arg)
                             return std::unexpected(std::move(lowered_arg.error()));
+                        explicit_generic_args.push_back(std::move(*lowered_arg));
                     }
 
                     callee_path = std::get_if<ast::PathExpr>(&generic_app->callee->node);
@@ -1286,15 +1429,22 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             "call callee must be a function name, optionally with explicit generic "
                             "arguments");
                     }
-
-                    return make_error(
-                        expr->span,
-                        "explicit generic arguments in function calls are not supported yet");
                 }
 
-                callee_path = std::get_if<ast::PathExpr>(&node.callee->node);
-                if (callee_path == nullptr || callee_path->tail.has_value())
-                    return make_error(expr->span, "call callee must be a function name");
+                if (callee_path == nullptr) {
+                    callee_path = std::get_if<ast::PathExpr>(&node.callee->node);
+                    if (callee_path == nullptr || callee_path->tail.has_value())
+                        return make_error(expr->span, "call callee must be a function name");
+                    if (explicit_generic_args.empty() && !callee_path->generic_args.empty()) {
+                        explicit_generic_args.reserve(callee_path->generic_args.size());
+                        for (const ast::TypeRef& arg : callee_path->generic_args) {
+                            auto lowered_arg = lower_type(arg, ctx.env, node.callee->span);
+                            if (!lowered_arg)
+                                return std::unexpected(std::move(lowered_arg.error()));
+                            explicit_generic_args.push_back(std::move(*lowered_arg));
+                        }
+                    }
+                }
 
                 const cstc::symbol::Symbol fn_name = callee_path->head;
                 const std::string display_fn_name =
@@ -1304,34 +1454,76 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 const FnSignature& sig = ctx.env.fn_signatures.at(fn_name);
 
+                std::vector<tyir::TyExprPtr> lowered_args;
+                lowered_args.reserve(node.args.size());
+                std::vector<std::size_t> temp_borrows;
+
+                for (const ast::ExprPtr& arg_expr : node.args) {
+                    auto arg = lower_expr(arg_expr, ctx);
+                    if (!arg)
+                        return std::unexpected(std::move(arg.error()));
+                    append_temp_borrows(temp_borrows, std::move(arg->temp_borrows));
+                    lowered_args.push_back(std::move(arg->expr));
+                }
+
+                const GenericParamSet generic_param_set =
+                    make_generic_param_set(sig.generic_params);
+                TypeSubstitution substitution;
+                if (!explicit_generic_args.empty()) {
+                    auto subst = build_substitution(
+                        sig.generic_params, explicit_generic_args, expr->span, "function",
+                        display_fn_name);
+                    if (!subst)
+                        return std::unexpected(std::move(subst.error()));
+                    substitution = std::move(*subst);
+                }
+
                 if (node.args.size() != sig.param_types.size())
                     return make_error(
                         expr->span, "function '" + display_fn_name + "' expects "
                                         + std::to_string(sig.param_types.size()) + " argument(s), "
                                         + std::to_string(node.args.size()) + " provided");
 
-                std::vector<tyir::TyExprPtr> lowered_args;
-                lowered_args.reserve(node.args.size());
-                std::vector<std::size_t> temp_borrows;
+                for (std::size_t i = 0; i < node.args.size(); ++i) {
+                    auto inferred = infer_substitution(
+                        sig.param_types[i], lowered_args[i]->ty, generic_param_set, substitution,
+                        node.args[i]->span, display_fn_name);
+                    if (!inferred)
+                        return std::unexpected(std::move(inferred.error()));
+                }
+
+                std::vector<tyir::Ty> resolved_generic_args;
+                resolved_generic_args.reserve(sig.generic_params.size());
+                for (const ast::GenericParam& generic_param : sig.generic_params) {
+                    const auto found = substitution.find(generic_param.name);
+                    if (found == substitution.end()) {
+                        return make_error(
+                            expr->span, "cannot infer generic argument '"
+                                            + std::string(generic_param.name.as_str())
+                                            + "' for function '" + display_fn_name + "'");
+                    }
+                    resolved_generic_args.push_back(found->second);
+                }
 
                 for (std::size_t i = 0; i < node.args.size(); ++i) {
-                    auto arg = lower_expr(node.args[i], ctx);
-                    if (!arg)
-                        return std::unexpected(std::move(arg.error()));
-                    if (!compatible(arg->expr->ty, sig.param_types[i]))
+                    const tyir::Ty expected_param_ty =
+                        apply_substitution(sig.param_types[i], substitution);
+                    if (!compatible(lowered_args[i]->ty, expected_param_ty))
                         return make_error(
                             node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
                                                     + display_fn_name + "': expected '"
-                                                    + sig.param_types[i].display() + "', found '"
-                                                    + arg->expr->ty.display() + "'");
-                    append_temp_borrows(temp_borrows, std::move(arg->temp_borrows));
-                    lowered_args.push_back(std::move(arg->expr));
+                                                    + expected_param_ty.display() + "', found '"
+                                                    + lowered_args[i]->ty.display() + "'");
                 }
+
+                const tyir::Ty resolved_return_ty = apply_substitution(sig.return_ty, substitution);
 
                 auto lowered = LoweredExpr{
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyCall{fn_name, {}, std::move(lowered_args)},
-                        sig.return_ty),
+                        expr->span,
+                        tyir::TyCall{
+                            fn_name, std::move(resolved_generic_args), std::move(lowered_args)},
+                        resolved_return_ty),
                     {},
                     std::nullopt,
                 };
@@ -1818,6 +2010,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                     struct_decl->span,
                     "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
             env.type_generic_arity.emplace(struct_decl->name, struct_decl->generic_params.size());
+            env.type_generic_params.emplace(struct_decl->name, struct_decl->generic_params);
         } else if (const auto* enum_decl = std::get_if<ast::EnumDecl>(&item)) {
             if (env.struct_fields.count(enum_decl->name) > 0
                 || env.extern_struct_names.count(enum_decl->name) > 0)
@@ -1832,6 +2025,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                     enum_decl->span,
                     "duplicate enum name '" + detail::display_decl_name(*enum_decl) + "'");
             env.type_generic_arity.emplace(enum_decl->name, enum_decl->generic_params.size());
+            env.type_generic_params.emplace(enum_decl->name, enum_decl->generic_params);
         } else if (const auto* extern_struct = std::get_if<ast::ExternStructDecl>(&item)) {
             // Validate the ABI string.
             if (auto err = detail::validate_abi(extern_struct->abi, extern_struct->span))
@@ -1845,6 +2039,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
 
             env.extern_struct_names.insert(extern_struct->name);
             env.type_generic_arity.emplace(extern_struct->name, 0);
+            env.type_generic_params.emplace(extern_struct->name, std::vector<ast::GenericParam>{});
         }
     }
 
