@@ -943,6 +943,20 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 return make_error(expr->span, "undefined variable '" + display_head + "'");
             }
 
+            // ── Explicit generic application ──────────────────────────────
+            else if constexpr (std::is_same_v<N, ast::GenericAppExpr>) {
+                for (const ast::TypeRef& arg : node.args) {
+                    auto lowered_arg = lower_type(arg, ctx.env, expr->span);
+                    if (!lowered_arg)
+                        return std::unexpected(std::move(lowered_arg.error()));
+                }
+
+                return make_error(
+                    expr->span,
+                    "explicit generic application is not a first-class expression; use it in a "
+                    "supported generic call or type position");
+            }
+
             // ── Struct init ───────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::StructInitExpr>) {
                 const cstc::symbol::Symbol type_name = node.type_name;
@@ -1209,7 +1223,29 @@ static std::expected<void, LowerError> merge_loop_break_types(
             else if constexpr (std::is_same_v<N, ast::CallExpr>) {
                 // Cicest has no first-class functions; callee must be a plain
                 // PathExpr resolving to a top-level function name.
-                const ast::PathExpr* callee_path = std::get_if<ast::PathExpr>(&node.callee->node);
+                const ast::PathExpr* callee_path = nullptr;
+                if (const auto* generic_app =
+                        std::get_if<ast::GenericAppExpr>(&node.callee->node)) {
+                    for (const ast::TypeRef& arg : generic_app->args) {
+                        auto lowered_arg = lower_type(arg, ctx.env, node.callee->span);
+                        if (!lowered_arg)
+                            return std::unexpected(std::move(lowered_arg.error()));
+                    }
+
+                    callee_path = std::get_if<ast::PathExpr>(&generic_app->callee->node);
+                    if (callee_path == nullptr || callee_path->tail.has_value()) {
+                        return make_error(
+                            expr->span,
+                            "call callee must be a function name, optionally with explicit generic "
+                            "arguments");
+                    }
+
+                    return make_error(
+                        expr->span,
+                        "explicit generic arguments in function calls are not supported yet");
+                }
+
+                callee_path = std::get_if<ast::PathExpr>(&node.callee->node);
                 if (callee_path == nullptr || callee_path->tail.has_value())
                     return make_error(expr->span, "call callee must be a function name");
 
