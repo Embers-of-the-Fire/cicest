@@ -872,6 +872,59 @@ fn main() -> num {
     assert(error.message.find("function 'id'") != std::string::npos);
 }
 
+static void test_generic_where_runtime_loop_reports_runtime_only() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+runtime fn runtime_true() -> bool {
+    true
+}
+
+fn loop_true() -> bool {
+    loop {
+        runtime_true();
+    }
+}
+
+fn id<T>(value: T) -> T where loop_true() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("runtime-only behavior") != std::string::npos);
+    assert(error.message.find("function 'id'") != std::string::npos);
+}
+
+static void test_generic_where_runtime_while_reports_runtime_only() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+runtime fn runtime_true() -> bool {
+    true
+}
+
+fn while_true() -> bool {
+    while true {
+        runtime_true()
+    }
+    false
+}
+
+fn id<T>(value: T) -> T where while_true() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("runtime-only behavior") != std::string::npos);
+    assert(error.message.find("function 'id'") != std::string::npos);
+}
+
 int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
@@ -912,5 +965,7 @@ int main() {
     test_generic_where_false_reports_constraint_failure();
     test_generic_where_unknown_value_reports_not_const_evaluable();
     test_generic_where_runtime_call_reports_runtime_only();
+    test_generic_where_runtime_loop_reports_runtime_only();
+    test_generic_where_runtime_while_reports_runtime_only();
     return 0;
 }

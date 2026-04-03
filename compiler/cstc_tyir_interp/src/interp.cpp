@@ -1008,8 +1008,8 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                     case EvalState::Kind::Break:
                         return EvalState::from_value(
                             body->value != nullptr ? body->value : make_unit());
-                    case EvalState::Kind::Return: return *body;
-                    case EvalState::Kind::Blocked: return EvalState::blocked();
+                    case EvalState::Kind::Return:
+                    case EvalState::Kind::Blocked: return *body;
                     }
                 }
             }
@@ -1040,8 +1040,8 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                     case EvalState::Kind::Break:
                         return EvalState::from_value(
                             body->value != nullptr ? body->value : make_unit());
-                    case EvalState::Kind::Return: return *body;
-                    case EvalState::Kind::Blocked: return EvalState::blocked();
+                    case EvalState::Kind::Return:
+                    case EvalState::Kind::Blocked: return *body;
                     }
                 }
             }
