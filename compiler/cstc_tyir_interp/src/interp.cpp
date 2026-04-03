@@ -2,6 +2,7 @@
 #include <cstc_tyir_interp/interp.hpp>
 
 #include <cassert>
+#include <unordered_set>
 
 namespace cstc::tyir_interp::detail {
 
@@ -219,6 +220,149 @@ struct EvalState {
     for (const tyir::Ty& arg : ty.generic_args)
         rewritten.generic_args.push_back(apply_substitution(arg, subst));
     return rewritten;
+}
+
+using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
+
+[[nodiscard]] static GenericParamSet
+    make_generic_param_set(const std::vector<cstc::ast::GenericParam>& generic_params) {
+    GenericParamSet params;
+    params.reserve(generic_params.size());
+    for (const cstc::ast::GenericParam& param : generic_params)
+        params.insert(param.name);
+    return params;
+}
+
+[[nodiscard]] static bool
+    type_depends_on_generic_params(const tyir::Ty& ty, const GenericParamSet& generic_params) {
+    if (ty.kind == tyir::TyKind::Ref)
+        return ty.pointee != nullptr && type_depends_on_generic_params(*ty.pointee, generic_params);
+    if (ty.kind != tyir::TyKind::Named)
+        return false;
+    if (ty.generic_args.empty() && generic_params.contains(ty.name))
+        return true;
+    for (const tyir::Ty& generic_arg : ty.generic_args) {
+        if (type_depends_on_generic_params(generic_arg, generic_params))
+            return true;
+    }
+    return false;
+}
+
+[[nodiscard]] static bool generic_args_depend_on_generic_params(
+    const std::vector<tyir::Ty>& generic_args, const GenericParamSet& generic_params) {
+    for (const tyir::Ty& generic_arg : generic_args) {
+        if (type_depends_on_generic_params(generic_arg, generic_params))
+            return true;
+    }
+    return false;
+}
+
+[[nodiscard]] static bool expr_depends_on_generic_params(
+    const tyir::TyExprPtr& expr, const GenericParamSet& generic_params);
+
+[[nodiscard]] static bool block_depends_on_generic_params(
+    const tyir::TyBlockPtr& block, const GenericParamSet& generic_params) {
+    if (block == nullptr)
+        return false;
+    if (type_depends_on_generic_params(block->ty, generic_params))
+        return true;
+    for (const tyir::TyStmt& stmt : block->stmts) {
+        const bool depends = std::visit(
+            [&](const auto& node) {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<Node, tyir::TyLetStmt>) {
+                    return type_depends_on_generic_params(node.ty, generic_params)
+                        || expr_depends_on_generic_params(node.init, generic_params);
+                } else {
+                    return expr_depends_on_generic_params(node.expr, generic_params);
+                }
+            },
+            stmt);
+        if (depends)
+            return true;
+    }
+    return block->tail.has_value() && expr_depends_on_generic_params(*block->tail, generic_params);
+}
+
+[[nodiscard]] static bool expr_depends_on_generic_params(
+    const tyir::TyExprPtr& expr, const GenericParamSet& generic_params) {
+    if (expr == nullptr)
+        return false;
+    if (type_depends_on_generic_params(expr->ty, generic_params))
+        return true;
+    return std::visit(
+        [&](const auto& node) {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (
+                std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
+                || std::is_same_v<Node, tyir::EnumVariantRef>
+                || std::is_same_v<Node, tyir::TyContinue>) {
+                return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                for (const tyir::Ty& generic_arg : node.generic_args) {
+                    if (type_depends_on_generic_params(generic_arg, generic_params))
+                        return true;
+                }
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    if (expr_depends_on_generic_params(field.value, generic_params))
+                        return true;
+                }
+                return false;
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                return expr_depends_on_generic_params(node.rhs, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                return expr_depends_on_generic_params(node.lhs, generic_params)
+                    || expr_depends_on_generic_params(node.rhs, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                return expr_depends_on_generic_params(node.base, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                for (const tyir::Ty& generic_arg : node.generic_args) {
+                    if (type_depends_on_generic_params(generic_arg, generic_params))
+                        return true;
+                }
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (expr_depends_on_generic_params(arg, generic_params))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                return block_depends_on_generic_params(node, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                if (expr_depends_on_generic_params(node.condition, generic_params)
+                    || block_depends_on_generic_params(node.then_block, generic_params)) {
+                    return true;
+                }
+                return node.else_branch.has_value()
+                    && expr_depends_on_generic_params(*node.else_branch, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                return block_depends_on_generic_params(node.body, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                return expr_depends_on_generic_params(node.condition, generic_params)
+                    || block_depends_on_generic_params(node.body, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                if (node.init.has_value()
+                    && (type_depends_on_generic_params(node.init->ty, generic_params)
+                        || expr_depends_on_generic_params(node.init->init, generic_params))) {
+                    return true;
+                }
+                if (node.condition.has_value()
+                    && expr_depends_on_generic_params(*node.condition, generic_params)) {
+                    return true;
+                }
+                if (node.step.has_value()
+                    && expr_depends_on_generic_params(*node.step, generic_params)) {
+                    return true;
+                }
+                return block_depends_on_generic_params(node.body, generic_params);
+            } else {
+                static_assert(
+                    std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>);
+                return node.value.has_value()
+                    && expr_depends_on_generic_params(*node.value, generic_params);
+            }
+        },
+        expr->node);
 }
 
 [[nodiscard]] static tyir::TyExprPtr
@@ -455,7 +599,7 @@ bool values_equal(const ValuePtr& lhs, const ValuePtr& rhs) {
 
 [[nodiscard]] static std::optional<bool> constant_bool(
     const tyir::TyExprPtr& expr, const ConstEnv& env, const ProgramView& program,
-    std::vector<EvalStackFrame> stack = {});
+    std::vector<EvalStackFrame> stack, const GenericParamSet& generic_params);
 
 [[nodiscard]] static std::expected<EvalState, EvalError>
     eval_expr(const tyir::TyExprPtr& expr, ConstEnv& env, EvalContext& ctx);
@@ -511,7 +655,7 @@ ConstraintEvalResult evaluate_constraint(
     const tyir::TyExprPtr substituted = apply_substitution(expr, substitution);
     ConstEnv env;
     env.push();
-    EvalContext ctx{program, std::move(stack)};
+    EvalContext ctx{program, std::move(stack), kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
     auto value = eval_expr(substituted, env, ctx);
     env.pop();
     if (!value)
@@ -546,24 +690,28 @@ ConstraintEvalResult evaluate_constraint(
         case ConstraintEvalKind::Satisfied: break;
         case ConstraintEvalKind::Unsatisfied:
             return make_error(
-                EvalContext{program, {}}, use_span,
+                EvalContext{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                use_span,
                 "generic constraint failed for "
                     + describe_constraint_owner(owner_kind, owner_name, constraint.span));
         case ConstraintEvalKind::RuntimeOnly:
             return make_error(
-                EvalContext{program, {}}, use_span,
+                EvalContext{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                use_span,
                 "generic constraint for "
                     + describe_constraint_owner(owner_kind, owner_name, constraint.span)
                     + " used runtime-only behavior");
         case ConstraintEvalKind::NotConstEvaluable:
             return make_error(
-                EvalContext{program, {}}, use_span,
+                EvalContext{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                use_span,
                 "generic constraint for "
                     + describe_constraint_owner(owner_kind, owner_name, constraint.span)
                     + " could not be const-evaluated: " + result.detail);
         case ConstraintEvalKind::InvalidType:
             return make_error(
-                EvalContext{program, {}}, use_span,
+                EvalContext{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                use_span,
                 "generic constraint for "
                     + describe_constraint_owner(owner_kind, owner_name, constraint.span)
                     + " is invalid: " + result.detail);
@@ -724,7 +872,9 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
             if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                 const auto decl_it = ctx.program.structs.find(node.type_name);
-                if (decl_it != ctx.program.structs.end()) {
+                if (decl_it != ctx.program.structs.end()
+                    && !generic_args_depend_on_generic_params(
+                        node.generic_args, ctx.generic_params)) {
                     const auto constraint_status = enforce_constraints(
                         ctx.program, decl_it->second->lowered_where_clause,
                         build_substitution(decl_it->second->generic_params, node.generic_args),
@@ -885,12 +1035,15 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                     const tyir::TyFnDecl& fn = *fn_it->second;
                     if (fn.return_ty.is_runtime || fn.is_runtime)
                         return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
-                    const auto constraint_status = enforce_constraints(
-                        ctx.program, fn.lowered_where_clause,
-                        build_substitution(fn.generic_params, node.generic_args), "function",
-                        fn.name, expr->span);
-                    if (!constraint_status)
-                        return std::unexpected(std::move(constraint_status.error()));
+                    if (!generic_args_depend_on_generic_params(
+                            node.generic_args, ctx.generic_params)) {
+                        const auto constraint_status = enforce_constraints(
+                            ctx.program, fn.lowered_where_clause,
+                            build_substitution(fn.generic_params, node.generic_args), "function",
+                            fn.name, expr->span);
+                        if (!constraint_status)
+                            return std::unexpected(std::move(constraint_status.error()));
+                    }
                     auto arity = require_call_arity(
                         ctx, expr->span, fn.name.as_str(), fn.params.size(), node.args.size());
                     if (!arity)
@@ -1205,9 +1358,10 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
 [[nodiscard]] static std::optional<bool> constant_bool(
     const tyir::TyExprPtr& expr, const ConstEnv& env, const ProgramView& program,
-    std::vector<EvalStackFrame> stack) {
+    std::vector<EvalStackFrame> stack, const GenericParamSet& generic_params) {
     ConstEnv eval_env = env;
-    EvalContext ctx{program, std::move(stack)};
+    EvalContext ctx{program, std::move(stack), kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
+    ctx.generic_params = generic_params;
     const auto value = eval_expr(expr, eval_env, ctx);
     if (!value || value->kind != EvalState::Kind::Value)
         return std::nullopt;
@@ -1352,8 +1506,9 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     return std::unexpected(EvalError{span, "unsupported compile-time value materialization", {}});
 }
 
-[[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError>
-    fold_expr(const tyir::TyExprPtr& expr, ConstEnv& env, const ProgramView& program);
+[[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError> fold_expr(
+    const tyir::TyExprPtr& expr, ConstEnv& env, const ProgramView& program,
+    const GenericParamSet& generic_params);
 
 [[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
 
@@ -1442,8 +1597,9 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     return expr_can_fallthrough(**block.tail);
 }
 
-[[nodiscard]] static std::expected<tyir::TyBlock, EvalError>
-    fold_block(const tyir::TyBlock& block, ConstEnv& env, const ProgramView& program) {
+[[nodiscard]] static std::expected<tyir::TyBlock, EvalError> fold_block(
+    const tyir::TyBlock& block, ConstEnv& env, const ProgramView& program,
+    const GenericParamSet& generic_params) {
     env.push();
     tyir::TyBlock folded;
     folded.ty = block.ty;
@@ -1455,12 +1611,13 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             [&](const auto& node) -> std::expected<tyir::TyStmt, EvalError> {
                 using Node = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<Node, tyir::TyLetStmt>) {
-                    auto init = fold_expr(node.init, env, program);
+                    auto init = fold_expr(node.init, env, program, generic_params);
                     if (!init)
                         return std::unexpected(std::move(init.error()));
 
                     ConstEnv eval_env = env;
-                    EvalContext ctx{program, {}};
+                    EvalContext ctx{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
+                    ctx.generic_params = generic_params;
                     const auto value = eval_expr(*init, eval_env, ctx);
                     if (value && value->kind == EvalState::Kind::Value) {
                         if (!node.discard)
@@ -1471,7 +1628,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 
                     return tyir::TyLetStmt{node.discard, node.name, node.ty, *init, node.span};
                 } else {
-                    auto value = fold_expr(node.expr, env, program);
+                    auto value = fold_expr(node.expr, env, program, generic_params);
                     if (!value)
                         return std::unexpected(std::move(value.error()));
                     return tyir::TyExprStmt{*value, node.span};
@@ -1496,7 +1653,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     }
 
     if (block.tail.has_value()) {
-        auto tail = fold_expr(*block.tail, env, program);
+        auto tail = fold_expr(*block.tail, env, program, generic_params);
         if (!tail) {
             env.pop();
             return std::unexpected(std::move(tail.error()));
@@ -1509,9 +1666,11 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 }
 
 [[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError> maybe_fold_constant(
-    const tyir::TyExprPtr& expr, const ProgramView& program, const ConstEnv& env) {
+    const tyir::TyExprPtr& expr, const ProgramView& program, const ConstEnv& env,
+    const GenericParamSet& generic_params) {
     ConstEnv eval_env = env;
-    EvalContext ctx{program, {}};
+    EvalContext ctx{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
+    ctx.generic_params = generic_params;
     auto value = eval_expr(expr, eval_env, ctx);
     if (!value)
         return std::unexpected(std::move(value.error()));
@@ -1525,8 +1684,9 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     return *folded;
 }
 
-[[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError>
-    fold_expr(const tyir::TyExprPtr& expr, ConstEnv& env, const ProgramView& program) {
+[[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError> fold_expr(
+    const tyir::TyExprPtr& expr, ConstEnv& env, const ProgramView& program,
+    const GenericParamSet& generic_params) {
     return std::visit(
         [&](const auto& node) -> std::expected<tyir::TyExprPtr, EvalError> {
             using Node = std::decay_t<decltype(node)>;
@@ -1534,46 +1694,49 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             if constexpr (
                 std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
                 || std::is_same_v<Node, tyir::EnumVariantRef>) {
-                return maybe_fold_constant(expr, program, env);
+                return maybe_fold_constant(expr, program, env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                 tyir::TyStructInit init;
                 init.type_name = node.type_name;
+                init.generic_args = node.generic_args;
                 for (const tyir::TyStructInitField& field : node.fields) {
-                    auto value = fold_expr(field.value, env, program);
+                    auto value = fold_expr(field.value, env, program, generic_params);
                     if (!value)
                         return std::unexpected(std::move(value.error()));
                     init.fields.push_back({field.name, *value, field.span});
                 }
                 return maybe_fold_constant(
-                    tyir::make_ty_expr(expr->span, std::move(init), expr->ty), program, env);
+                    tyir::make_ty_expr(expr->span, std::move(init), expr->ty), program, env,
+                    generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyBorrow>) {
-                auto rhs = fold_expr(node.rhs, env, program);
+                auto rhs = fold_expr(node.rhs, env, program, generic_params);
                 if (!rhs)
                     return std::unexpected(std::move(rhs.error()));
                 return maybe_fold_constant(
-                    tyir::make_ty_expr(expr->span, tyir::TyBorrow{*rhs}, expr->ty), program, env);
+                    tyir::make_ty_expr(expr->span, tyir::TyBorrow{*rhs}, expr->ty), program, env,
+                    generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyUnary>) {
-                auto rhs = fold_expr(node.rhs, env, program);
+                auto rhs = fold_expr(node.rhs, env, program, generic_params);
                 if (!rhs)
                     return std::unexpected(std::move(rhs.error()));
                 return maybe_fold_constant(
                     tyir::make_ty_expr(expr->span, tyir::TyUnary{node.op, *rhs}, expr->ty), program,
-                    env);
+                    env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
-                auto lhs = fold_expr(node.lhs, env, program);
+                auto lhs = fold_expr(node.lhs, env, program, generic_params);
                 if (!lhs)
                     return std::unexpected(std::move(lhs.error()));
 
                 if (node.op == cstc::ast::BinaryOp::And || node.op == cstc::ast::BinaryOp::Or) {
-                    const auto lhs_value = constant_bool(*lhs, env, program);
+                    const auto lhs_value = constant_bool(*lhs, env, program, {}, generic_params);
                     if (lhs_value.has_value()) {
                         const bool short_circuits =
                             (node.op == cstc::ast::BinaryOp::And && !*lhs_value)
@@ -1582,35 +1745,35 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                             return maybe_fold_constant(
                                 tyir::make_ty_expr(
                                     expr->span, tyir::TyBinary{node.op, *lhs, node.rhs}, expr->ty),
-                                program, env);
+                                program, env, generic_params);
                         }
                     }
                 }
 
-                auto rhs = fold_expr(node.rhs, env, program);
+                auto rhs = fold_expr(node.rhs, env, program, generic_params);
                 if (!rhs)
                     return std::unexpected(std::move(rhs.error()));
                 return maybe_fold_constant(
                     tyir::make_ty_expr(expr->span, tyir::TyBinary{node.op, *lhs, *rhs}, expr->ty),
-                    program, env);
+                    program, env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
-                auto base = fold_expr(node.base, env, program);
+                auto base = fold_expr(node.base, env, program, generic_params);
                 if (!base)
                     return std::unexpected(std::move(base.error()));
                 return maybe_fold_constant(
                     tyir::make_ty_expr(
                         expr->span, tyir::TyFieldAccess{*base, node.field, node.use_kind},
                         expr->ty),
-                    program, env);
+                    program, env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyCall>) {
                 std::vector<tyir::TyExprPtr> args;
                 args.reserve(node.args.size());
                 for (const tyir::TyExprPtr& arg : node.args) {
-                    auto folded_arg = fold_expr(arg, env, program);
+                    auto folded_arg = fold_expr(arg, env, program, generic_params);
                     if (!folded_arg)
                         return std::unexpected(std::move(folded_arg.error()));
                     args.push_back(*folded_arg);
@@ -1619,36 +1782,40 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     tyir::make_ty_expr(
                         expr->span, tyir::TyCall{node.fn_name, node.generic_args, std::move(args)},
                         expr->ty),
-                    program, env);
+                    program, env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
-                auto block = fold_block(*node, env, program);
+                auto block = fold_block(*node, env, program, generic_params);
                 if (!block)
                     return std::unexpected(std::move(block.error()));
                 auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
                 return maybe_fold_constant(
-                    tyir::make_ty_expr(expr->span, block_ptr, expr->ty), program, env);
+                    tyir::make_ty_expr(expr->span, block_ptr, expr->ty), program, env,
+                    generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyIf>) {
-                auto condition = fold_expr(node.condition, env, program);
+                auto condition = fold_expr(node.condition, env, program, generic_params);
                 if (!condition)
                     return std::unexpected(std::move(condition.error()));
 
                 ConstEnv branch_env = env;
-                const auto cond_value = constant_bool(*condition, branch_env, program);
+                const auto cond_value =
+                    constant_bool(*condition, branch_env, program, {}, generic_params);
                 if (cond_value.has_value()) {
                     if (*cond_value) {
-                        auto then_block = fold_block(*node.then_block, branch_env, program);
+                        auto then_block =
+                            fold_block(*node.then_block, branch_env, program, generic_params);
                         if (!then_block)
                             return std::unexpected(std::move(then_block.error()));
                         auto then_ptr = std::make_shared<tyir::TyBlock>(std::move(*then_block));
                         return maybe_fold_constant(
-                            tyir::make_ty_expr(expr->span, then_ptr, expr->ty), program, env);
+                            tyir::make_ty_expr(expr->span, then_ptr, expr->ty), program, env,
+                            generic_params);
                     }
                     if (node.else_branch.has_value())
-                        return fold_expr(*node.else_branch, branch_env, program);
+                        return fold_expr(*node.else_branch, branch_env, program, generic_params);
                     return tyir::make_ty_expr(
                         expr->span,
                         tyir::TyLiteral{
@@ -1656,14 +1823,15 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         expr->ty);
                 }
 
-                auto then_block = fold_block(*node.then_block, branch_env, program);
+                auto then_block = fold_block(*node.then_block, branch_env, program, generic_params);
                 if (!then_block)
                     return std::unexpected(std::move(then_block.error()));
                 auto then_ptr = std::make_shared<tyir::TyBlock>(std::move(*then_block));
 
                 std::optional<tyir::TyExprPtr> else_branch;
                 if (node.else_branch.has_value()) {
-                    auto else_expr = fold_expr(*node.else_branch, branch_env, program);
+                    auto else_expr =
+                        fold_expr(*node.else_branch, branch_env, program, generic_params);
                     if (!else_expr)
                         return std::unexpected(std::move(else_expr.error()));
                     else_branch = *else_expr;
@@ -1674,25 +1842,26 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         expr->span,
                         tyir::TyIf{*condition, std::move(then_ptr), std::move(else_branch)},
                         expr->ty),
-                    program, env);
+                    program, env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
-                auto body = fold_block(*node.body, env, program);
+                auto body = fold_block(*node.body, env, program, generic_params);
                 if (!body)
                     return std::unexpected(std::move(body.error()));
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
                 return maybe_fold_constant(
                     tyir::make_ty_expr(expr->span, tyir::TyLoop{std::move(body_ptr)}, expr->ty),
-                    program, env);
+                    program, env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
-                auto condition = fold_expr(node.condition, env, program);
+                auto condition = fold_expr(node.condition, env, program, generic_params);
                 if (!condition)
                     return std::unexpected(std::move(condition.error()));
                 ConstEnv loop_env = env;
-                const auto cond_value = constant_bool(*condition, loop_env, program);
+                const auto cond_value =
+                    constant_bool(*condition, loop_env, program, {}, generic_params);
                 if (cond_value.has_value() && !*cond_value) {
                     return tyir::make_ty_expr(
                         expr->span,
@@ -1700,14 +1869,14 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                             tyir::TyLiteral::Kind::Unit, cstc::symbol::kInvalidSymbol, false},
                         expr->ty);
                 }
-                auto body = fold_block(*node.body, env, program);
+                auto body = fold_block(*node.body, env, program, generic_params);
                 if (!body)
                     return std::unexpected(std::move(body.error()));
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
                 return maybe_fold_constant(
                     tyir::make_ty_expr(
                         expr->span, tyir::TyWhile{*condition, std::move(body_ptr)}, expr->ty),
-                    program, env);
+                    program, env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyFor>) {
@@ -1716,7 +1885,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 
                 std::optional<tyir::TyForInit> init;
                 if (node.init.has_value()) {
-                    auto init_expr = fold_expr(node.init->init, loop_env, program);
+                    auto init_expr = fold_expr(node.init->init, loop_env, program, generic_params);
                     if (!init_expr)
                         return std::unexpected(std::move(init_expr.error()));
                     init = tyir::TyForInit{
@@ -1724,7 +1893,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         node.init->span};
 
                     ConstEnv eval_env = loop_env;
-                    EvalContext ctx{program, {}};
+                    EvalContext ctx{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
+                    ctx.generic_params = generic_params;
                     const auto init_value = eval_expr(*init_expr, eval_env, ctx);
                     if (init_value && init_value->kind == EvalState::Kind::Value) {
                         if (!node.init->discard)
@@ -1736,7 +1906,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 
                 std::optional<tyir::TyExprPtr> condition;
                 if (node.condition.has_value()) {
-                    auto cond = fold_expr(*node.condition, loop_env, program);
+                    auto cond = fold_expr(*node.condition, loop_env, program, generic_params);
                     if (!cond)
                         return std::unexpected(std::move(cond.error()));
                     condition = *cond;
@@ -1744,7 +1914,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 
                 if (condition.has_value()) {
                     ConstEnv cond_env = loop_env;
-                    const auto cond_value = constant_bool(*condition, cond_env, program);
+                    const auto cond_value =
+                        constant_bool(*condition, cond_env, program, {}, generic_params);
                     if (cond_value.has_value() && !*cond_value) {
                         loop_env.pop();
                         return maybe_fold_constant(
@@ -1753,19 +1924,19 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                                 tyir::TyFor{
                                     std::move(init), std::move(condition), node.step, node.body},
                                 expr->ty),
-                            program, env);
+                            program, env, generic_params);
                     }
                 }
 
                 std::optional<tyir::TyExprPtr> step;
                 if (node.step.has_value()) {
-                    auto folded_step = fold_expr(*node.step, loop_env, program);
+                    auto folded_step = fold_expr(*node.step, loop_env, program, generic_params);
                     if (!folded_step)
                         return std::unexpected(std::move(folded_step.error()));
                     step = *folded_step;
                 }
 
-                auto body = fold_block(*node.body, loop_env, program);
+                auto body = fold_block(*node.body, loop_env, program, generic_params);
                 loop_env.pop();
                 if (!body)
                     return std::unexpected(std::move(body.error()));
@@ -1777,13 +1948,13 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                             std::move(init), std::move(condition), std::move(step),
                             std::move(body_ptr)},
                         expr->ty),
-                    program, env);
+                    program, env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyBreak>) {
                 std::optional<tyir::TyExprPtr> value;
                 if (node.value.has_value()) {
-                    auto folded = fold_expr(*node.value, env, program);
+                    auto folded = fold_expr(*node.value, env, program, generic_params);
                     if (!folded)
                         return std::unexpected(std::move(folded.error()));
                     value = *folded;
@@ -1798,7 +1969,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             if constexpr (std::is_same_v<Node, tyir::TyReturn>) {
                 std::optional<tyir::TyExprPtr> value;
                 if (node.value.has_value()) {
-                    auto folded = fold_expr(*node.value, env, program);
+                    auto folded = fold_expr(*node.value, env, program, generic_params);
                     if (!folded)
                         return std::unexpected(std::move(folded.error()));
                     value = *folded;
@@ -1811,11 +1982,12 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
         expr->node);
 }
 
-[[nodiscard]] static std::expected<void, EvalError>
-    validate_constraints_in_expr(const tyir::TyExprPtr& expr, const ProgramView& program);
+[[nodiscard]] static std::expected<void, EvalError> validate_constraints_in_expr(
+    const tyir::TyExprPtr& expr, const ProgramView& program, const GenericParamSet& generic_params);
 
-[[nodiscard]] static std::expected<void, EvalError>
-    validate_constraints_in_block(const tyir::TyBlockPtr& block, const ProgramView& program) {
+[[nodiscard]] static std::expected<void, EvalError> validate_constraints_in_block(
+    const tyir::TyBlockPtr& block, const ProgramView& program,
+    const GenericParamSet& generic_params) {
     if (block == nullptr)
         return {};
     for (const tyir::TyStmt& stmt : block->stmts) {
@@ -1823,21 +1995,22 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             [&](const auto& node) -> std::expected<void, EvalError> {
                 using Node = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<Node, tyir::TyLetStmt>)
-                    return validate_constraints_in_expr(node.init, program);
+                    return validate_constraints_in_expr(node.init, program, generic_params);
                 else
-                    return validate_constraints_in_expr(node.expr, program);
+                    return validate_constraints_in_expr(node.expr, program, generic_params);
             },
             stmt);
         if (!result)
             return result;
     }
     if (block->tail.has_value())
-        return validate_constraints_in_expr(*block->tail, program);
+        return validate_constraints_in_expr(*block->tail, program, generic_params);
     return {};
 }
 
-[[nodiscard]] static std::expected<void, EvalError>
-    validate_constraints_in_expr(const tyir::TyExprPtr& expr, const ProgramView& program) {
+[[nodiscard]] static std::expected<void, EvalError> validate_constraints_in_expr(
+    const tyir::TyExprPtr& expr, const ProgramView& program,
+    const GenericParamSet& generic_params) {
     return std::visit(
         [&](const auto& node) -> std::expected<void, EvalError> {
             using Node = std::decay_t<decltype(node)>;
@@ -1847,7 +2020,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 return {};
             } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                 const auto decl_it = program.structs.find(node.type_name);
-                if (decl_it != program.structs.end()) {
+                if (decl_it != program.structs.end()
+                    && !generic_args_depend_on_generic_params(node.generic_args, generic_params)) {
                     auto status = enforce_constraints(
                         program, decl_it->second->lowered_where_clause,
                         build_substitution(decl_it->second->generic_params, node.generic_args),
@@ -1856,24 +2030,26 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         return status;
                 }
                 for (const tyir::TyStructInitField& field : node.fields) {
-                    auto nested = validate_constraints_in_expr(field.value, program);
+                    auto nested =
+                        validate_constraints_in_expr(field.value, program, generic_params);
                     if (!nested)
                         return nested;
                 }
                 return {};
             } else if constexpr (
                 std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
-                return validate_constraints_in_expr(node.rhs, program);
+                return validate_constraints_in_expr(node.rhs, program, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
-                auto lhs = validate_constraints_in_expr(node.lhs, program);
+                auto lhs = validate_constraints_in_expr(node.lhs, program, generic_params);
                 if (!lhs)
                     return lhs;
-                return validate_constraints_in_expr(node.rhs, program);
+                return validate_constraints_in_expr(node.rhs, program, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
-                return validate_constraints_in_expr(node.base, program);
+                return validate_constraints_in_expr(node.base, program, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
                 const auto fn_it = program.fns.find(node.fn_name);
-                if (fn_it != program.fns.end()) {
+                if (fn_it != program.fns.end()
+                    && !generic_args_depend_on_generic_params(node.generic_args, generic_params)) {
                     auto status = enforce_constraints(
                         program, fn_it->second->lowered_where_clause,
                         build_substitution(fn_it->second->generic_params, node.generic_args),
@@ -1882,51 +2058,54 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         return status;
                 }
                 for (const tyir::TyExprPtr& arg : node.args) {
-                    auto nested = validate_constraints_in_expr(arg, program);
+                    auto nested = validate_constraints_in_expr(arg, program, generic_params);
                     if (!nested)
                         return nested;
                 }
                 return {};
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
-                return validate_constraints_in_block(node, program);
+                return validate_constraints_in_block(node, program, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
-                auto cond = validate_constraints_in_expr(node.condition, program);
+                auto cond = validate_constraints_in_expr(node.condition, program, generic_params);
                 if (!cond)
                     return cond;
-                auto then_block = validate_constraints_in_block(node.then_block, program);
+                auto then_block =
+                    validate_constraints_in_block(node.then_block, program, generic_params);
                 if (!then_block)
                     return then_block;
                 if (node.else_branch.has_value())
-                    return validate_constraints_in_expr(*node.else_branch, program);
+                    return validate_constraints_in_expr(*node.else_branch, program, generic_params);
                 return {};
             } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
-                return validate_constraints_in_block(node.body, program);
+                return validate_constraints_in_block(node.body, program, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
-                auto cond = validate_constraints_in_expr(node.condition, program);
+                auto cond = validate_constraints_in_expr(node.condition, program, generic_params);
                 if (!cond)
                     return cond;
-                return validate_constraints_in_block(node.body, program);
+                return validate_constraints_in_block(node.body, program, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
                 if (node.init.has_value()) {
-                    auto init = validate_constraints_in_expr(node.init->init, program);
+                    auto init =
+                        validate_constraints_in_expr(node.init->init, program, generic_params);
                     if (!init)
                         return init;
                 }
                 if (node.condition.has_value()) {
-                    auto cond = validate_constraints_in_expr(*node.condition, program);
+                    auto cond =
+                        validate_constraints_in_expr(*node.condition, program, generic_params);
                     if (!cond)
                         return cond;
                 }
                 if (node.step.has_value()) {
-                    auto step = validate_constraints_in_expr(*node.step, program);
+                    auto step = validate_constraints_in_expr(*node.step, program, generic_params);
                     if (!step)
                         return step;
                 }
-                return validate_constraints_in_block(node.body, program);
+                return validate_constraints_in_block(node.body, program, generic_params);
             } else if constexpr (
                 std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>) {
                 if (node.value.has_value())
-                    return validate_constraints_in_expr(*node.value, program);
+                    return validate_constraints_in_expr(*node.value, program, generic_params);
                 return {};
             } else {
                 assert((std::is_same_v<Node, tyir::TyContinue>));
@@ -1945,13 +2124,19 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 if constexpr (
                     std::is_same_v<Node, tyir::TyStructDecl>
                     || std::is_same_v<Node, tyir::TyEnumDecl>) {
+                    const GenericParamSet generic_params =
+                        make_generic_param_set(node.generic_params);
                     for (const tyir::TyGenericConstraint& constraint : node.lowered_where_clause) {
+                        if (expr_depends_on_generic_params(constraint.expr, generic_params))
+                            continue;
                         auto status = evaluate_constraint(constraint.expr, {}, view, {});
                         if (status.kind == ConstraintEvalKind::Satisfied)
                             continue;
                         if (status.kind == ConstraintEvalKind::Unsatisfied) {
                             return make_error(
-                                EvalContext{view, {}}, node.span,
+                                EvalContext{
+                                    view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                                node.span,
                                 "generic constraint failed for "
                                     + describe_constraint_owner(
                                         std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
@@ -1959,7 +2144,9 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         }
                         if (status.kind == ConstraintEvalKind::RuntimeOnly) {
                             return make_error(
-                                EvalContext{view, {}}, node.span,
+                                EvalContext{
+                                    view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                                node.span,
                                 "generic constraint for "
                                     + describe_constraint_owner(
                                         std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
@@ -1967,7 +2154,9 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                                     + " used runtime-only behavior");
                         }
                         return make_error(
-                            EvalContext{view, {}}, node.span,
+                            EvalContext{
+                                view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                            node.span,
                             "generic constraint for "
                                 + describe_constraint_owner(
                                     std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
@@ -1979,27 +2168,37 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     }
                     return {};
                 } else if constexpr (std::is_same_v<Node, tyir::TyFnDecl>) {
+                    const GenericParamSet generic_params =
+                        make_generic_param_set(node.generic_params);
                     for (const tyir::TyGenericConstraint& constraint : node.lowered_where_clause) {
+                        if (expr_depends_on_generic_params(constraint.expr, generic_params))
+                            continue;
                         auto status = evaluate_constraint(constraint.expr, {}, view, {});
                         if (status.kind == ConstraintEvalKind::Satisfied)
                             continue;
                         if (status.kind == ConstraintEvalKind::Unsatisfied) {
                             return make_error(
-                                EvalContext{view, {}}, node.span,
+                                EvalContext{
+                                    view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                                node.span,
                                 "generic constraint failed for "
                                     + describe_constraint_owner(
                                         "function", node.name, constraint.span));
                         }
                         if (status.kind == ConstraintEvalKind::RuntimeOnly) {
                             return make_error(
-                                EvalContext{view, {}}, node.span,
+                                EvalContext{
+                                    view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                                node.span,
                                 "generic constraint for "
                                     + describe_constraint_owner(
                                         "function", node.name, constraint.span)
                                     + " used runtime-only behavior");
                         }
                         return make_error(
-                            EvalContext{view, {}}, node.span,
+                            EvalContext{
+                                view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                            node.span,
                             "generic constraint for "
                                 + describe_constraint_owner("function", node.name, constraint.span)
                                 + (status.kind == ConstraintEvalKind::InvalidType
@@ -2007,7 +2206,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                                        : " could not be const-evaluated: ")
                                 + status.detail);
                     }
-                    return validate_constraints_in_block(node.body, view);
+                    return validate_constraints_in_block(node.body, view, generic_params);
                 } else {
                     return {};
                 }
@@ -2057,7 +2256,9 @@ std::expected<tyir::TyProgram, EvalError> fold_program(const tyir::TyProgram& pr
             for (const tyir::TyParam& param : fn->params)
                 env.bind_unknown(param.name);
 
-            auto body = detail::fold_block(*fn->body, env, view);
+            const detail::GenericParamSet generic_params =
+                detail::make_generic_param_set(fn->generic_params);
+            auto body = detail::fold_block(*fn->body, env, view, generic_params);
             env.pop();
             if (!body)
                 return std::unexpected(std::move(body.error()));

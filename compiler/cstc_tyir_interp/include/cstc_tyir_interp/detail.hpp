@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <cstc_tyir_interp/interp.hpp>
@@ -73,6 +74,7 @@ struct EvalContext {
     std::vector<EvalStackFrame> stack;
     std::size_t remaining_steps = kDefaultEvalStepBudget;
     std::size_t remaining_call_depth = kDefaultEvalCallDepth;
+    std::unordered_set<Symbol, SymbolHash> generic_params;
 };
 
 using TypeSubstitution = std::unordered_map<Symbol, tyir::Ty, SymbolHash>;
