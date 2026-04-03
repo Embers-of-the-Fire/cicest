@@ -79,6 +79,19 @@ static void test_generic_struct_decl_preserves_metadata_and_field_type() {
     assert(decl.fields[0].ty.generic_args.empty());
 }
 
+static void test_generic_struct_where_clause_lowers_generic_type_args() {
+    const auto prog = must_lower(
+        "fn helper<T>() -> bool { true }"
+        "struct Box<T> where helper::<T>() { value: T }");
+    assert(prog.items.size() == 2);
+    const auto& decl = std::get<TyStructDecl>(prog.items[1]);
+    assert(decl.lowered_where_clause.size() == 1);
+    const auto& call = std::get<TyCall>(decl.lowered_where_clause[0].expr->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0].name == Symbol::intern("T"));
+    assert(call.generic_args[0].generic_args.empty());
+}
+
 static void test_struct_with_named_field() {
     const auto prog = must_lower(
         "struct Color;"
@@ -228,6 +241,19 @@ static void test_fn_preserves_generic_metadata() {
     assert(fn.lowered_where_clause.size() == 2);
     assert(std::holds_alternative<cstc::ast::LiteralExpr>(fn.where_clause[0].expr->node));
     assert(std::holds_alternative<cstc::ast::BinaryExpr>(fn.where_clause[1].expr->node));
+}
+
+static void test_fn_where_clause_lowers_generic_type_args() {
+    const auto prog = must_lower(
+        "fn helper<T>() -> bool { true }"
+        "fn id<T>(value: T) -> T where helper::<T>() { value }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.lowered_where_clause.size() == 1);
+    const auto& call = std::get<TyCall>(fn.lowered_where_clause[0].expr->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0].name == Symbol::intern("T"));
+    assert(call.generic_args[0].generic_args.empty());
 }
 
 static void test_generic_type_arguments_lower_in_signatures() {
@@ -390,6 +416,7 @@ int main() {
     test_struct_decl();
     test_zst_struct();
     test_generic_struct_decl_preserves_metadata_and_field_type();
+    test_generic_struct_where_clause_lowers_generic_type_args();
     test_struct_with_named_field();
     test_struct_undefined_type_error();
     test_struct_ref_field_error();
@@ -407,6 +434,7 @@ int main() {
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
     test_fn_preserves_generic_metadata();
+    test_fn_where_clause_lowers_generic_type_args();
     test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();
     test_runtime_return_type_mismatch_rejected();

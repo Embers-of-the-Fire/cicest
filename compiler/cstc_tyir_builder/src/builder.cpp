@@ -346,6 +346,7 @@ struct LoopCtx {
 struct LowerCtx {
     const TypeEnv& env;
     Scope scope;
+    GenericParamSet generic_params;
     /// Return type of the function currently being lowered.
     tyir::Ty current_return_ty;
 
@@ -772,9 +773,10 @@ static void consume_temp_borrow(std::vector<std::size_t>& borrows, std::size_t o
 [[nodiscard]] static std::expected<std::vector<tyir::TyGenericConstraint>, LowerError>
     lower_where_clause(
         const std::vector<cstc::ast::GenericConstraint>& constraints, const TypeEnv& env,
+        const std::vector<cstc::ast::GenericParam>& generic_params = {},
         const std::vector<tyir::TyParam>* params = nullptr,
         const tyir::Ty& current_return_ty = tyir::ty::unit()) {
-    LowerCtx ctx{env, {}, current_return_ty, {}};
+    LowerCtx ctx{env, {}, make_generic_param_set(generic_params), current_return_ty, {}};
     ctx.scope.push();
     if (params != nullptr) {
         for (const tyir::TyParam& param : *params) {
@@ -820,7 +822,7 @@ static void consume_temp_borrow(std::vector<std::size_t>& borrows, std::size_t o
                 // Resolve binding type (explicit annotation or infer from init)
                 tyir::Ty binding_ty;
                 if (s.type_annotation.has_value()) {
-                    auto ann = lower_type(*s.type_annotation, ctx.env, s.span);
+                    auto ann = lower_type(*s.type_annotation, ctx.env, s.span, ctx.generic_params);
                     if (!ann)
                         return std::unexpected(std::move(ann.error()));
                     if (!compatible(init->expr->ty, *ann))
@@ -1195,7 +1197,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
             // ── Explicit generic application ──────────────────────────────
             else if constexpr (std::is_same_v<N, ast::GenericAppExpr>) {
                 for (const ast::TypeRef& arg : node.args) {
-                    auto lowered_arg = lower_type(arg, ctx.env, expr->span);
+                    auto lowered_arg = lower_type(arg, ctx.env, expr->span, ctx.generic_params);
                     if (!lowered_arg)
                         return std::unexpected(std::move(lowered_arg.error()));
                 }
@@ -1223,7 +1225,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 std::vector<tyir::Ty> lowered_generic_args;
                 lowered_generic_args.reserve(node.generic_args.size());
                 for (const ast::TypeRef& arg : node.generic_args) {
-                    auto lowered_arg = lower_type(arg, ctx.env, expr->span);
+                    auto lowered_arg = lower_type(arg, ctx.env, expr->span, ctx.generic_params);
                     if (!lowered_arg)
                         return std::unexpected(std::move(lowered_arg.error()));
                     lowered_generic_args.push_back(std::move(*lowered_arg));
@@ -1499,7 +1501,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 if (const auto* generic_app =
                         std::get_if<ast::GenericAppExpr>(&node.callee->node)) {
                     for (const ast::TypeRef& arg : generic_app->args) {
-                        auto lowered_arg = lower_type(arg, ctx.env, node.callee->span);
+                        auto lowered_arg =
+                            lower_type(arg, ctx.env, node.callee->span, ctx.generic_params);
                         if (!lowered_arg)
                             return std::unexpected(std::move(lowered_arg.error()));
                         explicit_generic_args.push_back(std::move(*lowered_arg));
@@ -1521,7 +1524,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (explicit_generic_args.empty() && !callee_path->generic_args.empty()) {
                         explicit_generic_args.reserve(callee_path->generic_args.size());
                         for (const ast::TypeRef& arg : callee_path->generic_args) {
-                            auto lowered_arg = lower_type(arg, ctx.env, node.callee->span);
+                            auto lowered_arg =
+                                lower_type(arg, ctx.env, node.callee->span, ctx.generic_params);
                             if (!lowered_arg)
                                 return std::unexpected(std::move(lowered_arg.error()));
                             explicit_generic_args.push_back(std::move(*lowered_arg));
@@ -1784,8 +1788,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         }
                         tyir::Ty init_ty;
                         if (init_let->type_annotation.has_value()) {
-                            auto ann =
-                                lower_type(*init_let->type_annotation, ctx.env, init_let->span);
+                            auto ann = lower_type(
+                                *init_let->type_annotation, ctx.env, init_let->span,
+                                ctx.generic_params);
                             if (!ann) {
                                 ctx.scope.pop();
                                 return std::unexpected(std::move(ann.error()));
@@ -2026,7 +2031,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
             tyir::TyParam{fn.params[i].name, sig.param_types[i], fn.params[i].span});
 
     // Set up lowering context with params in scope
-    LowerCtx ctx{env, {}, sig.return_ty, {}};
+    LowerCtx ctx{env, {}, make_generic_param_set(fn.generic_params), sig.return_ty, {}};
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params) {
         if (!ctx.scope.insert(p.name, p.ty))
@@ -2058,7 +2063,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
         body->ty.is_runtime = true;
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
-    auto lowered_constraints = lower_where_clause(fn.where_clause, env, &ty_params, sig.return_ty);
+    auto lowered_constraints =
+        lower_where_clause(fn.where_clause, env, fn.generic_params, &ty_params, sig.return_ty);
     if (!lowered_constraints)
         return std::unexpected(std::move(lowered_constraints.error()));
 
@@ -2213,7 +2219,8 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             ty_decl.span = s->span;
             ty_decl.fields = env.struct_fields.at(s->name);
             ty_decl.where_clause = s->where_clause;
-            auto lowered_constraints = detail::lower_where_clause(s->where_clause, env);
+            auto lowered_constraints =
+                detail::lower_where_clause(s->where_clause, env, s->generic_params);
             if (!lowered_constraints)
                 return std::unexpected(std::move(lowered_constraints.error()));
             ty_decl.lowered_where_clause = std::move(*lowered_constraints);
@@ -2225,7 +2232,8 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             ty_decl.span = e->span;
             ty_decl.variants = env.enum_variants.at(e->name);
             ty_decl.where_clause = e->where_clause;
-            auto lowered_constraints = detail::lower_where_clause(e->where_clause, env);
+            auto lowered_constraints =
+                detail::lower_where_clause(e->where_clause, env, e->generic_params);
             if (!lowered_constraints)
                 return std::unexpected(std::move(lowered_constraints.error()));
             ty_decl.lowered_where_clause = std::move(*lowered_constraints);
