@@ -53,12 +53,10 @@ struct TypeEnv {
     /// annotations but cannot be constructed via struct-init expressions.
     std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> extern_struct_names;
 
-    /// Cached ownership classification for named types after field resolution.
-    mutable std::unordered_map<cstc::symbol::Symbol, tyir::ValueSemantics, cstc::symbol::SymbolHash>
-        named_semantics_cache;
+    /// Cached ownership classification for named type instantiations after field resolution.
+    mutable std::unordered_map<std::string, tyir::ValueSemantics> named_semantics_cache;
     /// Recursion guard used while classifying aggregate types.
-    mutable std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash>
-        named_semantics_in_progress;
+    mutable std::unordered_set<std::string> named_semantics_in_progress;
 
     [[nodiscard]] bool is_struct(cstc::symbol::Symbol name) const {
         return struct_fields.count(name) > 0;
@@ -156,6 +154,34 @@ using TypeSubstitution =
         rewritten.generic_args.push_back(apply_substitution(arg, subst));
     return rewritten;
 }
+
+[[nodiscard]] static std::string ownership_cache_key(const tyir::Ty& ty) {
+    switch (ty.kind) {
+    case tyir::TyKind::Ref:
+        return ty.pointee != nullptr ? "&" + ownership_cache_key(*ty.pointee) : "&<unknown>";
+    case tyir::TyKind::Unit: return "Unit";
+    case tyir::TyKind::Num: return "num";
+    case tyir::TyKind::Str: return "str";
+    case tyir::TyKind::Bool: return "bool";
+    case tyir::TyKind::Never: return "!";
+    case tyir::TyKind::Named: {
+        std::string key = "N:" + std::string(ty.name.as_str());
+        if (!ty.generic_args.empty()) {
+            key += "<";
+            for (std::size_t index = 0; index < ty.generic_args.size(); ++index) {
+                if (index > 0)
+                    key += ",";
+                key += ownership_cache_key(ty.generic_args[index]);
+            }
+            key += ">";
+        }
+        return key;
+    }
+    }
+    return "<unknown>";
+}
+
+[[nodiscard]] static tyir::Ty annotate_type_semantics(tyir::Ty ty, const TypeEnv& env);
 
 [[nodiscard]] static std::expected<TypeSubstitution, LowerError> build_substitution(
     const std::vector<cstc::ast::GenericParam>& generic_params,
@@ -473,35 +499,46 @@ template <typename Decl>
     return tyir::ValueSemantics::Move;
 }
 
-[[nodiscard]] static tyir::ValueSemantics
-    named_semantics(cstc::symbol::Symbol name, const TypeEnv& env) {
-    const auto cached = env.named_semantics_cache.find(name);
+[[nodiscard]] static tyir::ValueSemantics named_semantics(const tyir::Ty& ty, const TypeEnv& env) {
+    assert(ty.kind == tyir::TyKind::Named);
+
+    const cstc::symbol::Symbol name = ty.name;
+    const std::string cache_key = ownership_cache_key(ty);
+    const auto cached = env.named_semantics_cache.find(cache_key);
     if (cached != env.named_semantics_cache.end())
         return cached->second;
 
     if (env.is_enum(name)) {
-        env.named_semantics_cache.emplace(name, tyir::ValueSemantics::Copy);
+        env.named_semantics_cache.emplace(cache_key, tyir::ValueSemantics::Copy);
         return tyir::ValueSemantics::Copy;
     }
     if (env.is_extern_struct(name)) {
-        env.named_semantics_cache.emplace(name, tyir::ValueSemantics::Move);
+        env.named_semantics_cache.emplace(cache_key, tyir::ValueSemantics::Move);
         return tyir::ValueSemantics::Move;
     }
 
-    if (!env.named_semantics_in_progress.insert(name).second)
+    if (!env.named_semantics_in_progress.insert(cache_key).second)
         return tyir::ValueSemantics::Move;
 
     tyir::ValueSemantics semantics = tyir::ValueSemantics::Copy;
     const auto it = env.struct_fields.find(name);
     if (it != env.struct_fields.end()) {
+        TypeSubstitution substitution;
+        if (!ty.generic_args.empty()) {
+            const auto generic_params_it = env.type_generic_params.find(name);
+            assert(generic_params_it != env.type_generic_params.end());
+            assert(generic_params_it->second.size() == ty.generic_args.size());
+            substitution.reserve(ty.generic_args.size());
+            for (std::size_t index = 0; index < ty.generic_args.size(); ++index) {
+                substitution.emplace(generic_params_it->second[index].name, ty.generic_args[index]);
+            }
+        }
+
         for (const tyir::TyFieldDecl& field : it->second) {
             tyir::Ty field_ty = field.ty;
-            if (field_ty.kind == tyir::TyKind::Named)
-                field_ty.semantics = named_semantics(field_ty.name, env);
-            else if (field_ty.kind == tyir::TyKind::Ref)
-                field_ty.semantics = tyir::ValueSemantics::Ref;
-            else
-                field_ty.semantics = primitive_semantics(field_ty.kind);
+            if (!substitution.empty())
+                field_ty = apply_substitution(field_ty, substitution);
+            field_ty = annotate_type_semantics(std::move(field_ty), env);
 
             if (field_ty.is_move_only()) {
                 semantics = tyir::ValueSemantics::Move;
@@ -510,8 +547,8 @@ template <typename Decl>
         }
     }
 
-    env.named_semantics_in_progress.erase(name);
-    env.named_semantics_cache[name] = semantics;
+    env.named_semantics_in_progress.erase(cache_key);
+    env.named_semantics_cache[cache_key] = semantics;
     return semantics;
 }
 
@@ -522,7 +559,11 @@ template <typename Decl>
             ty.pointee = std::make_shared<tyir::Ty>(annotate_type_semantics(*ty.pointee, env));
         ty.semantics = tyir::ValueSemantics::Ref;
         return ty;
-    case tyir::TyKind::Named: ty.semantics = named_semantics(ty.name, env); return ty;
+    case tyir::TyKind::Named:
+        for (tyir::Ty& generic_arg : ty.generic_args)
+            generic_arg = annotate_type_semantics(std::move(generic_arg), env);
+        ty.semantics = named_semantics(ty, env);
+        return ty;
     case tyir::TyKind::Unit:
     case tyir::TyKind::Num:
     case tyir::TyKind::Str:
@@ -1001,7 +1042,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         base->expr->ty.name.as_str());
                     if (!subst)
                         return std::unexpected(std::move(subst.error()));
-                    field_ty = apply_substitution(*field_ty, *subst);
+                    field_ty =
+                        annotate_type_semantics(apply_substitution(*field_ty, *subst), ctx.env);
                 }
                 tyir::Ty lowered_field_ty =
                     propagate_runtime_tag(*field_ty, base->expr->ty.is_runtime);
@@ -1169,7 +1211,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return make_error(
                             field.span, "no field '" + std::string(field.name.as_str())
                                             + "' in struct '" + display_type_name + "'");
-                    expected_ty = apply_substitution(*expected_ty, *subst);
+                    expected_ty =
+                        annotate_type_semantics(apply_substitution(*expected_ty, *subst), ctx.env);
 
                     const auto [_, inserted] = seen_fields.emplace(field.name, field.span);
                     if (!inserted)
@@ -1506,8 +1549,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 }
 
                 for (std::size_t i = 0; i < node.args.size(); ++i) {
-                    const tyir::Ty expected_param_ty =
-                        apply_substitution(sig.param_types[i], substitution);
+                    const tyir::Ty expected_param_ty = annotate_type_semantics(
+                        apply_substitution(sig.param_types[i], substitution), ctx.env);
                     if (!compatible(lowered_args[i]->ty, expected_param_ty))
                         return make_error(
                             node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
@@ -1516,7 +1559,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                                     + lowered_args[i]->ty.display() + "'");
                 }
 
-                const tyir::Ty resolved_return_ty = apply_substitution(sig.return_ty, substitution);
+                const tyir::Ty resolved_return_ty = annotate_type_semantics(
+                    apply_substitution(sig.return_ty, substitution), ctx.env);
 
                 auto lowered = LoweredExpr{
                     tyir::make_ty_expr(

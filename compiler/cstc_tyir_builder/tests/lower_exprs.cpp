@@ -875,6 +875,41 @@ static void test_generic_struct_init() {
     assert(init.generic_args[0] == ty::num());
 }
 
+static void test_generic_struct_specialization_tracks_move_semantics() {
+    must_fail_with_message(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "struct Box<T> { value: T }"
+        "fn f() { let b: Box<str> = Box<str> { value: to_str(1) }; let c: Box<str> = b; let d: "
+        "Box<str> = b; }",
+        "use of moved value 'b'");
+}
+
+static void test_generic_struct_specialization_keeps_copy_semantics() {
+    const auto prog = must_lower(
+        "struct Box<T> { value: T }"
+        "fn f() { let b: Box<num> = Box<num> { value: 1 }; let c: Box<num> = b; let d: Box<num> "
+        "= b; }");
+    const auto& body = *first_fn(prog).body;
+    const auto& copy_stmt = std::get<TyLetStmt>(body.stmts[2]);
+    assert(
+        copy_stmt.ty
+        == ty::named(
+            Symbol::intern("Box"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()}));
+    assert(std::holds_alternative<LocalRef>(copy_stmt.init->node));
+    assert(std::get<LocalRef>(copy_stmt.init->node).use_kind == ValueUseKind::Copy);
+}
+
+static void test_generic_fn_return_reannotates_specialized_semantics() {
+    must_fail_with_message(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn id<T>(value: T) -> T { value }"
+        "struct Box<T> { value: T }"
+        "fn f() { let b: Box<str> = id::<Box<str>>(Box<str> { value: to_str(1) }); let c: Box<str> "
+        "= b; let d: "
+        "Box<str> = b; }",
+        "use of moved value 'b'");
+}
+
 static void test_struct_init_field_type_error() {
     must_fail(
         "struct Point { x: num, y: num }"
@@ -1120,6 +1155,9 @@ int main() {
     test_unknown_variant_error();
     test_struct_init();
     test_generic_struct_init();
+    test_generic_struct_specialization_tracks_move_semantics();
+    test_generic_struct_specialization_keeps_copy_semantics();
+    test_generic_fn_return_reannotates_specialized_semantics();
     test_struct_init_field_type_error();
     test_struct_init_unknown_field_error();
     test_struct_init_duplicate_field_error();
