@@ -281,13 +281,18 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
 
             if constexpr (std::is_same_v<T, TyStructDecl>) {
                 indent(out, level);
+                out << "TyStructDecl " << node.name.as_str();
+                cstc::ast::detail::print_generic_params(out, node.generic_params);
                 if (node.is_zst) {
-                    out << "TyStructDecl " << node.name.as_str();
-                    cstc::ast::detail::print_generic_params(out, node.generic_params);
-                    out << " ;\n";
+                    if (node.where_clause.empty()) {
+                        out << " ;\n";
+                    } else {
+                        out << "\n";
+                        cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
+                        indent(out, level);
+                        out << ";\n";
+                    }
                 } else {
-                    out << "TyStructDecl " << node.name.as_str();
-                    cstc::ast::detail::print_generic_params(out, node.generic_params);
                     out << "\n";
                     cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
                     for (const TyFieldDecl& field : node.fields) {

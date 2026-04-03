@@ -79,6 +79,36 @@ static void test_print_zst_struct() {
     assert(contains(out, "TyStructDecl Marker ;"));
 }
 
+static void test_print_generic_zst_struct_where_clause() {
+    TyStructDecl decl;
+    decl.name = Symbol::intern("Marker");
+    decl.is_zst = true;
+    decl.generic_params = {
+        GenericParam{Symbol::intern("T"), {}}
+    };
+    decl.where_clause = {
+        GenericConstraint{
+                          cstc::ast::make_expr(
+                {},
+                          cstc::ast::PathExpr{
+                    .head = Symbol::intern("ready"),
+                    .tail = std::nullopt,
+                    .display_head = kInvalidSymbol,
+                    .generic_args = {},
+                }),
+                          {},
+                          },
+    };
+
+    TyProgram prog;
+    prog.items.push_back(std::move(decl));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyStructDecl Marker<T>"));
+    assert(contains(out, "Where"));
+    assert(contains(out, "ready"));
+}
+
 static void test_print_enum() {
     TyEnumDecl decl;
     decl.name = Symbol::intern("Color");
@@ -619,6 +649,7 @@ int main() {
     test_print_struct();
     test_print_generic_struct();
     test_print_zst_struct();
+    test_print_generic_zst_struct_where_clause();
     test_print_enum();
     test_print_generic_enum();
     test_print_enum_with_discriminant();
