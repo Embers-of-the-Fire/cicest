@@ -782,7 +782,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
 }
 
 [[nodiscard]] static std::optional<LowerError> find_param_reference_in_expr(
-    const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes);
+    const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes,
+    bool allow_call_position_path = false);
 
 [[nodiscard]] static std::optional<LowerError> find_param_reference_in_block(
     const ast::BlockPtr& block, const LocalNameSet& param_names,
@@ -826,7 +827,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
 }
 
 [[nodiscard]] static std::optional<LowerError> find_param_reference_in_expr(
-    const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes) {
+    const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes,
+    const bool allow_call_position_path) {
     if (expr == nullptr)
         return std::nullopt;
 
@@ -837,8 +839,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                 std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::ContinueExpr>) {
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, ast::PathExpr>) {
-                if (!node.tail.has_value() && param_names.contains(node.head)
-                    && !has_local_binding(scopes, node.head)) {
+                if (!allow_call_position_path && !node.tail.has_value()
+                    && param_names.contains(node.head) && !has_local_binding(scopes, node.head)) {
                     return LowerError{
                         expr->span,
                         "function where clauses cannot reference parameter '"
@@ -854,7 +856,7 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                 }
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, ast::GenericAppExpr>) {
-                return find_param_reference_in_expr(node.callee, param_names, scopes);
+                return find_param_reference_in_expr(node.callee, param_names, scopes, true);
             } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
                 return find_param_reference_in_expr(node.rhs, param_names, scopes);
             } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
@@ -865,7 +867,7 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
             } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
                 return find_param_reference_in_expr(node.base, param_names, scopes);
             } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
-                auto callee = find_param_reference_in_expr(node.callee, param_names, scopes);
+                auto callee = find_param_reference_in_expr(node.callee, param_names, scopes, true);
                 if (callee.has_value())
                     return callee;
                 for (const ast::ExprPtr& arg : node.args) {

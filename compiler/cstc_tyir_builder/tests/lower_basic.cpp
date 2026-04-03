@@ -262,6 +262,32 @@ static void test_fn_where_clause_lowers_generic_type_args() {
     assert(call.generic_args[0].generic_args.empty());
 }
 
+static void test_fn_where_clause_allows_call_callee_name_collision_with_parameter() {
+    const auto prog = must_lower(
+        "fn helper() -> bool { true }"
+        "fn id<T>(helper: T) -> T where helper() { helper }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.lowered_where_clause.size() == 1);
+    const auto& call = std::get<TyCall>(fn.lowered_where_clause[0].expr->node);
+    assert(call.fn_name == Symbol::intern("helper"));
+    assert(call.args.empty());
+}
+
+static void test_fn_where_clause_allows_generic_call_callee_name_collision_with_parameter() {
+    const auto prog = must_lower(
+        "fn helper<T>() -> bool { true }"
+        "fn id<T>(helper: T) -> T where helper::<T>() { helper }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.lowered_where_clause.size() == 1);
+    const auto& call = std::get<TyCall>(fn.lowered_where_clause[0].expr->node);
+    assert(call.fn_name == Symbol::intern("helper"));
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0].name == Symbol::intern("T"));
+    assert(call.generic_args[0].generic_args.empty());
+}
+
 static void test_generic_type_arguments_lower_in_signatures() {
     const auto prog = must_lower(
         "struct Box<T> { value: T }"
@@ -442,6 +468,8 @@ int main() {
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();
     test_fn_where_clause_lowers_generic_type_args();
+    test_fn_where_clause_allows_call_callee_name_collision_with_parameter();
+    test_fn_where_clause_allows_generic_call_callee_name_collision_with_parameter();
     test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();
     test_runtime_return_type_mismatch_rejected();
