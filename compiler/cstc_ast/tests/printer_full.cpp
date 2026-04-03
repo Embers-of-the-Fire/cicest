@@ -45,7 +45,11 @@ cstc::ast::ExprPtr str_lit(std::string_view text) {
 
 cstc::ast::ExprPtr path(std::string_view name) {
     return cstc::ast::make_expr(
-        {}, cstc::ast::PathExpr{.head = cstc::symbol::Symbol::intern(name), .tail = std::nullopt});
+        {}, cstc::ast::PathExpr{
+                .head = cstc::symbol::Symbol::intern(name),
+                .tail = std::nullopt,
+                .generic_args = {},
+            });
 }
 
 cstc::ast::ExprPtr path2(std::string_view head, std::string_view tail) {
@@ -53,6 +57,7 @@ cstc::ast::ExprPtr path2(std::string_view head, std::string_view tail) {
         {}, cstc::ast::PathExpr{
                 .head = cstc::symbol::Symbol::intern(head),
                 .tail = cstc::symbol::Symbol::intern(tail),
+                .generic_args = {},
             });
 }
 
@@ -110,27 +115,44 @@ void test_struct_with_various_field_types() {
     s.name = cstc::symbol::Symbol::intern("Foo");
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("a"),
-        .type = {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
+        .type =
+            {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr, false, {}},
         .span = {}
     });
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("b"),
-        .type = {cstc::ast::TypeKind::Str, cstc::symbol::Symbol::intern("str"), {}, nullptr},
+        .type =
+            {cstc::ast::TypeKind::Str, cstc::symbol::Symbol::intern("str"), {}, nullptr, false, {}},
         .span = {}
     });
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("c"),
-        .type = {cstc::ast::TypeKind::Bool, cstc::symbol::Symbol::intern("bool"), {}, nullptr},
+        .type =
+            {cstc::ast::TypeKind::Bool,
+                   cstc::symbol::Symbol::intern("bool"),
+                   {},
+                   nullptr, false,
+                   {}},
         .span = {}
     });
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("d"),
-        .type = {cstc::ast::TypeKind::Unit, cstc::symbol::Symbol::intern("Unit"), {}, nullptr},
+        .type =
+            {cstc::ast::TypeKind::Unit,
+                   cstc::symbol::Symbol::intern("Unit"),
+                   {},
+                   nullptr, false,
+                   {}},
         .span = {}
     });
     s.fields.push_back({
         .name = cstc::symbol::Symbol::intern("e"),
-        .type = {cstc::ast::TypeKind::Named, cstc::symbol::Symbol::intern("Bar"), {}, nullptr},
+        .type =
+            {cstc::ast::TypeKind::Named,
+                   cstc::symbol::Symbol::intern("Bar"),
+                   {},
+                   nullptr, false,
+                   {}},
         .span = {}
     });
     prog.items.push_back(std::move(s));
@@ -159,7 +181,9 @@ void test_struct_with_ref_field_type() {
                     .symbol = cstc::symbol::Symbol::intern("str"),
                     .display_name = cstc::symbol::kInvalidSymbol,
                     .pointee = nullptr,
+                    .generic_args = {},
                 }),
+                               .generic_args = {},
                                },
         .span = {},
     });
@@ -272,16 +296,18 @@ void test_fn_decl_with_params_and_return() {
     fn.name = cstc::symbol::Symbol::intern("add");
     fn.params.push_back({
         .name = cstc::symbol::Symbol::intern("a"),
-        .type = {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
+        .type =
+            {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr, false, {}},
         .span = {},
     });
     fn.params.push_back({
         .name = cstc::symbol::Symbol::intern("b"),
-        .type = {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
+        .type =
+            {cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr, false, {}},
         .span = {},
     });
     fn.return_type = cstc::ast::TypeRef{
-        cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr};
+        cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr, false, {}};
     fn.body = empty_block();
     prog.items.push_back(std::move(fn));
     const std::string out = cstc::ast::format_program(prog);
@@ -296,7 +322,8 @@ void test_extern_fn_attributes_rendered() {
     fn.name = cstc::symbol::Symbol::intern("puts");
     fn.params.push_back({
         .name = cstc::symbol::Symbol::intern("s"),
-        .type = {cstc::ast::TypeKind::Str, cstc::symbol::Symbol::intern("str"), {}, nullptr},
+        .type =
+            {cstc::ast::TypeKind::Str, cstc::symbol::Symbol::intern("str"), {}, nullptr, false, {}},
         .span = {},
     });
     fn.attributes.push_back({
@@ -325,6 +352,7 @@ void test_runtime_fn_rendered() {
                    cstc::symbol::Symbol::intern("Job"),
                    {},
                    nullptr, true,
+                   {},
                    },
         .span = {},
     });
@@ -338,8 +366,10 @@ void test_runtime_fn_rendered() {
             {},
             nullptr,
             true,
+            {},
         }),
         false,
+        {},
     };
     fn.body = empty_block();
     prog.items.push_back(std::move(fn));
@@ -364,6 +394,7 @@ void test_runtime_extern_fn_rendered() {
                    cstc::symbol::Symbol::intern("str"),
                    {},
                    nullptr, true,
+                   {},
                    },
         .span = {},
     });
@@ -612,7 +643,11 @@ void test_for_rendered() {
         .name = cstc::symbol::Symbol::intern("i"),
         .type_annotation =
             cstc::ast::TypeRef{
-                               cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
+                               cstc::ast::TypeKind::Num,
+                               cstc::symbol::Symbol::intern("num"),
+                               {},
+                               nullptr, false,
+                               {}},
         .initializer = num("0"),
         .span = {},
     };
@@ -669,7 +704,11 @@ void test_let_stmt_rendered() {
             .name = cstc::symbol::Symbol::intern("x"),
             .type_annotation =
                 cstc::ast::TypeRef{
-                                   cstc::ast::TypeKind::Num, cstc::symbol::Symbol::intern("num"), {}, nullptr},
+                                   cstc::ast::TypeKind::Num,
+                                   cstc::symbol::Symbol::intern("num"),
+                                   {},
+                                   nullptr, false,
+                                   {}},
             .initializer = num("5"),
             .span = {},
     });

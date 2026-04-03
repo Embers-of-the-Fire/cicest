@@ -165,6 +165,32 @@ void test_error_fn_missing_body() {
     expect_error("fn f()", "expected `{` to start block");
 }
 
+void test_error_duplicate_generic_parameter() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn dup<T, T>() { }", "duplicate generic parameter");
+}
+
+void test_error_missing_generic_parameter_name() {
+    cstc::symbol::SymbolSession session;
+    expect_error("struct Box<>;", "expected generic parameter name");
+}
+
+void test_error_missing_generic_argument_close() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f(value: Box<num) { }", "expected `>` to close generic argument list");
+}
+
+void test_error_where_clause_missing_constraint() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f<T>() where { }", "expected constraint expression after `where`");
+}
+
+void test_error_where_clause_trailing_comma() {
+    cstc::symbol::SymbolSession session;
+    expect_error(
+        "struct Box<T> where ready, { value: T }", "expected constraint expression after `,`");
+}
+
 void test_error_import_missing_brace() {
     cstc::symbol::SymbolSession session;
     expect_error("import foo from \"mod.cst\";", "expected `{` after `import`");
@@ -279,6 +305,11 @@ int main() {
     test_error_fn_duplicate_param();
     test_error_duplicate_runtime_type_qualifier();
     test_error_fn_missing_body();
+    test_error_duplicate_generic_parameter();
+    test_error_missing_generic_parameter_name();
+    test_error_missing_generic_argument_close();
+    test_error_where_clause_missing_constraint();
+    test_error_where_clause_trailing_comma();
     test_error_import_missing_brace();
     test_error_import_star_not_supported();
     test_error_import_missing_from();

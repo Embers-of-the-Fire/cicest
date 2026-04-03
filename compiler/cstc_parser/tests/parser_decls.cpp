@@ -302,6 +302,52 @@ void test_fn_never_return_type() {
     assert(fn.return_type->kind == cstc::ast::TypeKind::Never);
 }
 
+void test_struct_generic_params_and_where_clause() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("struct Box<T> where enabled { value: T }");
+    const auto& decl = std::get<cstc::ast::StructDecl>(prog.items[0]);
+    assert(decl.generic_params.size() == 1);
+    assert(decl.generic_params[0].name.as_str() == "T");
+    assert(decl.where_clause.size() == 1);
+    assert(std::holds_alternative<cstc::ast::PathExpr>(decl.where_clause[0].expr->node));
+}
+
+void test_enum_generic_params() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("enum Result<T, E> { Ok, Err }");
+    const auto& decl = std::get<cstc::ast::EnumDecl>(prog.items[0]);
+    assert(decl.generic_params.size() == 2);
+    assert(decl.generic_params[0].name.as_str() == "T");
+    assert(decl.generic_params[1].name.as_str() == "E");
+}
+
+void test_fn_generic_params_and_where_clause() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse(
+        "fn pick<T>(value: Option<T>) -> Option<T> where enabled, ready == true { value }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.generic_params.size() == 1);
+    assert(fn.generic_params[0].name.as_str() == "T");
+    assert(fn.params[0].type.generic_args.size() == 1);
+    assert(fn.params[0].type.generic_args[0].symbol.as_str() == "T");
+    assert(fn.return_type.has_value());
+    assert(fn.return_type->generic_args.size() == 1);
+    assert(fn.where_clause.size() == 2);
+    assert(std::holds_alternative<cstc::ast::PathExpr>(fn.where_clause[0].expr->node));
+    assert(std::holds_alternative<cstc::ast::BinaryExpr>(fn.where_clause[1].expr->node));
+}
+
+void test_nested_generic_type_arguments() {
+    cstc::symbol::SymbolSession session;
+    const auto prog =
+        must_parse("fn wrap(value: Box<Result<num, str>>) -> Box<Result<num, str>> { value }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.params[0].type.generic_args.size() == 1);
+    const auto& result_type = fn.params[0].type.generic_args[0];
+    assert(result_type.symbol.as_str() == "Result");
+    assert(result_type.generic_args.size() == 2);
+}
+
 // ---------------------------------------------------------------------------
 // Statements in blocks
 // ---------------------------------------------------------------------------
@@ -423,6 +469,10 @@ int main() {
     test_import_decl();
     test_pub_import_decl();
     test_fn_never_return_type();
+    test_struct_generic_params_and_where_clause();
+    test_enum_generic_params();
+    test_fn_generic_params_and_where_clause();
+    test_nested_generic_type_arguments();
     test_let_no_type_annotation();
     test_let_ref_type_annotation();
     test_let_with_type_annotation();

@@ -13,6 +13,10 @@ int main() {
     cstc::ast::StructDecl user;
     user.is_public = true;
     user.name = cstc::symbol::Symbol::intern("User");
+    user.generic_params.push_back(
+        cstc::ast::GenericParam{
+            .name = cstc::symbol::Symbol::intern("T"), .span = {.start = 0, .end = 0}
+    });
     user.fields.push_back(
         cstc::ast::FieldDecl{
             .name = cstc::symbol::Symbol::intern("id"),
@@ -22,6 +26,7 @@ int main() {
                                    .symbol = cstc::symbol::Symbol::intern("num"),
                                    .display_name = cstc::symbol::kInvalidSymbol,
                                    .pointee = nullptr,
+                                   .generic_args = {},
                                    },
             .span = {.start = 0, .end = 0},
     });
@@ -39,7 +44,7 @@ int main() {
 
     const std::string rendered = cstc::ast::format_program(program);
     assert(rendered.find("Program") != std::string::npos);
-    assert(rendered.find("Pub StructDecl User") != std::string::npos);
+    assert(rendered.find("Pub StructDecl User<T>") != std::string::npos);
     assert(rendered.find("id: num") != std::string::npos);
     assert(rendered.find("ImportDecl from \"@std/prelude.cst\"") != std::string::npos);
     assert(rendered.find("println as log") != std::string::npos);

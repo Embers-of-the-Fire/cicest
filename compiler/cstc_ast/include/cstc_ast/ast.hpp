@@ -57,6 +57,24 @@ struct TypeRef {
     TypeRefPtr pointee;
     /// True when this type is prefixed with the `runtime` qualifier.
     bool is_runtime = false;
+    /// Explicit generic arguments when `kind == TypeKind::Named`.
+    std::vector<TypeRef> generic_args;
+};
+
+/// Generic parameter declared on an item.
+struct GenericParam {
+    /// Parameter identifier.
+    cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Source location for the parameter.
+    cstc::span::SourceSpan span;
+};
+
+/// Const-evaluable constraint attached to a generic declaration.
+struct GenericConstraint {
+    /// Constraint expression.
+    ExprPtr expr;
+    /// Source location for the full constraint.
+    cstc::span::SourceSpan span;
 };
 
 /// Declaration attribute attached to an item.
@@ -95,6 +113,10 @@ struct StructDecl {
     cstc::span::SourceSpan span;
     /// Attributes attached to the declaration.
     std::vector<Attribute> attributes;
+    /// Declared generic parameter list.
+    std::vector<GenericParam> generic_params;
+    /// Optional `where` constraints.
+    std::vector<GenericConstraint> where_clause;
 };
 
 /// Fieldless enum variant declaration.
@@ -121,6 +143,10 @@ struct EnumDecl {
     cstc::span::SourceSpan span;
     /// Attributes attached to the declaration.
     std::vector<Attribute> attributes;
+    /// Declared generic parameter list.
+    std::vector<GenericParam> generic_params;
+    /// Optional `where` constraints.
+    std::vector<GenericConstraint> where_clause;
 };
 
 /// Function parameter declaration.
@@ -198,6 +224,8 @@ struct PathExpr {
     std::optional<cstc::symbol::Symbol> tail;
     /// Human-facing head segment used in diagnostics.
     cstc::symbol::Symbol display_head = cstc::symbol::kInvalidSymbol;
+    /// Explicit generic arguments applied to the path.
+    std::vector<TypeRef> generic_args;
 };
 
 /// Single field initializer inside a struct construction.
@@ -216,8 +244,18 @@ struct StructInitExpr {
     cstc::symbol::Symbol type_name = cstc::symbol::kInvalidSymbol;
     /// Human-facing type name used in diagnostics.
     cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
+    /// Explicit generic arguments applied to the constructed type.
+    std::vector<TypeRef> generic_args;
     /// Field initializer list.
     std::vector<StructInitField> fields;
+};
+
+/// Explicit generic application expression (`expr::<...>`).
+struct GenericAppExpr {
+    /// Expression receiving explicit type arguments.
+    ExprPtr callee;
+    /// Explicit generic arguments.
+    std::vector<TypeRef> args;
 };
 
 /// Unary operator kind.
@@ -363,8 +401,9 @@ struct ReturnExpr {
 struct Expr {
     /// Variant payload for expression nodes.
     using Node = std::variant<
-        LiteralExpr, PathExpr, StructInitExpr, UnaryExpr, BinaryExpr, FieldAccessExpr, CallExpr,
-        BlockPtr, IfExpr, LoopExpr, WhileExpr, ForExpr, BreakExpr, ContinueExpr, ReturnExpr>;
+        LiteralExpr, PathExpr, StructInitExpr, GenericAppExpr, UnaryExpr, BinaryExpr,
+        FieldAccessExpr, CallExpr, BlockPtr, IfExpr, LoopExpr, WhileExpr, ForExpr, BreakExpr,
+        ContinueExpr, ReturnExpr>;
 
     /// Concrete expression node payload.
     Node node;
@@ -398,6 +437,10 @@ struct FnDecl {
     /// True when the declaration is prefixed with `runtime` and therefore
     /// returns a runtime-qualified value.
     bool is_runtime = false;
+    /// Declared generic parameter list.
+    std::vector<GenericParam> generic_params;
+    /// Optional `where` constraints.
+    std::vector<GenericConstraint> where_clause;
 };
 
 /// Extern function declaration (no body).

@@ -19,6 +19,7 @@ namespace cstc::ast {
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 namespace cstc::ast {
 
@@ -112,9 +113,60 @@ inline void print_attributes(
         }
     }
 
+    if (!type.generic_args.empty()) {
+        rendered += "<";
+        for (std::size_t index = 0; index < type.generic_args.size(); ++index) {
+            if (index > 0)
+                rendered += ", ";
+            rendered += type_name(type.generic_args[index]);
+        }
+        rendered += ">";
+    }
+
     if (type.is_runtime)
         return "runtime " + rendered;
     return rendered;
+}
+
+inline void
+    print_generic_params(std::ostringstream& output, const std::vector<GenericParam>& params) {
+    if (params.empty())
+        return;
+
+    output << "<";
+    for (std::size_t index = 0; index < params.size(); ++index) {
+        if (index > 0)
+            output << ", ";
+        output << params[index].name.as_str();
+    }
+    output << ">";
+}
+
+inline void print_generic_args(std::ostringstream& output, const std::vector<TypeRef>& args) {
+    if (args.empty())
+        return;
+
+    output << "::<";
+    for (std::size_t index = 0; index < args.size(); ++index) {
+        if (index > 0)
+            output << ", ";
+        output << type_name(args[index]);
+    }
+    output << ">";
+}
+
+inline void print_expr(std::ostringstream& output, const ExprPtr& expr, std::size_t level);
+
+inline void print_where_clause(
+    std::ostringstream& output, const std::vector<GenericConstraint>& constraints,
+    std::size_t level) {
+    if (constraints.empty())
+        return;
+
+    indent(output, level);
+    output << "Where\n";
+    for (const GenericConstraint& constraint : constraints)
+        print_expr(output, constraint.expr, level + 1);
 }
 
 [[nodiscard]] inline std::string_view
@@ -153,8 +205,6 @@ inline void print_attributes(
     }
     return "?";
 }
-
-inline void print_expr(std::ostringstream& output, const ExprPtr& expr, std::size_t level);
 
 inline void print_block(std::ostringstream& output, const BlockPtr& block, std::size_t level) {
     indent(output, level);
@@ -215,18 +265,47 @@ inline void print_expr(std::ostringstream& output, const ExprPtr& expr, std::siz
                 if (node.tail.has_value()) {
                     output << "Path(" << head << "::" << node.tail->as_str() << ")\n";
                 } else {
-                    output << "Path(" << head << ")\n";
+                    output << "Path(" << head;
+                    if (!node.generic_args.empty()) {
+                        output << "<";
+                        for (std::size_t index = 0; index < node.generic_args.size(); ++index) {
+                            if (index > 0)
+                                output << ", ";
+                            output << type_name(node.generic_args[index]);
+                        }
+                        output << ">";
+                    }
+                    output << ")\n";
                 }
             } else if constexpr (std::is_same_v<ExprType, StructInitExpr>) {
                 indent(output, level);
                 output << "StructInit("
                        << (node.display_name.is_valid() ? node.display_name.as_str()
-                                                        : node.type_name.as_str())
-                       << ")\n";
+                                                        : node.type_name.as_str());
+                if (!node.generic_args.empty()) {
+                    output << "<";
+                    for (std::size_t index = 0; index < node.generic_args.size(); ++index) {
+                        if (index > 0)
+                            output << ", ";
+                        output << type_name(node.generic_args[index]);
+                    }
+                    output << ">";
+                }
+                output << ")\n";
                 for (const StructInitField& field : node.fields) {
                     indent(output, level + 1);
                     output << field.name.as_str() << ":\n";
                     print_expr(output, field.value, level + 2);
+                }
+            } else if constexpr (std::is_same_v<ExprType, GenericAppExpr>) {
+                indent(output, level);
+                output << "GenericApp\n";
+                indent(output, level + 1);
+                output << "Callee\n";
+                print_expr(output, node.callee, level + 2);
+                for (const TypeRef& arg : node.args) {
+                    indent(output, level + 1);
+                    output << "TypeArg(" << type_name(arg) << ")\n";
                 }
             } else if constexpr (std::is_same_v<ExprType, UnaryExpr>) {
                 indent(output, level);
@@ -350,20 +429,27 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                 if (node.is_public)
                     output << "Pub ";
                 if (node.is_zst) {
-                    output << "StructDecl " << render_name(node.display_name, node.name) << " ;\n";
+                    output << "StructDecl " << render_name(node.display_name, node.name);
+                    print_generic_params(output, node.generic_params);
+                    output << " ;\n";
                 } else {
-                    output << "StructDecl " << render_name(node.display_name, node.name) << "\n";
+                    output << "StructDecl " << render_name(node.display_name, node.name);
+                    print_generic_params(output, node.generic_params);
+                    output << "\n";
                     for (const FieldDecl& field : node.fields) {
                         indent(output, level + 1);
                         output << field.name.as_str() << ": " << type_name(field.type) << "\n";
                     }
                 }
+                print_where_clause(output, node.where_clause, level + 1);
             } else if constexpr (std::is_same_v<ItemType, EnumDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
                 if (node.is_public)
                     output << "Pub ";
-                output << "EnumDecl " << render_name(node.display_name, node.name) << "\n";
+                output << "EnumDecl " << render_name(node.display_name, node.name);
+                print_generic_params(output, node.generic_params);
+                output << "\n";
                 for (const EnumVariant& variant : node.variants) {
                     indent(output, level + 1);
                     output << variant.name.as_str();
@@ -371,6 +457,7 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                         output << " = " << variant.discriminant->as_str();
                     output << "\n";
                 }
+                print_where_clause(output, node.where_clause, level + 1);
             } else if constexpr (std::is_same_v<ItemType, FnDecl>) {
                 print_attributes(output, node.attributes, level);
                 indent(output, level);
@@ -378,7 +465,9 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                     output << "Pub ";
                 if (node.is_runtime)
                     output << "Runtime ";
-                output << "FnDecl " << render_name(node.display_name, node.name) << "(";
+                output << "FnDecl " << render_name(node.display_name, node.name);
+                print_generic_params(output, node.generic_params);
+                output << "(";
                 for (std::size_t index = 0; index < node.params.size(); ++index) {
                     if (index > 0)
                         output << ", ";
@@ -389,6 +478,7 @@ inline void print_item(std::ostringstream& output, const Item& item, std::size_t
                 if (node.return_type.has_value())
                     output << " -> " << type_name(*node.return_type);
                 output << "\n";
+                print_where_clause(output, node.where_clause, level + 1);
                 print_block(output, node.body, level + 1);
             } else if constexpr (std::is_same_v<ItemType, ExternFnDecl>) {
                 print_attributes(output, node.attributes, level);

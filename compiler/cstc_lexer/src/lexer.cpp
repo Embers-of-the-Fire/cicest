@@ -68,6 +68,8 @@ namespace detail {
         return TokenKind::KwFrom;
     if (text == "as")
         return TokenKind::KwAs;
+    if (text == "where")
+        return TokenKind::KwWhere;
 
     return TokenKind::Identifier;
 }

@@ -144,8 +144,54 @@ private:
     [[nodiscard]] bool is_postfixable(const ast::ExprPtr& expr) const {
         return std::holds_alternative<ast::PathExpr>(expr->node)
             || std::holds_alternative<ast::StructInitExpr>(expr->node)
+            || std::holds_alternative<ast::GenericAppExpr>(expr->node)
             || std::holds_alternative<ast::FieldAccessExpr>(expr->node)
             || std::holds_alternative<ast::CallExpr>(expr->node);
+    }
+
+    [[nodiscard]] bool token_can_start_type(TokenKind kind) const {
+        return kind == TokenKind::KwRuntime || kind == TokenKind::Amp || kind == TokenKind::KwUnit
+            || kind == TokenKind::KwNum || kind == TokenKind::KwStr || kind == TokenKind::KwBool
+            || kind == TokenKind::Bang || kind == TokenKind::Identifier;
+    }
+
+    [[nodiscard]] bool looks_like_turbofish() const {
+        return check(TokenKind::ColonColon) && peek(1).kind == TokenKind::Lt;
+    }
+
+    [[nodiscard]] bool looks_like_generic_struct_initializer() const {
+        if (!check(TokenKind::Lt))
+            return false;
+
+        std::size_t index = cursor_;
+        std::size_t depth = 0;
+
+        while (index < tokens_.size()) {
+            const TokenKind kind = tokens_[index].kind;
+            if (kind == TokenKind::Lt) {
+                ++depth;
+                ++index;
+                continue;
+            }
+            if (kind == TokenKind::Gt) {
+                if (depth == 0)
+                    return false;
+                --depth;
+                ++index;
+                if (depth == 0)
+                    return index < tokens_.size() && tokens_[index].kind == TokenKind::LBrace;
+                continue;
+            }
+            if (kind == TokenKind::Comma) {
+                ++index;
+                continue;
+            }
+            if (!token_can_start_type(kind))
+                return false;
+            ++index;
+        }
+
+        return false;
     }
 
     [[nodiscard]] bool is_semicolon_optional_stmt_expr(const ast::ExprPtr& expr) const {
@@ -266,6 +312,104 @@ private:
             "`import`)"));
     }
 
+    [[nodiscard]] std::expected<std::vector<ast::GenericParam>, ParseError>
+        parse_generic_param_list() {
+        auto open = consume(TokenKind::Lt, "expected `<` to start generic parameter list");
+        if (!open.has_value())
+            return std::unexpected(open.error());
+
+        std::vector<ast::GenericParam> params;
+        std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> seen_params;
+
+        while (true) {
+            auto name_token = consume_identifier("expected generic parameter name");
+            if (!name_token.has_value())
+                return std::unexpected(name_token.error());
+
+            if (!seen_params.insert(name_token->symbol).second) {
+                const std::string param_name_text = std::string(token_text(*name_token));
+                return std::unexpected(make_error_token(
+                    *name_token, "duplicate generic parameter `" + param_name_text + "`"));
+            }
+
+            params.push_back(
+                ast::GenericParam{.name = name_token->symbol, .span = name_token->span});
+
+            if (match(TokenKind::Comma)) {
+                if (check(TokenKind::Gt))
+                    break;
+                continue;
+            }
+            break;
+        }
+
+        auto close = consume(TokenKind::Gt, "expected `>` to close generic parameter list");
+        if (!close.has_value())
+            return std::unexpected(close.error());
+
+        return params;
+    }
+
+    [[nodiscard]] std::expected<std::vector<ast::TypeRef>, ParseError>
+        parse_generic_argument_list() {
+        auto open = consume(TokenKind::Lt, "expected `<` to start generic argument list");
+        if (!open.has_value())
+            return std::unexpected(open.error());
+
+        std::vector<ast::TypeRef> args;
+
+        while (true) {
+            auto arg = parse_type();
+            if (!arg.has_value())
+                return std::unexpected(arg.error());
+            args.push_back(std::move(*arg));
+
+            if (match(TokenKind::Comma)) {
+                if (check(TokenKind::Gt))
+                    break;
+                continue;
+            }
+            break;
+        }
+
+        auto close = consume(TokenKind::Gt, "expected `>` to close generic argument list");
+        if (!close.has_value())
+            return std::unexpected(close.error());
+
+        return args;
+    }
+
+    [[nodiscard]] std::expected<std::vector<ast::GenericConstraint>, ParseError>
+        parse_where_clause() {
+        std::vector<ast::GenericConstraint> constraints;
+        if (!match(TokenKind::KwWhere))
+            return constraints;
+
+        while (true) {
+            if (check(TokenKind::LBrace) || check(TokenKind::Semicolon)) {
+                return std::unexpected(
+                    make_error_here("expected constraint expression after `where`"));
+            }
+
+            auto expr = parse_condition_expression();
+            if (!expr.has_value())
+                return std::unexpected(expr.error());
+
+            constraints.push_back(ast::GenericConstraint{.expr = *expr, .span = (*expr)->span});
+
+            if (match(TokenKind::Comma)) {
+                if (check(TokenKind::LBrace) || check(TokenKind::Semicolon)) {
+                    return std::unexpected(
+                        make_error_here("expected constraint expression after `,`"));
+                }
+                continue;
+            }
+            break;
+        }
+
+        return constraints;
+    }
+
     [[nodiscard]] std::expected<ast::StructDecl, ParseError> parse_struct_decl(
         const Token& lead_token, std::vector<ast::Attribute> attributes, bool is_public) {
         auto name_token = consume_identifier("expected struct name");
@@ -276,6 +420,18 @@ private:
         decl.is_public = is_public;
         decl.name = name_token->symbol;
         decl.attributes = std::move(attributes);
+
+        if (check(TokenKind::Lt)) {
+            auto generic_params = parse_generic_param_list();
+            if (!generic_params.has_value())
+                return std::unexpected(generic_params.error());
+            decl.generic_params = std::move(*generic_params);
+        }
+
+        auto where_clause = parse_where_clause();
+        if (!where_clause.has_value())
+            return std::unexpected(where_clause.error());
+        decl.where_clause = std::move(*where_clause);
 
         if (match(TokenKind::Semicolon)) {
             decl.is_zst = true;
@@ -339,14 +495,26 @@ private:
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
 
-        auto open_brace = consume(TokenKind::LBrace, "expected `{` after enum name");
-        if (!open_brace.has_value())
-            return std::unexpected(open_brace.error());
-
         ast::EnumDecl decl;
         decl.is_public = is_public;
         decl.name = name_token->symbol;
         decl.attributes = std::move(attributes);
+
+        if (check(TokenKind::Lt)) {
+            auto generic_params = parse_generic_param_list();
+            if (!generic_params.has_value())
+                return std::unexpected(generic_params.error());
+            decl.generic_params = std::move(*generic_params);
+        }
+
+        auto where_clause = parse_where_clause();
+        if (!where_clause.has_value())
+            return std::unexpected(where_clause.error());
+        decl.where_clause = std::move(*where_clause);
+
+        auto open_brace = consume(TokenKind::LBrace, "expected `{` after enum name");
+        if (!open_brace.has_value())
+            return std::unexpected(open_brace.error());
 
         std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> seen_variants;
 
@@ -400,6 +568,14 @@ private:
         auto name_token = consume_identifier("expected function name");
         if (!name_token.has_value())
             return std::unexpected(name_token.error());
+
+        std::vector<ast::GenericParam> generic_params;
+        if (check(TokenKind::Lt)) {
+            auto parsed_generic_params = parse_generic_param_list();
+            if (!parsed_generic_params.has_value())
+                return std::unexpected(parsed_generic_params.error());
+            generic_params = std::move(*parsed_generic_params);
+        }
 
         auto open_paren = consume(TokenKind::LParen, "expected `(` after function name");
         if (!open_paren.has_value())
@@ -456,6 +632,10 @@ private:
             return_type = std::move(*parsed_return_type);
         }
 
+        auto where_clause = parse_where_clause();
+        if (!where_clause.has_value())
+            return std::unexpected(where_clause.error());
+
         auto body = parse_block_expr();
         if (!body.has_value())
             return std::unexpected(body.error());
@@ -463,8 +643,10 @@ private:
         ast::FnDecl decl;
         decl.is_public = is_public;
         decl.name = name_token->symbol;
+        decl.generic_params = std::move(generic_params);
         decl.params = std::move(params);
         decl.return_type = std::move(return_type);
+        decl.where_clause = std::move(*where_clause);
         decl.body = *body;
         decl.attributes = std::move(attributes);
         decl.is_runtime = is_runtime;
@@ -749,6 +931,7 @@ private:
                 .symbol = cstc::symbol::kInvalidSymbol,
                 .display_name = cstc::symbol::kInvalidSymbol,
                 .pointee = std::make_shared<ast::TypeRef>(std::move(*inner)),
+                .generic_args = {},
             };
         }
 
@@ -758,6 +941,7 @@ private:
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
                 .pointee = nullptr,
+                .generic_args = {},
             };
         if (match(TokenKind::KwNum))
             return ast::TypeRef{
@@ -765,6 +949,7 @@ private:
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
                 .pointee = nullptr,
+                .generic_args = {},
             };
         if (match(TokenKind::KwStr))
             return ast::TypeRef{
@@ -772,6 +957,7 @@ private:
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
                 .pointee = nullptr,
+                .generic_args = {},
             };
         if (match(TokenKind::KwBool))
             return ast::TypeRef{
@@ -779,6 +965,7 @@ private:
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
                 .pointee = nullptr,
+                .generic_args = {},
             };
         if (match(TokenKind::Bang))
             return ast::TypeRef{
@@ -786,17 +973,27 @@ private:
                 .symbol = previous().symbol,
                 .display_name = previous().symbol,
                 .pointee = nullptr,
+                .generic_args = {},
             };
 
         auto identifier = consume_identifier("expected type name");
         if (!identifier.has_value())
             return std::unexpected(identifier.error());
 
+        std::vector<ast::TypeRef> generic_args;
+        if (check(TokenKind::Lt)) {
+            auto parsed_generic_args = parse_generic_argument_list();
+            if (!parsed_generic_args.has_value())
+                return std::unexpected(parsed_generic_args.error());
+            generic_args = std::move(*parsed_generic_args);
+        }
+
         return ast::TypeRef{
             .kind = ast::TypeKind::Named,
             .symbol = identifier->symbol,
             .display_name = identifier->symbol,
             .pointee = nullptr,
+            .generic_args = std::move(generic_args),
         };
     }
 
@@ -942,6 +1139,7 @@ private:
                                   .head = identifier->symbol,
                                   .tail = std::nullopt,
                                   .display_head = identifier->symbol,
+                                  .generic_args = {},
                               });
     }
 
@@ -1126,6 +1324,20 @@ private:
         while (true) {
             if (!is_postfixable(*expr))
                 break;
+
+            if (looks_like_turbofish()) {
+                const Token turbofish = advance();
+                static_cast<void>(turbofish);
+                auto generic_args = parse_generic_argument_list();
+                if (!generic_args.has_value())
+                    return std::unexpected(generic_args.error());
+
+                const cstc::span::SourceSpan end_span = previous().span;
+                *expr = ast::make_expr(
+                    merge_spans((*expr)->span, end_span),
+                    ast::GenericAppExpr{.callee = *expr, .args = std::move(*generic_args)});
+                continue;
+            }
 
             if (match(TokenKind::Dot)) {
                 auto field = consume_identifier("expected field name after `.`");
@@ -1411,7 +1623,16 @@ private:
         if (match(TokenKind::Identifier)) {
             const Token identifier = previous();
 
-            if (match(TokenKind::ColonColon)) {
+            std::vector<ast::TypeRef> direct_generic_args;
+            if (check(TokenKind::Lt) && looks_like_generic_struct_initializer()) {
+                auto parsed_generic_args = parse_generic_argument_list();
+                if (!parsed_generic_args.has_value())
+                    return std::unexpected(parsed_generic_args.error());
+                direct_generic_args = std::move(*parsed_generic_args);
+            }
+
+            if (check(TokenKind::ColonColon) && peek(1).kind != TokenKind::Lt) {
+                static_cast<void>(advance());
                 auto variant = consume_identifier("expected enum variant name after `::`");
                 if (!variant.has_value())
                     return std::unexpected(variant.error());
@@ -1422,6 +1643,7 @@ private:
                         .head = identifier.symbol,
                         .tail = variant->symbol,
                         .display_head = identifier.symbol,
+                        .generic_args = std::move(direct_generic_args),
                     });
             }
 
@@ -1433,6 +1655,7 @@ private:
                 ast::StructInitExpr init_expr;
                 init_expr.type_name = identifier.symbol;
                 init_expr.display_name = identifier.symbol;
+                init_expr.generic_args = std::move(direct_generic_args);
 
                 std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> seen_fields;
 
@@ -1487,6 +1710,7 @@ private:
                                      .head = identifier.symbol,
                                      .tail = std::nullopt,
                                      .display_head = identifier.symbol,
+                                     .generic_args = std::move(direct_generic_args),
                                  });
         }
 
