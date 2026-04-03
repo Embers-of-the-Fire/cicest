@@ -75,12 +75,17 @@ struct EvalContext {
     std::size_t remaining_call_depth = kDefaultEvalCallDepth;
 };
 
+using TypeSubstitution = std::unordered_map<Symbol, tyir::Ty, SymbolHash>;
+
 [[nodiscard]] bool values_equal(const ValuePtr& lhs, const ValuePtr& rhs);
 [[nodiscard]] std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
     const tyir::TyExternFnDecl& decl, const std::vector<ValuePtr>& args, EvalContext& ctx,
     SourceSpan span);
 [[nodiscard]] std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     const ProgramView& program, const ValuePtr& value, const tyir::Ty& ty, SourceSpan span);
+[[nodiscard]] ConstraintEvalResult evaluate_constraint(
+    const tyir::TyExprPtr& expr, const TypeSubstitution& substitution, const ProgramView& program,
+    std::vector<EvalStackFrame> stack = {});
 
 } // namespace cstc::tyir_interp::detail
 

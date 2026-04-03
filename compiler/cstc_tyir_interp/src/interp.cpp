@@ -92,6 +92,11 @@ private:
 };
 
 struct EvalState {
+    enum class BlockedReason {
+        UnknownValue,
+        RuntimeOnly,
+    };
+
     enum class Kind {
         Value,
         Return,
@@ -102,6 +107,7 @@ struct EvalState {
 
     Kind kind = Kind::Blocked;
     ValuePtr value;
+    BlockedReason blocked_reason = BlockedReason::UnknownValue;
 
     [[nodiscard]] static EvalState from_value(ValuePtr value) {
         return EvalState{Kind::Value, std::move(value)};
@@ -117,7 +123,11 @@ struct EvalState {
 
     [[nodiscard]] static EvalState continue_() { return EvalState{Kind::Continue, nullptr}; }
 
-    [[nodiscard]] static EvalState blocked() { return EvalState{}; }
+    [[nodiscard]] static EvalState blocked(BlockedReason reason = BlockedReason::UnknownValue) {
+        EvalState state;
+        state.blocked_reason = reason;
+        return state;
+    }
 };
 
 [[nodiscard]] static std::unexpected<EvalError>
@@ -180,8 +190,6 @@ struct EvalState {
     return quoted;
 }
 
-using TypeSubstitution = std::unordered_map<Symbol, tyir::Ty, SymbolHash>;
-
 [[nodiscard]] static tyir::Ty
     apply_substitution(const tyir::Ty& ty, const TypeSubstitution& subst) {
     if (ty.kind == tyir::TyKind::Ref) {
@@ -211,6 +219,161 @@ using TypeSubstitution = std::unordered_map<Symbol, tyir::Ty, SymbolHash>;
     for (const tyir::Ty& arg : ty.generic_args)
         rewritten.generic_args.push_back(apply_substitution(arg, subst));
     return rewritten;
+}
+
+[[nodiscard]] static tyir::TyExprPtr
+    apply_substitution(const tyir::TyExprPtr& expr, const TypeSubstitution& subst);
+
+[[nodiscard]] static tyir::TyBlockPtr
+    apply_substitution(const tyir::TyBlockPtr& block, const TypeSubstitution& subst);
+
+[[nodiscard]] static tyir::TyForInit
+    apply_substitution(const tyir::TyForInit& init, const TypeSubstitution& subst) {
+    tyir::TyForInit rewritten = init;
+    rewritten.ty = apply_substitution(init.ty, subst);
+    rewritten.init = apply_substitution(init.init, subst);
+    return rewritten;
+}
+
+[[nodiscard]] static tyir::TyBlockPtr
+    apply_substitution(const tyir::TyBlockPtr& block, const TypeSubstitution& subst) {
+    if (block == nullptr)
+        return nullptr;
+
+    auto rewritten = std::make_shared<tyir::TyBlock>();
+    rewritten->ty = apply_substitution(block->ty, subst);
+    rewritten->span = block->span;
+    rewritten->stmts.reserve(block->stmts.size());
+    for (const tyir::TyStmt& stmt : block->stmts) {
+        rewritten->stmts.push_back(
+            std::visit(
+                [&](const auto& node) -> tyir::TyStmt {
+                    using Node = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<Node, tyir::TyLetStmt>) {
+                        return tyir::TyLetStmt{
+                            node.discard,
+                            node.name,
+                            apply_substitution(node.ty, subst),
+                            apply_substitution(node.init, subst),
+                            node.span,
+                        };
+                    } else {
+                        return tyir::TyExprStmt{apply_substitution(node.expr, subst), node.span};
+                    }
+                },
+                stmt));
+    }
+    if (block->tail.has_value())
+        rewritten->tail = apply_substitution(*block->tail, subst);
+    return rewritten;
+}
+
+[[nodiscard]] static tyir::TyExprPtr
+    apply_substitution(const tyir::TyExprPtr& expr, const TypeSubstitution& subst) {
+    if (expr == nullptr)
+        return nullptr;
+
+    const tyir::Ty rewritten_ty = apply_substitution(expr->ty, subst);
+    return std::visit(
+        [&](const auto& node) -> tyir::TyExprPtr {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (
+                std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
+                || std::is_same_v<Node, tyir::EnumVariantRef>
+                || std::is_same_v<Node, tyir::TyContinue>) {
+                return tyir::make_ty_expr(expr->span, node, rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                tyir::TyStructInit rewritten = node;
+                rewritten.generic_args.clear();
+                rewritten.generic_args.reserve(node.generic_args.size());
+                for (const tyir::Ty& generic_arg : node.generic_args)
+                    rewritten.generic_args.push_back(apply_substitution(generic_arg, subst));
+                for (tyir::TyStructInitField& field : rewritten.fields)
+                    field.value = apply_substitution(field.value, subst);
+                return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBorrow>) {
+                return tyir::make_ty_expr(
+                    expr->span, tyir::TyBorrow{apply_substitution(node.rhs, subst)}, rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyUnary>) {
+                return tyir::make_ty_expr(
+                    expr->span, tyir::TyUnary{node.op, apply_substitution(node.rhs, subst)},
+                    rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                return tyir::make_ty_expr(
+                    expr->span,
+                    tyir::TyBinary{
+                        node.op, apply_substitution(node.lhs, subst),
+                        apply_substitution(node.rhs, subst)},
+                    rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                return tyir::make_ty_expr(
+                    expr->span,
+                    tyir::TyFieldAccess{
+                        apply_substitution(node.base, subst), node.field, node.use_kind},
+                    rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                tyir::TyCall rewritten = node;
+                rewritten.generic_args.clear();
+                rewritten.generic_args.reserve(node.generic_args.size());
+                for (const tyir::Ty& generic_arg : node.generic_args)
+                    rewritten.generic_args.push_back(apply_substitution(generic_arg, subst));
+                for (tyir::TyExprPtr& arg : rewritten.args)
+                    arg = apply_substitution(arg, subst);
+                return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                return tyir::make_ty_expr(
+                    expr->span, apply_substitution(node, subst), rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                std::optional<tyir::TyExprPtr> else_branch;
+                if (node.else_branch.has_value())
+                    else_branch = apply_substitution(*node.else_branch, subst);
+                return tyir::make_ty_expr(
+                    expr->span,
+                    tyir::TyIf{
+                        apply_substitution(node.condition, subst),
+                        apply_substitution(node.then_block, subst), std::move(else_branch)},
+                    rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                return tyir::make_ty_expr(
+                    expr->span, tyir::TyLoop{apply_substitution(node.body, subst)}, rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                return tyir::make_ty_expr(
+                    expr->span,
+                    tyir::TyWhile{
+                        apply_substitution(node.condition, subst),
+                        apply_substitution(node.body, subst)},
+                    rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                std::optional<tyir::TyForInit> init;
+                if (node.init.has_value())
+                    init = apply_substitution(*node.init, subst);
+                std::optional<tyir::TyExprPtr> condition;
+                if (node.condition.has_value())
+                    condition = apply_substitution(*node.condition, subst);
+                std::optional<tyir::TyExprPtr> step;
+                if (node.step.has_value())
+                    step = apply_substitution(*node.step, subst);
+                return tyir::make_ty_expr(
+                    expr->span,
+                    tyir::TyFor{
+                        std::move(init), std::move(condition), std::move(step),
+                        apply_substitution(node.body, subst)},
+                    rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBreak>) {
+                std::optional<tyir::TyExprPtr> value;
+                if (node.value.has_value())
+                    value = apply_substitution(*node.value, subst);
+                return tyir::make_ty_expr(
+                    expr->span, tyir::TyBreak{std::move(value)}, rewritten_ty);
+            } else {
+                std::optional<tyir::TyExprPtr> value;
+                if (node.value.has_value())
+                    value = apply_substitution(*node.value, subst);
+                return tyir::make_ty_expr(
+                    expr->span, tyir::TyReturn{std::move(value)}, rewritten_ty);
+            }
+        },
+        expr->node);
 }
 
 [[nodiscard]] static std::string format_num(double value) {
@@ -323,6 +486,90 @@ struct NumericOperands {
         return unsupported_value_error(ctx, span, what);
     }
     return NumericOperands{lhs->num_value, rhs->num_value};
+}
+
+[[nodiscard]] static std::string
+    describe_constraint_owner(std::string_view kind, Symbol name, SourceSpan span) {
+    return std::string(kind) + " '" + std::string(name.as_str()) + "' at "
+         + std::to_string(span.start) + ":" + std::to_string(span.end);
+}
+
+[[nodiscard]] static TypeSubstitution build_substitution(
+    const std::vector<cstc::ast::GenericParam>& generic_params,
+    const std::vector<tyir::Ty>& generic_args) {
+    TypeSubstitution substitution;
+    substitution.reserve(generic_params.size());
+    for (std::size_t index = 0; index < generic_params.size() && index < generic_args.size();
+         ++index)
+        substitution.emplace(generic_params[index].name, generic_args[index]);
+    return substitution;
+}
+
+ConstraintEvalResult evaluate_constraint(
+    const tyir::TyExprPtr& expr, const TypeSubstitution& substitution, const ProgramView& program,
+    std::vector<EvalStackFrame> stack) {
+    const tyir::TyExprPtr substituted = apply_substitution(expr, substitution);
+    ConstEnv env;
+    env.push();
+    EvalContext ctx{program, std::move(stack)};
+    auto value = eval_expr(substituted, env, ctx);
+    env.pop();
+    if (!value)
+        return {ConstraintEvalKind::NotConstEvaluable, value.error().message};
+    if (value->kind == EvalState::Kind::Blocked) {
+        return {
+            value->blocked_reason == EvalState::BlockedReason::RuntimeOnly
+                ? ConstraintEvalKind::RuntimeOnly
+                : ConstraintEvalKind::NotConstEvaluable,
+            value->blocked_reason == EvalState::BlockedReason::RuntimeOnly
+                ? "constraint uses runtime-only behavior"
+                : "constraint could not be const-evaluated",
+        };
+    }
+    if (value->kind != EvalState::Kind::Value)
+        return {ConstraintEvalKind::NotConstEvaluable, "constraint did not produce a value"};
+    const Value* actual = deref_value(value->value);
+    if (actual == nullptr || actual->kind != Value::Kind::Bool)
+        return {ConstraintEvalKind::InvalidType, "constraint expression must evaluate to 'bool'"};
+    return {
+        actual->bool_value ? ConstraintEvalKind::Satisfied : ConstraintEvalKind::Unsatisfied, {}};
+}
+
+[[nodiscard]] static std::expected<void, EvalError> enforce_constraints(
+    const ProgramView& program, const std::vector<tyir::TyGenericConstraint>& constraints,
+    const TypeSubstitution& substitution, std::string_view owner_kind, Symbol owner_name,
+    SourceSpan use_span) {
+    for (const tyir::TyGenericConstraint& constraint : constraints) {
+        const ConstraintEvalResult result =
+            evaluate_constraint(constraint.expr, substitution, program, {});
+        switch (result.kind) {
+        case ConstraintEvalKind::Satisfied: break;
+        case ConstraintEvalKind::Unsatisfied:
+            return make_error(
+                EvalContext{program, {}}, use_span,
+                "generic constraint failed for "
+                    + describe_constraint_owner(owner_kind, owner_name, constraint.span));
+        case ConstraintEvalKind::RuntimeOnly:
+            return make_error(
+                EvalContext{program, {}}, use_span,
+                "generic constraint for "
+                    + describe_constraint_owner(owner_kind, owner_name, constraint.span)
+                    + " used runtime-only behavior");
+        case ConstraintEvalKind::NotConstEvaluable:
+            return make_error(
+                EvalContext{program, {}}, use_span,
+                "generic constraint for "
+                    + describe_constraint_owner(owner_kind, owner_name, constraint.span)
+                    + " could not be const-evaluated: " + result.detail);
+        case ConstraintEvalKind::InvalidType:
+            return make_error(
+                EvalContext{program, {}}, use_span,
+                "generic constraint for "
+                    + describe_constraint_owner(owner_kind, owner_name, constraint.span)
+                    + " is invalid: " + result.detail);
+        }
+    }
+    return {};
 }
 
 std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
@@ -440,7 +687,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 [[nodiscard]] static std::expected<EvalState, EvalError>
     eval_expr(const tyir::TyExprPtr& expr, ConstEnv& env, EvalContext& ctx) {
     if (expr->ty.is_runtime)
-        return EvalState::blocked();
+        return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
 
     return std::visit(
         [&](const auto& node) -> std::expected<EvalState, EvalError> {
@@ -476,6 +723,15 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                const auto decl_it = ctx.program.structs.find(node.type_name);
+                if (decl_it != ctx.program.structs.end()) {
+                    const auto constraint_status = enforce_constraints(
+                        ctx.program, decl_it->second->lowered_where_clause,
+                        build_substitution(decl_it->second->generic_params, node.generic_args),
+                        "type", decl_it->second->name, expr->span);
+                    if (!constraint_status)
+                        return std::unexpected(std::move(constraint_status.error()));
+                }
                 std::vector<ValueField> fields;
                 fields.reserve(node.fields.size());
                 for (const tyir::TyStructInitField& field : node.fields) {
@@ -628,7 +884,13 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                 if (fn_it != ctx.program.fns.end()) {
                     const tyir::TyFnDecl& fn = *fn_it->second;
                     if (fn.return_ty.is_runtime || fn.is_runtime)
-                        return EvalState::blocked();
+                        return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
+                    const auto constraint_status = enforce_constraints(
+                        ctx.program, fn.lowered_where_clause,
+                        build_substitution(fn.generic_params, node.generic_args), "function",
+                        fn.name, expr->span);
+                    if (!constraint_status)
+                        return std::unexpected(std::move(constraint_status.error()));
                     auto arity = require_call_arity(
                         ctx, expr->span, fn.name.as_str(), fn.params.size(), node.args.size());
                     if (!arity)
@@ -665,7 +927,8 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                     case EvalState::Kind::Return:
                         return EvalState::from_value(
                             result->value != nullptr ? result->value : make_unit());
-                    case EvalState::Kind::Blocked: return EvalState::blocked();
+                    case EvalState::Kind::Blocked:
+                        return EvalState::blocked(result->blocked_reason);
                     case EvalState::Kind::Break:
                     case EvalState::Kind::Continue:
                         return make_error(
@@ -682,7 +945,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
                 const tyir::TyExternFnDecl& decl = *ext_it->second;
                 if (decl.return_ty.is_runtime || decl.is_runtime)
-                    return EvalState::blocked();
+                    return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
                 if (decl.abi.as_str() != std::string_view{"lang"})
                     return make_error(
                         ctx, expr->span,
@@ -1548,6 +1811,214 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
         expr->node);
 }
 
+[[nodiscard]] static std::expected<void, EvalError>
+    validate_constraints_in_expr(const tyir::TyExprPtr& expr, const ProgramView& program);
+
+[[nodiscard]] static std::expected<void, EvalError>
+    validate_constraints_in_block(const tyir::TyBlockPtr& block, const ProgramView& program) {
+    if (block == nullptr)
+        return {};
+    for (const tyir::TyStmt& stmt : block->stmts) {
+        auto result = std::visit(
+            [&](const auto& node) -> std::expected<void, EvalError> {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<Node, tyir::TyLetStmt>)
+                    return validate_constraints_in_expr(node.init, program);
+                else
+                    return validate_constraints_in_expr(node.expr, program);
+            },
+            stmt);
+        if (!result)
+            return result;
+    }
+    if (block->tail.has_value())
+        return validate_constraints_in_expr(*block->tail, program);
+    return {};
+}
+
+[[nodiscard]] static std::expected<void, EvalError>
+    validate_constraints_in_expr(const tyir::TyExprPtr& expr, const ProgramView& program) {
+    return std::visit(
+        [&](const auto& node) -> std::expected<void, EvalError> {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (
+                std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
+                || std::is_same_v<Node, tyir::EnumVariantRef>) {
+                return {};
+            } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                const auto decl_it = program.structs.find(node.type_name);
+                if (decl_it != program.structs.end()) {
+                    auto status = enforce_constraints(
+                        program, decl_it->second->lowered_where_clause,
+                        build_substitution(decl_it->second->generic_params, node.generic_args),
+                        "type", decl_it->second->name, expr->span);
+                    if (!status)
+                        return status;
+                }
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    auto nested = validate_constraints_in_expr(field.value, program);
+                    if (!nested)
+                        return nested;
+                }
+                return {};
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                return validate_constraints_in_expr(node.rhs, program);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                auto lhs = validate_constraints_in_expr(node.lhs, program);
+                if (!lhs)
+                    return lhs;
+                return validate_constraints_in_expr(node.rhs, program);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                return validate_constraints_in_expr(node.base, program);
+            } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                const auto fn_it = program.fns.find(node.fn_name);
+                if (fn_it != program.fns.end()) {
+                    auto status = enforce_constraints(
+                        program, fn_it->second->lowered_where_clause,
+                        build_substitution(fn_it->second->generic_params, node.generic_args),
+                        "function", fn_it->second->name, expr->span);
+                    if (!status)
+                        return status;
+                }
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    auto nested = validate_constraints_in_expr(arg, program);
+                    if (!nested)
+                        return nested;
+                }
+                return {};
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                return validate_constraints_in_block(node, program);
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                auto cond = validate_constraints_in_expr(node.condition, program);
+                if (!cond)
+                    return cond;
+                auto then_block = validate_constraints_in_block(node.then_block, program);
+                if (!then_block)
+                    return then_block;
+                if (node.else_branch.has_value())
+                    return validate_constraints_in_expr(*node.else_branch, program);
+                return {};
+            } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                return validate_constraints_in_block(node.body, program);
+            } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                auto cond = validate_constraints_in_expr(node.condition, program);
+                if (!cond)
+                    return cond;
+                return validate_constraints_in_block(node.body, program);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                if (node.init.has_value()) {
+                    auto init = validate_constraints_in_expr(node.init->init, program);
+                    if (!init)
+                        return init;
+                }
+                if (node.condition.has_value()) {
+                    auto cond = validate_constraints_in_expr(*node.condition, program);
+                    if (!cond)
+                        return cond;
+                }
+                if (node.step.has_value()) {
+                    auto step = validate_constraints_in_expr(*node.step, program);
+                    if (!step)
+                        return step;
+                }
+                return validate_constraints_in_block(node.body, program);
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>) {
+                if (node.value.has_value())
+                    return validate_constraints_in_expr(*node.value, program);
+                return {};
+            } else {
+                assert((std::is_same_v<Node, tyir::TyContinue>));
+                return {};
+            }
+        },
+        expr->node);
+}
+
+[[nodiscard]] static std::expected<void, EvalError>
+    validate_program_constraints(const tyir::TyProgram& program, const ProgramView& view) {
+    for (const tyir::TyItem& item : program.items) {
+        auto result = std::visit(
+            [&](const auto& node) -> std::expected<void, EvalError> {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (
+                    std::is_same_v<Node, tyir::TyStructDecl>
+                    || std::is_same_v<Node, tyir::TyEnumDecl>) {
+                    for (const tyir::TyGenericConstraint& constraint : node.lowered_where_clause) {
+                        auto status = evaluate_constraint(constraint.expr, {}, view, {});
+                        if (status.kind == ConstraintEvalKind::Satisfied)
+                            continue;
+                        if (status.kind == ConstraintEvalKind::Unsatisfied) {
+                            return make_error(
+                                EvalContext{view, {}}, node.span,
+                                "generic constraint failed for "
+                                    + describe_constraint_owner(
+                                        std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
+                                        node.name, constraint.span));
+                        }
+                        if (status.kind == ConstraintEvalKind::RuntimeOnly) {
+                            return make_error(
+                                EvalContext{view, {}}, node.span,
+                                "generic constraint for "
+                                    + describe_constraint_owner(
+                                        std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
+                                        node.name, constraint.span)
+                                    + " used runtime-only behavior");
+                        }
+                        return make_error(
+                            EvalContext{view, {}}, node.span,
+                            "generic constraint for "
+                                + describe_constraint_owner(
+                                    std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
+                                    node.name, constraint.span)
+                                + (status.kind == ConstraintEvalKind::InvalidType
+                                       ? " is invalid: "
+                                       : " could not be const-evaluated: ")
+                                + status.detail);
+                    }
+                    return {};
+                } else if constexpr (std::is_same_v<Node, tyir::TyFnDecl>) {
+                    for (const tyir::TyGenericConstraint& constraint : node.lowered_where_clause) {
+                        auto status = evaluate_constraint(constraint.expr, {}, view, {});
+                        if (status.kind == ConstraintEvalKind::Satisfied)
+                            continue;
+                        if (status.kind == ConstraintEvalKind::Unsatisfied) {
+                            return make_error(
+                                EvalContext{view, {}}, node.span,
+                                "generic constraint failed for "
+                                    + describe_constraint_owner(
+                                        "function", node.name, constraint.span));
+                        }
+                        if (status.kind == ConstraintEvalKind::RuntimeOnly) {
+                            return make_error(
+                                EvalContext{view, {}}, node.span,
+                                "generic constraint for "
+                                    + describe_constraint_owner(
+                                        "function", node.name, constraint.span)
+                                    + " used runtime-only behavior");
+                        }
+                        return make_error(
+                            EvalContext{view, {}}, node.span,
+                            "generic constraint for "
+                                + describe_constraint_owner("function", node.name, constraint.span)
+                                + (status.kind == ConstraintEvalKind::InvalidType
+                                       ? " is invalid: "
+                                       : " could not be const-evaluated: ")
+                                + status.detail);
+                    }
+                    return validate_constraints_in_block(node.body, view);
+                } else {
+                    return {};
+                }
+            },
+            item);
+        if (!result)
+            return result;
+    }
+    return {};
+}
+
 [[nodiscard]] static ProgramView build_program_view(const tyir::TyProgram& program) {
     ProgramView view;
     for (const tyir::TyItem& item : program.items) {
@@ -1575,6 +2046,8 @@ namespace cstc::tyir_interp {
 
 std::expected<tyir::TyProgram, EvalError> fold_program(const tyir::TyProgram& program) {
     const detail::ProgramView view = detail::build_program_view(program);
+    if (auto constraints = detail::validate_program_constraints(program, view); !constraints)
+        return std::unexpected(std::move(constraints.error()));
 
     tyir::TyProgram folded = program;
     for (tyir::TyItem& item : folded.items) {

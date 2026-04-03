@@ -1,0 +1,11 @@
+runtime fn runtime_true() -> bool {
+    true
+}
+
+fn id<T>(value: T) -> T where runtime_true() {
+    value
+}
+
+fn main() -> num {
+    id(0)
+}

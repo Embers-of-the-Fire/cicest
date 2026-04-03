@@ -1,0 +1,11 @@
+fn always_true() -> bool {
+    true
+}
+
+fn id<T>(value: T) -> T where always_true() {
+    value
+}
+
+fn main() -> num {
+    id(0)
+}

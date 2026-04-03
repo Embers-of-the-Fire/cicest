@@ -38,6 +38,19 @@ struct EvalError {
     std::vector<EvalStackFrame> stack;
 };
 
+enum class ConstraintEvalKind {
+    Satisfied,
+    Unsatisfied,
+    NotConstEvaluable,
+    RuntimeOnly,
+    InvalidType,
+};
+
+struct ConstraintEvalResult {
+    ConstraintEvalKind kind = ConstraintEvalKind::NotConstEvaluable;
+    std::string detail;
+};
+
 [[nodiscard]] std::expected<tyir::TyProgram, EvalError>
     fold_program(const tyir::TyProgram& program);
 

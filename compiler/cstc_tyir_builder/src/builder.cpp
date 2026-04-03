@@ -769,6 +769,40 @@ static void consume_temp_borrow(std::vector<std::size_t>& borrows, std::size_t o
         borrows.erase(it);
 }
 
+[[nodiscard]] static std::expected<std::vector<tyir::TyGenericConstraint>, LowerError>
+    lower_where_clause(
+        const std::vector<cstc::ast::GenericConstraint>& constraints, const TypeEnv& env,
+        const std::vector<tyir::TyParam>* params = nullptr,
+        const tyir::Ty& current_return_ty = tyir::ty::unit()) {
+    LowerCtx ctx{env, {}, current_return_ty, {}};
+    ctx.scope.push();
+    if (params != nullptr) {
+        for (const tyir::TyParam& param : *params) {
+            if (!ctx.scope.insert(param.name, param.ty)) {
+                ctx.scope.pop();
+                return make_error(
+                    param.span, "duplicate parameter '" + std::string(param.name.as_str())
+                                    + "' in constraint scope");
+            }
+        }
+    }
+
+    std::vector<tyir::TyGenericConstraint> lowered_constraints;
+    lowered_constraints.reserve(constraints.size());
+    for (const cstc::ast::GenericConstraint& constraint : constraints) {
+        auto lowered = lower_expr(constraint.expr, ctx);
+        if (!lowered) {
+            ctx.scope.pop();
+            return std::unexpected(std::move(lowered.error()));
+        }
+        release_temp_borrows(ctx, lowered->temp_borrows);
+        lowered_constraints.push_back({std::move(lowered->expr), constraint.span});
+    }
+
+    ctx.scope.pop();
+    return lowered_constraints;
+}
+
 // ─── Statement lowering ──────────────────────────────────────────────────────
 
 [[nodiscard]] static std::expected<tyir::TyStmt, LowerError>
@@ -2024,6 +2058,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
         body->ty.is_runtime = true;
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
+    auto lowered_constraints = lower_where_clause(fn.where_clause, env, &ty_params, sig.return_ty);
+    if (!lowered_constraints)
+        return std::unexpected(std::move(lowered_constraints.error()));
 
     tyir::TyFnDecl lowered_fn;
     lowered_fn.name = fn.name;
@@ -2034,6 +2071,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
     lowered_fn.span = fn.span;
     lowered_fn.is_runtime = fn.is_runtime;
     lowered_fn.where_clause = fn.where_clause;
+    lowered_fn.lowered_where_clause = std::move(*lowered_constraints);
     return lowered_fn;
 }
 
@@ -2175,6 +2213,10 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             ty_decl.span = s->span;
             ty_decl.fields = env.struct_fields.at(s->name);
             ty_decl.where_clause = s->where_clause;
+            auto lowered_constraints = detail::lower_where_clause(s->where_clause, env);
+            if (!lowered_constraints)
+                return std::unexpected(std::move(lowered_constraints.error()));
+            ty_decl.lowered_where_clause = std::move(*lowered_constraints);
             result.items.push_back(std::move(ty_decl));
         } else if (const auto* e = std::get_if<ast::EnumDecl>(&item)) {
             tyir::TyEnumDecl ty_decl;
@@ -2183,6 +2225,10 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             ty_decl.span = e->span;
             ty_decl.variants = env.enum_variants.at(e->name);
             ty_decl.where_clause = e->where_clause;
+            auto lowered_constraints = detail::lower_where_clause(e->where_clause, env);
+            if (!lowered_constraints)
+                return std::unexpected(std::move(lowered_constraints.error()));
+            ty_decl.lowered_where_clause = std::move(*lowered_constraints);
             result.items.push_back(std::move(ty_decl));
         } else if (const auto* fn = std::get_if<ast::FnDecl>(&item)) {
             auto fn_result = detail::lower_fn(*fn, env);

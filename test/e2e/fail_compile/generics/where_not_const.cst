@@ -1,0 +1,7 @@
+fn id<T>(value: T) -> T where value == value {
+    value
+}
+
+fn main() -> num {
+    id(0)
+}

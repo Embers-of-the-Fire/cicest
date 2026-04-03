@@ -795,6 +795,83 @@ static void test_numeric_equality_treats_nan_as_not_equal() {
         cstc::tyir_interp::detail::make_num(nan), cstc::tyir_interp::detail::make_num(nan)));
 }
 
+static void test_generic_where_true_allows_instantiation() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn always_true() -> bool {
+    true
+}
+
+fn id<T>(value: T) -> T where always_true() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"1"});
+}
+
+static void test_generic_where_false_reports_constraint_failure() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+fn always_false() -> bool {
+    false
+}
+
+fn id<T>(value: T) -> T where always_false() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'id'") != std::string::npos);
+}
+
+static void test_generic_where_unknown_value_reports_not_const_evaluable() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+fn id<T>(value: T) -> T where value == value {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("could not be const-evaluated") != std::string::npos);
+    assert(error.message.find("function 'id'") != std::string::npos);
+}
+
+static void test_generic_where_runtime_call_reports_runtime_only() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+runtime fn runtime_true() -> bool {
+    true
+}
+
+fn id<T>(value: T) -> T where runtime_true() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("runtime-only behavior") != std::string::npos);
+    assert(error.message.find("function 'id'") != std::string::npos);
+}
+
 int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
@@ -831,5 +908,9 @@ int main() {
     test_null_materialization_reports_error();
     test_comparison_requires_numeric_operands();
     test_numeric_equality_treats_nan_as_not_equal();
+    test_generic_where_true_allows_instantiation();
+    test_generic_where_false_reports_constraint_failure();
+    test_generic_where_unknown_value_reports_not_const_evaluable();
+    test_generic_where_runtime_call_reports_runtime_only();
     return 0;
 }
