@@ -115,6 +115,40 @@ static void test_print_runtime_items() {
     assert(contains(out, "TyExternFnDecl \"lang\" poll(value: &runtime str) -> Unit"));
 }
 
+static void test_print_generic_fn_metadata() {
+    TyFnDecl fn;
+    fn.name = Symbol::intern("id");
+    fn.generic_params = {
+        GenericParam{Symbol::intern("T"), {}}
+    };
+    fn.params = {
+        TyParam{Symbol::intern("value"), ty::num(), {}}
+    };
+    fn.return_ty = ty::num();
+    fn.body = std::make_shared<TyBlock>();
+    fn.body->ty = ty::num();
+    fn.where_clause = {
+        GenericConstraint{
+                          cstc::ast::make_expr(
+                {},
+                          cstc::ast::PathExpr{
+                    .head = Symbol::intern("T"),
+                    .tail = std::nullopt,
+                    .display_head = kInvalidSymbol,
+                    .generic_args = {},
+                }),
+                          {},
+                          }
+    };
+
+    TyProgram prog;
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyFnDecl id<T>(value: num) -> num"));
+    assert(contains(out, "Where"));
+}
+
 // ─── Literal expressions ─────────────────────────────────────────────────────
 
 static void test_print_literals() {
@@ -498,6 +532,7 @@ int main() {
     test_print_enum();
     test_print_enum_with_discriminant();
     test_print_runtime_items();
+    test_print_generic_fn_metadata();
     test_print_literals();
     test_print_local_ref();
     test_print_enum_variant_ref();

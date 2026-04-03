@@ -370,6 +370,26 @@ void test_return_with_value() {
     assert(val.symbol.as_str() == "7");
 }
 
+void test_turbofish_call_expression() {
+    cstc::symbol::SymbolSession session;
+    const auto& expr = tail_of("identity::<num>(1)");
+    const auto& call = std::get<cstc::ast::CallExpr>(expr.node);
+    const auto& generic_app = std::get<cstc::ast::GenericAppExpr>(call.callee->node);
+    assert(generic_app.args.size() == 1);
+    assert(generic_app.args[0].symbol.as_str() == "num");
+    const auto& callee = std::get<cstc::ast::PathExpr>(generic_app.callee->node);
+    assert(callee.head.as_str() == "identity");
+}
+
+void test_generic_struct_initializer_expression() {
+    cstc::symbol::SymbolSession session;
+    const auto& expr = tail_of("Box<num> { value: 1 }");
+    const auto& init = std::get<cstc::ast::StructInitExpr>(expr.node);
+    assert(init.type_name.as_str() == "Box");
+    assert(init.generic_args.size() == 1);
+    assert(init.generic_args[0].symbol.as_str() == "num");
+}
+
 } // namespace
 
 int main() {
@@ -412,5 +432,7 @@ int main() {
     test_continue();
     test_return_no_value();
     test_return_with_value();
+    test_turbofish_call_expression();
+    test_generic_struct_initializer_expression();
     return 0;
 }

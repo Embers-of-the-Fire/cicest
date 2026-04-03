@@ -193,6 +193,16 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
     assert(fn.body->ty.is_runtime);
 }
 
+static void test_fn_preserves_generic_metadata() {
+    const auto prog = must_lower("fn id<T>(value: num) -> num where T, value == value { value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.generic_params.size() == 1);
+    assert(fn.generic_params[0].name == Symbol::intern("T"));
+    assert(fn.where_clause.size() == 2);
+    assert(std::holds_alternative<cstc::ast::PathExpr>(fn.where_clause[0].expr->node));
+    assert(std::holds_alternative<cstc::ast::BinaryExpr>(fn.where_clause[1].expr->node));
+}
+
 static void test_runtime_return_annotation_accepts_plain_value() {
     const auto prog = must_lower("fn promote() -> runtime num { 1 }");
     const auto& fn = std::get<TyFnDecl>(prog.items[0]);
@@ -355,6 +365,7 @@ int main() {
     test_fn_ref_return_rejected();
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
+    test_fn_preserves_generic_metadata();
     test_runtime_return_annotation_accepts_plain_value();
     test_runtime_return_type_mismatch_rejected();
     test_runtime_main_return_allowed();

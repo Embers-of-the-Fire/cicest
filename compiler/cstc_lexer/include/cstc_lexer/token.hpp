@@ -78,6 +78,8 @@ enum class TokenKind {
     KwFrom,
     /// `as` keyword.
     KwAs,
+    /// `where` keyword.
+    KwWhere,
 
     /// `{`
     LBrace,
@@ -189,6 +191,7 @@ struct Token {
     case TokenKind::KwImport: return "KwImport";
     case TokenKind::KwFrom: return "KwFrom";
     case TokenKind::KwAs: return "KwAs";
+    case TokenKind::KwWhere: return "KwWhere";
     case TokenKind::LBrace: return "LBrace";
     case TokenKind::RBrace: return "RBrace";
     case TokenKind::LParen: return "LParen";

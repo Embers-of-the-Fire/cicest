@@ -518,20 +518,21 @@ static void test_never_call_seals_block() {
         cstc::tyir::ty::num());
 
     cstc::tyir::TyProgram program;
-    program.items.push_back(
-        cstc::tyir::TyFnDecl{
-            Symbol::intern("f"),
-            {cstc::tyir::TyParam{b, cstc::tyir::ty::bool_(), span}},
-            cstc::tyir::ty::num(),
-            std::make_shared<cstc::tyir::TyBlock>(cstc::tyir::TyBlock{
-                {cstc::tyir::TyExprStmt{if_expr, span}},
-                tail,
-                cstc::tyir::ty::num(),
-                span,
-            }),
-            span,
-            false,
-        });
+    cstc::tyir::TyFnDecl ty_fn;
+    ty_fn.name = Symbol::intern("f");
+    ty_fn.params = {
+        cstc::tyir::TyParam{b, cstc::tyir::ty::bool_(), span}
+    };
+    ty_fn.return_ty = cstc::tyir::ty::num();
+    ty_fn.body = std::make_shared<cstc::tyir::TyBlock>(cstc::tyir::TyBlock{
+        {cstc::tyir::TyExprStmt{if_expr, span}},
+        tail,
+        cstc::tyir::ty::num(),
+        span,
+    });
+    ty_fn.span = span;
+    ty_fn.is_runtime = false;
+    program.items.push_back(std::move(ty_fn));
 
     const LirProgram prog = lower_program(program);
     const LirFnDef& fn = first_fn(prog);

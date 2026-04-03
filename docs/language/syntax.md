@@ -21,13 +21,14 @@ Supported top-level items:
 - `enum` declarations (scoped variants, similar in spirit to C++ `enum class`).
 - `fn` declarations, including `runtime fn`, which sugar-coats a runtime-qualified
   return type.
+- Generic parameter declarations on `fn`, `struct`, and `enum` items.
+- Declaration-level `where` clauses with const-evaluable constraint expressions.
 - `extern` declarations (external function and opaque struct declarations),
   including `runtime extern ... fn`, which likewise sugar-coats a
   runtime-qualified return type.
 
 Explicitly out of scope:
 
-- Generics.
 - Async/await.
 - Global `let`/`const`/`static`.
 - Mutation (`mut`, reassignment, assignment expressions).
@@ -62,7 +63,7 @@ Reserved keywords:
 
 ```text
 struct enum fn let if else for while loop break continue return
-true false Unit num str bool extern runtime pub import from as
+true false Unit num str bool extern runtime pub import from as where
 ```
 
 ### 2.4 Literals
@@ -117,20 +118,25 @@ ImportDecl         = "import" , "{" , [ ImportItemList ] , "}" , "from" , STR_LI
 ImportItemList     = ImportItem , { "," , ImportItem } , [ "," ] ;
 ImportItem         = IDENT , [ "as" , IDENT ] ;
 
-StructDecl         = "struct" , IDENT , ( StructFields | ";" ) ;
+StructDecl         = "struct" , IDENT , [ GenericParamList ] , [ WhereClause ] , ( StructFields | ";" ) ;
 StructFields       = "{" , [ FieldDeclList ] , "}" ;
 FieldDeclList      = FieldDecl , { "," , FieldDecl } , [ "," ] ;
 FieldDecl          = IDENT , ":" , Type ;
 
-EnumDecl           = "enum" , IDENT , "{" , [ VariantDeclList ] , "}" ;
+EnumDecl           = "enum" , IDENT , [ GenericParamList ] , [ WhereClause ] , "{" , [ VariantDeclList ] , "}" ;
 VariantDeclList    = VariantDecl , { "," , VariantDecl } , [ "," ] ;
 VariantDecl        = IDENT , [ "=" , NUM_LIT ] ;
 
-FnDecl             = "fn" , IDENT , "(" , [ ParamList ] , ")" , [ ReturnType ] , BlockExpr ;
+FnDecl             = "fn" , IDENT , [ GenericParamList ] , "(" , [ ParamList ] , ")" , [ ReturnType ] , [ WhereClause ] , BlockExpr ;
 ParamList          = Param , { "," , Param } , [ "," ] ;
 Param              = IDENT , ":" , Type ;
 ReturnType         = "->" , Type ;
 RuntimeFnDecl      = "runtime" , FnDecl ;
+
+GenericParamList   = "<" , GenericParam , { "," , GenericParam } , [ "," ] , ">" ;
+GenericParam       = IDENT ;
+WhereClause        = "where" , ConstraintExpr , { "," , ConstraintExpr } ;
+ConstraintExpr     = Expr ;
 
 ExternDecl         = "extern" , STR_LIT , ( ExternFnDecl | ExternStructDecl ) ;
 ExternFnDecl       = "fn" , IDENT , "(" , [ ParamList ] , ")" , [ ReturnType ] , ";" ;
@@ -163,7 +169,8 @@ RuntimeType        = "runtime" , Type ;
 RefType            = "&" , Type ;
 BuiltinType        = "Unit" | "num" | "str" | "bool" ;
 NeverType          = "!" ;
-UserType           = IDENT ;
+UserType           = IDENT , [ TypeArgList ] ;
+TypeArgList        = "<" , Type , { "," , Type } , [ "," ] , ">" ;
 ```
 
 > **Note:** The `Never` type (`!`) is a bottom type produced by diverging
@@ -175,8 +182,6 @@ UserType           = IDENT ;
 > a wrapper like `Runtime<T>` rather than a separate ad hoc type category.
 > Values of type `T` may be promoted to `runtime T`, but the reverse demotion
 > is forbidden and is reported as a hard error.
-
-No generic parameters are allowed anywhere.
 
 Ownership notes:
 
@@ -219,8 +224,9 @@ UnaryExpr          = ( "&" | "!" | "-" ) , UnaryExpr
                    | PostfixExpr ;
 
 PostfixExpr        = PrimaryExpr , { PostfixOp } ;
-PostfixOp          = FieldAccess | CallSuffix ;
+PostfixOp          = FieldAccess | GenericAppSuffix | CallSuffix ;
 FieldAccess        = "." , IDENT ;
+GenericAppSuffix   = "::" , "<" , Type , { "," , Type } , [ "," ] , ">" ;
 CallSuffix         = "(" , [ ArgList ] , ")" ;
 ArgList            = Expr , { "," , Expr } , [ "," ] ;
 
@@ -239,7 +245,7 @@ PrimaryExpr        = LiteralExpr
 
 LiteralExpr        = NUM_LIT | STR_LIT | BOOL_LIT | UNIT_LIT ;
 PathExpr           = IDENT | IDENT , "::" , IDENT ;
-StructInitExpr     = IDENT , "{" , [ FieldInitList ] , "}" ;
+StructInitExpr     = IDENT , [ TypeArgList ] , "{" , [ FieldInitList ] , "}" ;
 FieldInitList      = FieldInit , { "," , FieldInit } , [ "," ] ;
 FieldInit          = IDENT , ":" , Expr ;
 ```
@@ -247,6 +253,8 @@ FieldInit          = IDENT , ":" , Expr ;
 Notes:
 
 - `foo.bar` field access is valid.
+- `foo::<T>(value)` is the explicit generic application form for expressions.
+- Type positions accept explicit generic arguments such as `Box<num>`.
 - `EnumName::Variant` is the canonical enum value expression.
 - Tuple/grouping ambiguity is avoided: `(expr)` is grouping; `()` is the unit literal.
 - No tuple literals or tuple types are defined.

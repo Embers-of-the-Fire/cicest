@@ -803,6 +803,12 @@ static void test_call_arg_type_error() {
     must_fail("fn g(x: num) -> num { x } fn f() -> num { g(true) }");
 }
 
+static void test_call_explicit_generic_args_not_supported_yet() {
+    must_fail_with_message(
+        "fn id(x: num) -> num { x } fn f() -> num { id::<num>(1) }",
+        "explicit generic arguments in function calls are not supported yet");
+}
+
 // ─── Enum variant reference ───────────────────────────────────────────────────
 
 static void test_enum_variant_ref() {
@@ -1070,6 +1076,7 @@ int main() {
     test_call_undefined_fn_error();
     test_call_arg_count_error();
     test_call_arg_type_error();
+    test_call_explicit_generic_args_not_supported_yet();
     test_enum_variant_ref();
     test_unknown_variant_error();
     test_struct_init();

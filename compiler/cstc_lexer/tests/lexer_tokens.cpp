@@ -47,6 +47,7 @@ void test_all_keywords() {
         {  "import",   cstc::lexer::TokenKind::KwImport},
         {    "from",     cstc::lexer::TokenKind::KwFrom},
         {      "as",       cstc::lexer::TokenKind::KwAs},
+        {   "where",    cstc::lexer::TokenKind::KwWhere},
     };
 
     for (const auto& [text, expected_kind] : cases) {

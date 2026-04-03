@@ -90,6 +90,19 @@ const cstc::ast::FnDecl*
     return nullptr;
 }
 
+const cstc::ast::StructDecl*
+    find_struct_decl(const cstc::ast::Program& program, std::string_view display_name) {
+    for (const cstc::ast::Item& item : program.items) {
+        const auto* decl = std::get_if<cstc::ast::StructDecl>(&item);
+        if (decl == nullptr)
+            continue;
+        if (decl->display_name.as_str() == display_name)
+            return decl;
+    }
+
+    return nullptr;
+}
+
 const cstc::tyir::TyExternFnDecl*
     find_extern_fn_decl(const cstc::tyir::TyProgram& program, std::string_view link_name) {
     for (const cstc::tyir::TyItem& item : program.items) {
@@ -350,6 +363,38 @@ void test_imported_fn_rewrite_preserves_display_name() {
     assert(imported->name.as_str().starts_with("__cst_mod_"));
 }
 
+void test_generic_app_rewrites_imported_fn_and_type_args() {
+    cstc::symbol::SymbolSession session;
+    const TempDir temp = make_temp_dir();
+
+    write_file(temp.path / "std" / "prelude.cst", "");
+    write_file(
+        temp.path / "lib.cst", "pub struct Thing;\n"
+                               "pub fn imported() { }\n");
+    write_file(
+        temp.path / "root.cst", "import { Thing, imported } from \"lib.cst\";\n"
+                                "fn main() { imported::<Thing>(); }\n");
+
+    const auto program = must_load_program(temp.path / "root.cst", temp.path / "std");
+    const cstc::ast::FnDecl* main_fn = find_fn_decl(program, "main");
+    const cstc::ast::FnDecl* imported_fn = find_fn_decl(program, "imported");
+    const cstc::ast::StructDecl* imported_struct = find_struct_decl(program, "Thing");
+    assert(main_fn != nullptr);
+    assert(imported_fn != nullptr);
+    assert(imported_struct != nullptr);
+    assert(main_fn->body->statements.size() == 1);
+
+    const auto& stmt = std::get<cstc::ast::ExprStmt>(main_fn->body->statements[0]);
+    const auto& call = std::get<cstc::ast::CallExpr>(stmt.expr->node);
+    const auto& generic_app = std::get<cstc::ast::GenericAppExpr>(call.callee->node);
+    const auto& callee = std::get<cstc::ast::PathExpr>(generic_app.callee->node);
+    assert(callee.display_head.as_str() == "imported");
+    assert(callee.head == imported_fn->name);
+    assert(generic_app.args.size() == 1);
+    assert(generic_app.args[0].display_name.as_str() == "Thing");
+    assert(generic_app.args[0].symbol == imported_struct->name);
+}
+
 void test_imported_fn_diagnostics_use_source_name() {
     cstc::symbol::SymbolSession session;
     const TempDir temp = make_temp_dir();
@@ -401,6 +446,7 @@ int main() {
     test_explicit_import_shadows_prelude_fallback();
     test_pub_import_can_reexport_prelude_item();
     test_imported_fn_rewrite_preserves_display_name();
+    test_generic_app_rewrites_imported_fn_and_type_args();
     test_imported_fn_diagnostics_use_source_name();
     test_imported_extern_link_name_uses_source_name();
     return 0;

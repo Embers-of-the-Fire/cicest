@@ -574,6 +574,9 @@ private:
                 return;
             }
 
+            for (cstc::ast::TypeRef& arg : type.generic_args)
+                rewrite_type(arg);
+
             if (type.kind != cstc::ast::TypeKind::Named)
                 return;
 
@@ -663,8 +666,14 @@ private:
                         const std::optional<BindingSet> binding = lookup_visible(node.type_name);
                         if (binding.has_value() && binding->type_binding.has_value())
                             node.type_name = binding->type_binding->internal_name;
+                        for (cstc::ast::TypeRef& arg : node.generic_args)
+                            rewrite_type(arg);
                         for (cstc::ast::StructInitField& field : node.fields)
                             rewrite_expr(field.value);
+                    } else if constexpr (std::is_same_v<Node, cstc::ast::GenericAppExpr>) {
+                        rewrite_expr(node.callee);
+                        for (cstc::ast::TypeRef& arg : node.args)
+                            rewrite_type(arg);
                     } else if constexpr (std::is_same_v<Node, cstc::ast::UnaryExpr>) {
                         rewrite_expr(node.rhs);
                     } else if constexpr (std::is_same_v<Node, cstc::ast::BinaryExpr>) {
