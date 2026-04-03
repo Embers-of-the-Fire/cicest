@@ -1024,7 +1024,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     annotate_type_semantics(tyir::ty::named(type_name, node.display_name), ctx.env);
                 auto lowered = LoweredExpr{
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyStructInit{type_name, std::move(lowered_fields)},
+                        expr->span, tyir::TyStructInit{type_name, {}, std::move(lowered_fields)},
                         result_ty),
                     {},
                     std::nullopt,
@@ -1283,7 +1283,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 auto lowered = LoweredExpr{
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyCall{fn_name, std::move(lowered_args)}, sig.return_ty),
+                        expr->span, tyir::TyCall{fn_name, {}, std::move(lowered_args)},
+                        sig.return_ty),
                     {},
                     std::nullopt,
                 };

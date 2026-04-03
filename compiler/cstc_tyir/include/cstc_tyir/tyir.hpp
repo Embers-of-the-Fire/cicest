@@ -98,6 +98,8 @@ struct Ty {
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
     /// Human-facing type name used in diagnostics.
     cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol;
+    /// Applied generic arguments when `kind == TyKind::Named`.
+    std::vector<Ty> generic_args;
     /// Referenced pointee when `kind == TyKind::Ref`.
     std::shared_ptr<Ty> pointee;
     /// Ownership behavior attached to this resolved type.
@@ -123,7 +125,14 @@ struct Ty {
             if (pointee == nullptr || other.pointee == nullptr)
                 return pointee == other.pointee;
             return pointee->same_shape_as(*other.pointee);
-        case TyKind::Named: return name == other.name;
+        case TyKind::Named:
+            if (name != other.name || generic_args.size() != other.generic_args.size())
+                return false;
+            for (std::size_t index = 0; index < generic_args.size(); ++index) {
+                if (!generic_args[index].same_shape_as(other.generic_args[index]))
+                    return false;
+            }
+            return true;
         case TyKind::Unit:
         case TyKind::Num:
         case TyKind::Str:
@@ -136,8 +145,13 @@ struct Ty {
     /// Exact type identity, including all `runtime` tags.
     friend constexpr bool operator==(const Ty& lhs, const Ty& rhs) {
         if (lhs.kind != rhs.kind || lhs.name != rhs.name || lhs.semantics != rhs.semantics
-            || lhs.is_runtime != rhs.is_runtime)
+            || lhs.is_runtime != rhs.is_runtime
+            || lhs.generic_args.size() != rhs.generic_args.size())
             return false;
+        for (std::size_t index = 0; index < lhs.generic_args.size(); ++index) {
+            if (!(lhs.generic_args[index] == rhs.generic_args[index]))
+                return false;
+        }
         if (lhs.kind != TyKind::Ref)
             return true;
         if (lhs.pointee == nullptr || rhs.pointee == nullptr)
@@ -167,6 +181,15 @@ struct Ty {
                 rendered = std::string(display_name.as_str());
             else
                 rendered = name.is_valid() ? std::string(name.as_str()) : "<named>";
+            if (!generic_args.empty()) {
+                rendered += "<";
+                for (std::size_t index = 0; index < generic_args.size(); ++index) {
+                    if (index > 0)
+                        rendered += ", ";
+                    rendered += generic_args[index].display();
+                }
+                rendered += ">";
+            }
             break;
         }
         if (is_runtime)
@@ -180,52 +203,76 @@ namespace ty {
 /// Unit type `()`.
 inline Ty unit(bool is_runtime = false) {
     return {
-        TyKind::Unit, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,      ValueSemantics::Copy,         is_runtime,
+        TyKind::Unit,
+        cstc::symbol::kInvalidSymbol,
+        cstc::symbol::kInvalidSymbol,
+        {},
+        nullptr,
+        ValueSemantics::Copy,
+        is_runtime,
     };
 }
 /// Numeric type `num`.
 inline Ty num(bool is_runtime = false) {
     return {
-        TyKind::Num, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,     ValueSemantics::Copy,         is_runtime,
+        TyKind::Num,
+        cstc::symbol::kInvalidSymbol,
+        cstc::symbol::kInvalidSymbol,
+        {},
+        nullptr,
+        ValueSemantics::Copy,
+        is_runtime,
     };
 }
 /// String type `str`.
 inline Ty str(bool is_runtime = false) {
     return {
-        TyKind::Str, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,     ValueSemantics::Move,         is_runtime,
+        TyKind::Str,
+        cstc::symbol::kInvalidSymbol,
+        cstc::symbol::kInvalidSymbol,
+        {},
+        nullptr,
+        ValueSemantics::Move,
+        is_runtime,
     };
 }
 /// Boolean type `bool`.
 inline Ty bool_(bool is_runtime = false) {
     return {
-        TyKind::Bool, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,      ValueSemantics::Copy,         is_runtime,
+        TyKind::Bool,
+        cstc::symbol::kInvalidSymbol,
+        cstc::symbol::kInvalidSymbol,
+        {},
+        nullptr,
+        ValueSemantics::Copy,
+        is_runtime,
     };
 }
 /// Never / bottom type (diverging expression).
 inline Ty never(bool is_runtime = false) {
     return {
-        TyKind::Never, cstc::symbol::kInvalidSymbol, cstc::symbol::kInvalidSymbol,
-        nullptr,       ValueSemantics::Copy,         is_runtime,
+        TyKind::Never,
+        cstc::symbol::kInvalidSymbol,
+        cstc::symbol::kInvalidSymbol,
+        {},
+        nullptr,
+        ValueSemantics::Copy,
+        is_runtime,
     };
 }
 /// User-defined named type (struct or enum).
 inline Ty named(
     cstc::symbol::Symbol sym, cstc::symbol::Symbol display_name = cstc::symbol::kInvalidSymbol,
-    ValueSemantics semantics = ValueSemantics::Move, bool is_runtime = false) {
-    return {TyKind::Named, sym, display_name, nullptr, semantics, is_runtime};
+    ValueSemantics semantics = ValueSemantics::Move, bool is_runtime = false,
+    std::vector<Ty> generic_args = {}) {
+    return {TyKind::Named, sym,       display_name, std::move(generic_args),
+            nullptr,       semantics, is_runtime};
 }
 /// Shared immutable reference type `&T`.
 inline Ty ref(const Ty& pointee, bool is_runtime = false) {
     return {
-        TyKind::Ref,
-        cstc::symbol::kInvalidSymbol,
-        cstc::symbol::kInvalidSymbol,
-        std::make_shared<Ty>(pointee),
-        ValueSemantics::Ref,
+        TyKind::Ref, cstc::symbol::kInvalidSymbol,  cstc::symbol::kInvalidSymbol,
+        {},          std::make_shared<Ty>(pointee), ValueSemantics::Ref,
         is_runtime,
     };
 }
@@ -295,6 +342,8 @@ struct TyStructInitField {
 struct TyStructInit {
     /// Target struct type name.
     cstc::symbol::Symbol type_name = cstc::symbol::kInvalidSymbol;
+    /// Resolved generic arguments applied to the constructed type.
+    std::vector<Ty> generic_args;
     /// Typed field initializer list.
     std::vector<TyStructInitField> fields;
 };
@@ -347,6 +396,8 @@ struct TyFieldAccess {
 struct TyCall {
     /// Resolved top-level function name.
     cstc::symbol::Symbol fn_name = cstc::symbol::kInvalidSymbol;
+    /// Resolved generic arguments applied to the callee.
+    std::vector<Ty> generic_args;
     /// Type-annotated argument list (count and types match the function signature).
     std::vector<TyExprPtr> args;
 };
@@ -508,12 +559,16 @@ struct TyFieldDecl {
 struct TyStructDecl {
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Declared generic parameter list preserved from the AST.
+    std::vector<cstc::ast::GenericParam> generic_params;
     /// Resolved named field list.
     std::vector<TyFieldDecl> fields;
     /// True when declared as `struct Name;` (zero-sized type).
     bool is_zst = false;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// Optional generic `where` constraints preserved from the AST.
+    std::vector<cstc::ast::GenericConstraint> where_clause;
 };
 
 /// Typed fieldless enum variant.
@@ -530,10 +585,14 @@ struct TyEnumVariant {
 struct TyEnumDecl {
     /// Enum type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Declared generic parameter list preserved from the AST.
+    std::vector<cstc::ast::GenericParam> generic_params;
     /// Declared variant list.
     std::vector<TyEnumVariant> variants;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
+    /// Optional generic `where` constraints preserved from the AST.
+    std::vector<cstc::ast::GenericConstraint> where_clause;
 };
 
 /// Typed function parameter declaration.

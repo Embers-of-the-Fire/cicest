@@ -36,6 +36,38 @@ static void test_print_struct() {
     assert(contains(out, "y: num"));
 }
 
+static void test_print_generic_struct() {
+    TyStructDecl decl;
+    decl.name = Symbol::intern("Box");
+    decl.generic_params = {
+        GenericParam{Symbol::intern("T"), {}}
+    };
+    decl.where_clause = {
+        GenericConstraint{
+                          cstc::ast::make_expr(
+                {},
+                          cstc::ast::PathExpr{
+                    .head = Symbol::intern("ready"),
+                    .tail = std::nullopt,
+                    .display_head = kInvalidSymbol,
+                    .generic_args = {},
+                }),
+                          {},
+                          },
+    };
+    decl.fields = {
+        TyFieldDecl{Symbol::intern("value"), ty::named(Symbol::intern("T")), {}},
+    };
+
+    TyProgram prog;
+    prog.items.push_back(std::move(decl));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyStructDecl Box<T>"));
+    assert(contains(out, "Where"));
+    assert(contains(out, "value: T"));
+}
+
 static void test_print_zst_struct() {
     TyStructDecl decl;
     decl.name = Symbol::intern("Marker");
@@ -63,6 +95,24 @@ static void test_print_enum() {
     assert(contains(out, "Red"));
     assert(contains(out, "Green"));
     assert(contains(out, "Blue"));
+}
+
+static void test_print_generic_enum() {
+    TyEnumDecl decl;
+    decl.name = Symbol::intern("Result");
+    decl.generic_params = {
+        GenericParam{Symbol::intern("T"), {}},
+        GenericParam{Symbol::intern("E"), {}},
+    };
+    decl.variants = {
+        TyEnumVariant{ Symbol::intern("Ok"), std::nullopt, {}},
+        TyEnumVariant{Symbol::intern("Err"), std::nullopt, {}},
+    };
+
+    TyProgram prog;
+    prog.items.push_back(std::move(decl));
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyEnumDecl Result<T, E>"));
 }
 
 static void test_print_enum_with_discriminant() {
@@ -147,6 +197,45 @@ static void test_print_generic_fn_metadata() {
     const std::string out = format_program(prog);
     assert(contains(out, "TyFnDecl id<T>(value: num) -> num"));
     assert(contains(out, "Where"));
+}
+
+static void test_print_call_and_struct_init_generic_args() {
+    TyFnDecl fn;
+    fn.name = Symbol::intern("main");
+    fn.return_ty = ty::unit();
+    fn.body = std::make_shared<TyBlock>();
+    fn.body->ty = ty::unit();
+
+    auto call = make_ty_expr(
+        {},
+        TyCall{
+            Symbol::intern("id"),
+            {ty::num()},
+            {make_ty_expr(
+                {}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("1"), false}, ty::num())}},
+        ty::num());
+    auto init = make_ty_expr(
+        {},
+        TyStructInit{
+            Symbol::intern("Box"),
+            {ty::num()},
+            {{Symbol::intern("value"),
+              make_ty_expr(
+                  {}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("1"), false}, ty::num()),
+              {}}}},
+        ty::named(Symbol::intern("Box"), kInvalidSymbol, ValueSemantics::Move, false, {ty::num()}));
+    fn.body->stmts = {
+        TyExprStmt{call, {}},
+        TyExprStmt{init, {}}
+    };
+
+    TyProgram prog;
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyCall(id): num"));
+    assert(contains(out, "GenericArgs"));
+    assert(contains(out, "Box<num>"));
 }
 
 // ─── Literal expressions ─────────────────────────────────────────────────────
@@ -456,7 +545,7 @@ static void test_print_call() {
     const Symbol x = Symbol::intern("x");
 
     auto arg = make_ty_expr({}, LocalRef{x}, ty::num());
-    auto call = make_ty_expr({}, TyCall{foo, {arg}}, ty::bool_());
+    auto call = make_ty_expr({}, TyCall{foo, {}, {arg}}, ty::bool_());
 
     auto block = std::make_shared<TyBlock>();
     block->tail = call;
@@ -528,11 +617,14 @@ int main() {
     SymbolSession session;
 
     test_print_struct();
+    test_print_generic_struct();
     test_print_zst_struct();
     test_print_enum();
+    test_print_generic_enum();
     test_print_enum_with_discriminant();
     test_print_runtime_items();
     test_print_generic_fn_metadata();
+    test_print_call_and_struct_init_generic_args();
     test_print_literals();
     test_print_local_ref();
     test_print_enum_variant_ref();

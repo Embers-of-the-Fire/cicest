@@ -1035,7 +1035,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             fields.push_back({field_decl.name, *expr_value, span});
         }
         return tyir::make_ty_expr(
-            span, tyir::TyStructInit{actual->type_name, std::move(fields)}, ty);
+            span, tyir::TyStructInit{actual->type_name, ty.generic_args, std::move(fields)}, ty);
     }
     case Value::Kind::Ref:
         return std::unexpected(
@@ -1309,7 +1309,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 }
                 return maybe_fold_constant(
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyCall{node.fn_name, std::move(args)}, expr->ty),
+                        expr->span, tyir::TyCall{node.fn_name, node.generic_args, std::move(args)},
+                        expr->ty),
                     program, env);
             }
 
