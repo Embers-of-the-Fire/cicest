@@ -1104,6 +1104,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
             // ── Path ──────────────────────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::PathExpr>) {
                 const std::string display_head = display_symbol(node.display_head, node.head);
+                if (!node.generic_args.empty()) {
+                    return make_error(
+                        expr->span,
+                        "explicit generic arguments are only supported in function call or type "
+                        "positions");
+                }
                 if (node.tail.has_value()) {
                     // EnumName::Variant
                     const cstc::symbol::Symbol enum_name = node.head;

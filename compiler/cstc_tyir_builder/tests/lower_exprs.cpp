@@ -36,6 +36,13 @@ static void must_fail_with_message(const char* source, const char* expected_mess
     assert(tyir.error().message.find(expected_message_part) != std::string::npos);
 }
 
+static void must_fail_program_with_message(
+    const cstc::ast::Program& program, const char* expected_message_part) {
+    const auto tyir = lower_program(program);
+    assert(!tyir.has_value());
+    assert(tyir.error().message.find(expected_message_part) != std::string::npos);
+}
+
 static const TyFnDecl& first_fn(const TyProgram& prog) {
     for (const auto& item : prog.items)
         if (const auto* fn = std::get_if<TyFnDecl>(&item))
@@ -834,6 +841,147 @@ static void test_call_infers_generic_args_from_arguments() {
     assert(call.generic_args[0] == ty::num());
 }
 
+static void test_path_expr_rejects_bare_generic_args() {
+    const Symbol fn_name = Symbol::intern("f");
+    const Symbol local_name = Symbol::intern("x");
+    cstc::ast::Program program{
+        .items = {cstc::ast::FnDecl{
+            .is_public = false,
+            .name = fn_name,
+            .display_name = fn_name,
+            .params = {},
+            .return_type =
+                cstc::ast::TypeRef{
+                    .kind = cstc::ast::TypeKind::Num,
+                    .symbol = Symbol::intern("num"),
+                    .display_name = Symbol::intern("num"),
+                    .pointee = nullptr,
+                    .is_runtime = false,
+                    .generic_args = {},
+                },
+            .body = std::make_shared<cstc::ast::BlockExpr>(cstc::ast::BlockExpr{
+                .statements = {},
+                .tail = cstc::ast::make_expr(
+                    {},
+                    cstc::ast::PathExpr{
+                        .head = local_name,
+                        .tail = std::nullopt,
+                        .display_head = local_name,
+                        .generic_args = {cstc::ast::TypeRef{
+                            .kind = cstc::ast::TypeKind::Num,
+                            .symbol = Symbol::intern("num"),
+                            .display_name = Symbol::intern("num"),
+                            .pointee = nullptr,
+                            .is_runtime = false,
+                            .generic_args = {},
+                        }},
+                    }),
+                .span = {},
+            }),
+            .span = {},
+            .attributes = {},
+            .is_runtime = false,
+            .generic_params = {},
+            .where_clause = {},
+        }}};
+
+    must_fail_program_with_message(
+        program,
+        "explicit generic arguments are only supported in function call or type positions");
+}
+
+static void test_path_expr_rejects_enum_variant_generic_args() {
+    const Symbol enum_name = Symbol::intern("Result");
+    const Symbol variant_name = Symbol::intern("Ok");
+    const Symbol fn_name = Symbol::intern("f");
+    cstc::ast::Program program{
+        .items = {
+                  cstc::ast::EnumDecl{
+                .is_public = false,
+                .name = enum_name,
+                .display_name = enum_name,
+                .variants = {cstc::ast::EnumVariant{
+                    .name = variant_name,
+                    .discriminant = std::nullopt,
+                    .span = {},
+                }},
+                .span = {},
+                .attributes = {},
+                .generic_params = {},
+                .where_clause = {},
+            }, cstc::ast::FnDecl{
+                .is_public = false,
+                .name = fn_name,
+                .display_name = fn_name,
+                .params = {},
+                .return_type =
+                    cstc::ast::TypeRef{
+                        .kind = cstc::ast::TypeKind::Named,
+                        .symbol = enum_name,
+                        .display_name = enum_name,
+                        .pointee = nullptr,
+                        .is_runtime = false,
+                        .generic_args = {},
+                    },
+                .body = std::make_shared<cstc::ast::
+                                             BlockExpr>(cstc::ast::
+                                                            BlockExpr{
+                                                                .statements = {},
+                                                                .tail = cstc::ast::make_expr(
+                                                                    {},
+                                                                    cstc::ast::
+                                                                        PathExpr{
+                                                                            .head = enum_name,
+                                                                            .tail = variant_name,
+                                                                            .display_head =
+                                                                                enum_name,
+                                                                            .generic_args =
+                                                                                {
+                                                                                    cstc::
+                                                                                        ast::TypeRef{
+                                                                                            .kind = cstc::ast::TypeKind::Num,
+                                                                                            .symbol = Symbol::intern(
+                                                                                                "nu"
+                                                                                                "m"),
+                                                                                            .display_name =
+                                                                                                Symbol::intern("num"),
+                                                                                            .pointee =
+                                                                                                nullptr,
+                                                                                            .is_runtime = false,
+                                                                                            .generic_args =
+                                                                                                {},
+                                                                                        },
+                                                                                    cstc::
+                                                                                        ast::TypeRef{
+                                                                                            .kind = cstc::ast::TypeKind::Str,
+                                                                                            .symbol = Symbol::intern(
+                                                                                                "st"
+                                                                                                "r"),
+                                                                                            .display_name =
+                                                                                                Symbol::intern("str"),
+                                                                                            .pointee =
+                                                                                                nullptr,
+                                                                                            .is_runtime = false,
+                                                                                            .generic_args =
+                                                                                                {},
+                                                                                        },
+                                                                                },
+                                                                        }),
+                                                                .span = {},
+                                                            }),
+                .span = {},
+                .attributes = {},
+                .is_runtime = false,
+                .generic_params = {},
+                .where_clause = {},
+            }, }
+    };
+
+    must_fail_program_with_message(
+        program,
+        "explicit generic arguments are only supported in function call or type positions");
+}
+
 // ─── Enum variant reference ───────────────────────────────────────────────────
 
 static void test_enum_variant_ref() {
@@ -1151,6 +1299,8 @@ int main() {
     test_call_arg_type_error();
     test_call_explicit_generic_args();
     test_call_infers_generic_args_from_arguments();
+    test_path_expr_rejects_bare_generic_args();
+    test_path_expr_rejects_enum_variant_generic_args();
     test_enum_variant_ref();
     test_unknown_variant_error();
     test_struct_init();
