@@ -503,8 +503,8 @@ static void test_never_call_seals_block() {
 
     const auto cond =
         cstc::tyir::make_ty_expr(span, cstc::tyir::LocalRef{b}, cstc::tyir::ty::bool_());
-    const auto call =
-        cstc::tyir::make_ty_expr(span, cstc::tyir::TyCall{panic_now, {}}, cstc::tyir::ty::never());
+    const auto call = cstc::tyir::make_ty_expr(
+        span, cstc::tyir::TyCall{panic_now, {}, {}}, cstc::tyir::ty::never());
     const auto then_block = std::make_shared<cstc::tyir::TyBlock>(cstc::tyir::TyBlock{
         {cstc::tyir::TyExprStmt{call, span}},
         std::nullopt,

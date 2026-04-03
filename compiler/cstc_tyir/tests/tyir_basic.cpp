@@ -46,6 +46,17 @@ static void test_ty_named() {
     assert(t != ty::named(Symbol::intern("Color")));
 }
 
+static void test_ty_named_with_generic_args() {
+    const Symbol option = Symbol::intern("Option");
+    const Ty t = ty::named(option, kInvalidSymbol, ValueSemantics::Move, false, {ty::num()});
+    assert(t.is_named());
+    assert(t.generic_args.size() == 1);
+    assert(t.generic_args[0] == ty::num());
+    assert(t.display() == "Option<num>");
+    assert(t == ty::named(option, kInvalidSymbol, ValueSemantics::Move, false, {ty::num()}));
+    assert(t != ty::named(option, kInvalidSymbol, ValueSemantics::Move, false, {ty::bool_()}));
+}
+
 static void test_runtime_ty() {
     const Symbol handle = Symbol::intern("Handle");
     const Ty runtime_handle = ty::named(handle, kInvalidSymbol, ValueSemantics::Move, true);
@@ -151,6 +162,7 @@ int main() {
     test_ty_primitives();
     test_ty_ref();
     test_ty_named();
+    test_ty_named_with_generic_args();
     test_runtime_ty();
     test_named_shape_distinguishes_nominal_types();
     test_ty_equality_distinguishes_value_semantics();

@@ -36,11 +36,31 @@ static void must_fail_with_message(const char* source, const char* expected_mess
     assert(tyir.error().message.find(expected_message_part) != std::string::npos);
 }
 
+static void must_fail_program_with_message(
+    const cstc::ast::Program& program, const char* expected_message_part) {
+    const auto tyir = lower_program(program);
+    assert(!tyir.has_value());
+    assert(tyir.error().message.find(expected_message_part) != std::string::npos);
+}
+
 static const TyFnDecl& first_fn(const TyProgram& prog) {
     for (const auto& item : prog.items)
         if (const auto* fn = std::get_if<TyFnDecl>(&item))
             return *fn;
     assert(false && "no function found in program");
+    __builtin_unreachable();
+}
+
+static const TyFnDecl& second_fn(const TyProgram& prog) {
+    std::size_t seen = 0;
+    for (const auto& item : prog.items) {
+        if (const auto* fn = std::get_if<TyFnDecl>(&item)) {
+            if (seen == 1)
+                return *fn;
+            ++seen;
+        }
+    }
+    assert(false && "second function not found in program");
     __builtin_unreachable();
 }
 
@@ -803,10 +823,163 @@ static void test_call_arg_type_error() {
     must_fail("fn g(x: num) -> num { x } fn f() -> num { g(true) }");
 }
 
-static void test_call_explicit_generic_args_not_supported_yet() {
-    must_fail_with_message(
-        "fn id(x: num) -> num { x } fn f() -> num { id::<num>(1) }",
-        "explicit generic arguments in function calls are not supported yet");
+static void test_call_explicit_generic_args() {
+    const auto prog = must_lower("fn id<T>(x: T) -> T { x } fn f() -> num { id::<num>(1) }");
+    const auto& tail = *second_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+    const auto& call = std::get<TyCall>(tail->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+}
+
+static void test_call_infers_generic_args_from_arguments() {
+    const auto prog = must_lower("fn id<T>(x: T) -> T { x } fn f() -> num { id(1) }");
+    const auto& tail = *second_fn(prog).body->tail;
+    assert(tail->ty == ty::num());
+    const auto& call = std::get<TyCall>(tail->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+}
+
+static void test_path_expr_rejects_bare_generic_args() {
+    const Symbol fn_name = Symbol::intern("f");
+    const Symbol local_name = Symbol::intern("x");
+    cstc::ast::Program program{
+        .items = {cstc::ast::FnDecl{
+            .is_public = false,
+            .name = fn_name,
+            .display_name = fn_name,
+            .params = {},
+            .return_type =
+                cstc::ast::TypeRef{
+                    .kind = cstc::ast::TypeKind::Num,
+                    .symbol = Symbol::intern("num"),
+                    .display_name = Symbol::intern("num"),
+                    .pointee = nullptr,
+                    .is_runtime = false,
+                    .generic_args = {},
+                },
+            .body = std::make_shared<cstc::ast::BlockExpr>(cstc::ast::BlockExpr{
+                .statements = {},
+                .tail = cstc::ast::make_expr(
+                    {},
+                    cstc::ast::PathExpr{
+                        .head = local_name,
+                        .tail = std::nullopt,
+                        .display_head = local_name,
+                        .generic_args = {cstc::ast::TypeRef{
+                            .kind = cstc::ast::TypeKind::Num,
+                            .symbol = Symbol::intern("num"),
+                            .display_name = Symbol::intern("num"),
+                            .pointee = nullptr,
+                            .is_runtime = false,
+                            .generic_args = {},
+                        }},
+                    }),
+                .span = {},
+            }),
+            .span = {},
+            .attributes = {},
+            .is_runtime = false,
+            .generic_params = {},
+            .where_clause = {},
+        }}};
+
+    must_fail_program_with_message(
+        program,
+        "explicit generic arguments are only supported in function call or type positions");
+}
+
+static void test_path_expr_rejects_enum_variant_generic_args() {
+    const Symbol enum_name = Symbol::intern("Result");
+    const Symbol variant_name = Symbol::intern("Ok");
+    const Symbol fn_name = Symbol::intern("f");
+    cstc::ast::Program program{
+        .items = {
+                  cstc::ast::EnumDecl{
+                .is_public = false,
+                .name = enum_name,
+                .display_name = enum_name,
+                .variants = {cstc::ast::EnumVariant{
+                    .name = variant_name,
+                    .discriminant = std::nullopt,
+                    .span = {},
+                }},
+                .span = {},
+                .attributes = {},
+                .generic_params = {},
+                .where_clause = {},
+            }, cstc::ast::FnDecl{
+                .is_public = false,
+                .name = fn_name,
+                .display_name = fn_name,
+                .params = {},
+                .return_type =
+                    cstc::ast::TypeRef{
+                        .kind = cstc::ast::TypeKind::Named,
+                        .symbol = enum_name,
+                        .display_name = enum_name,
+                        .pointee = nullptr,
+                        .is_runtime = false,
+                        .generic_args = {},
+                    },
+                .body = std::make_shared<cstc::ast::
+                                             BlockExpr>(cstc::ast::
+                                                            BlockExpr{
+                                                                .statements = {},
+                                                                .tail = cstc::ast::make_expr(
+                                                                    {},
+                                                                    cstc::ast::
+                                                                        PathExpr{
+                                                                            .head = enum_name,
+                                                                            .tail = variant_name,
+                                                                            .display_head =
+                                                                                enum_name,
+                                                                            .generic_args =
+                                                                                {
+                                                                                    cstc::
+                                                                                        ast::TypeRef{
+                                                                                            .kind = cstc::ast::TypeKind::Num,
+                                                                                            .symbol = Symbol::intern(
+                                                                                                "nu"
+                                                                                                "m"),
+                                                                                            .display_name =
+                                                                                                Symbol::intern("num"),
+                                                                                            .pointee =
+                                                                                                nullptr,
+                                                                                            .is_runtime = false,
+                                                                                            .generic_args =
+                                                                                                {},
+                                                                                        },
+                                                                                    cstc::
+                                                                                        ast::TypeRef{
+                                                                                            .kind = cstc::ast::TypeKind::Str,
+                                                                                            .symbol = Symbol::intern(
+                                                                                                "st"
+                                                                                                "r"),
+                                                                                            .display_name =
+                                                                                                Symbol::intern("str"),
+                                                                                            .pointee =
+                                                                                                nullptr,
+                                                                                            .is_runtime = false,
+                                                                                            .generic_args =
+                                                                                                {},
+                                                                                        },
+                                                                                },
+                                                                        }),
+                                                                .span = {},
+                                                            }),
+                .span = {},
+                .attributes = {},
+                .is_runtime = false,
+                .generic_params = {},
+                .where_clause = {},
+            }, }
+    };
+
+    must_fail_program_with_message(
+        program,
+        "explicit generic arguments are only supported in function call or type positions");
 }
 
 // ─── Enum variant reference ───────────────────────────────────────────────────
@@ -835,6 +1008,54 @@ static void test_struct_init() {
     const auto& tail = *first_fn(prog).body->tail;
     assert(tail->ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy));
     assert(std::holds_alternative<TyStructInit>(tail->node));
+}
+
+static void test_generic_struct_init() {
+    const auto prog = must_lower(
+        "struct Box<T> { value: T }"
+        "fn wrap() -> Box<num> { Box<num> { value: 0 } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    const Ty expected =
+        ty::named(Symbol::intern("Box"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()});
+    assert(tail->ty == expected);
+    const auto& init = std::get<TyStructInit>(tail->node);
+    assert(init.generic_args.size() == 1);
+    assert(init.generic_args[0] == ty::num());
+}
+
+static void test_generic_struct_specialization_tracks_move_semantics() {
+    must_fail_with_message(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "struct Box<T> { value: T }"
+        "fn f() { let b: Box<str> = Box<str> { value: to_str(1) }; let c: Box<str> = b; let d: "
+        "Box<str> = b; }",
+        "use of moved value 'b'");
+}
+
+static void test_generic_struct_specialization_keeps_copy_semantics() {
+    const auto prog = must_lower(
+        "struct Box<T> { value: T }"
+        "fn f() { let b: Box<num> = Box<num> { value: 1 }; let c: Box<num> = b; let d: Box<num> "
+        "= b; }");
+    const auto& body = *first_fn(prog).body;
+    const auto& copy_stmt = std::get<TyLetStmt>(body.stmts[2]);
+    assert(
+        copy_stmt.ty
+        == ty::named(
+            Symbol::intern("Box"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()}));
+    assert(std::holds_alternative<LocalRef>(copy_stmt.init->node));
+    assert(std::get<LocalRef>(copy_stmt.init->node).use_kind == ValueUseKind::Copy);
+}
+
+static void test_generic_fn_return_reannotates_specialized_semantics() {
+    must_fail_with_message(
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn id<T>(value: T) -> T { value }"
+        "struct Box<T> { value: T }"
+        "fn f() { let b: Box<str> = id::<Box<str>>(Box<str> { value: to_str(1) }); let c: Box<str> "
+        "= b; let d: "
+        "Box<str> = b; }",
+        "use of moved value 'b'");
 }
 
 static void test_struct_init_field_type_error() {
@@ -1076,10 +1297,17 @@ int main() {
     test_call_undefined_fn_error();
     test_call_arg_count_error();
     test_call_arg_type_error();
-    test_call_explicit_generic_args_not_supported_yet();
+    test_call_explicit_generic_args();
+    test_call_infers_generic_args_from_arguments();
+    test_path_expr_rejects_bare_generic_args();
+    test_path_expr_rejects_enum_variant_generic_args();
     test_enum_variant_ref();
     test_unknown_variant_error();
     test_struct_init();
+    test_generic_struct_init();
+    test_generic_struct_specialization_tracks_move_semantics();
+    test_generic_struct_specialization_keeps_copy_semantics();
+    test_generic_fn_return_reannotates_specialized_semantics();
     test_struct_init_field_type_error();
     test_struct_init_unknown_field_error();
     test_struct_init_duplicate_field_error();

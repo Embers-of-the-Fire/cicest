@@ -153,6 +153,14 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 indent(out, level);
                 out << "TyStructInit(" << node.type_name.as_str() << "): " << expr->ty.display()
                     << "\n";
+                if (!node.generic_args.empty()) {
+                    indent(out, level + 1);
+                    out << "GenericArgs\n";
+                    for (const Ty& arg : node.generic_args) {
+                        indent(out, level + 2);
+                        out << arg.display() << "\n";
+                    }
+                }
                 for (const TyStructInitField& field : node.fields) {
                     indent(out, level + 1);
                     out << field.name.as_str() << ":\n";
@@ -179,6 +187,14 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
             } else if constexpr (std::is_same_v<N, TyCall>) {
                 indent(out, level);
                 out << "TyCall(" << node.fn_name.as_str() << "): " << expr->ty.display() << "\n";
+                if (!node.generic_args.empty()) {
+                    indent(out, level + 1);
+                    out << "GenericArgs\n";
+                    for (const Ty& arg : node.generic_args) {
+                        indent(out, level + 2);
+                        out << arg.display() << "\n";
+                    }
+                }
                 for (const TyExprPtr& arg : node.args) {
                     indent(out, level + 1);
                     out << "Arg\n";
@@ -265,10 +281,20 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
 
             if constexpr (std::is_same_v<T, TyStructDecl>) {
                 indent(out, level);
+                out << "TyStructDecl " << node.name.as_str();
+                cstc::ast::detail::print_generic_params(out, node.generic_params);
                 if (node.is_zst) {
-                    out << "TyStructDecl " << node.name.as_str() << " ;\n";
+                    if (node.where_clause.empty()) {
+                        out << " ;\n";
+                    } else {
+                        out << "\n";
+                        cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
+                        indent(out, level);
+                        out << ";\n";
+                    }
                 } else {
-                    out << "TyStructDecl " << node.name.as_str() << "\n";
+                    out << "\n";
+                    cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
                     for (const TyFieldDecl& field : node.fields) {
                         indent(out, level + 1);
                         out << field.name.as_str() << ": " << field.ty.display() << "\n";
@@ -276,7 +302,10 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 }
             } else if constexpr (std::is_same_v<T, TyEnumDecl>) {
                 indent(out, level);
-                out << "TyEnumDecl " << node.name.as_str() << "\n";
+                out << "TyEnumDecl " << node.name.as_str();
+                cstc::ast::detail::print_generic_params(out, node.generic_params);
+                out << "\n";
+                cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
                 for (const TyEnumVariant& variant : node.variants) {
                     indent(out, level + 1);
                     out << variant.name.as_str();

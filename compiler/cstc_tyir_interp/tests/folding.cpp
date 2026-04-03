@@ -64,6 +64,11 @@ static const TyCall& require_call(const TyExprPtr& expr) {
     return std::get<TyCall>(expr->node);
 }
 
+static const TyStructInit& require_struct_init(const TyExprPtr& expr) {
+    assert(std::holds_alternative<TyStructInit>(expr->node));
+    return std::get<TyStructInit>(expr->node);
+}
+
 static void test_const_function_call_folds_to_literal() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -156,6 +161,30 @@ fn main() {
     const TyLiteral& literal = require_literal(require_tail(find_fn(program, "render")));
     assert(literal.kind == TyLiteral::Kind::OwnedStr);
     assert(literal.symbol.as_str() == std::string_view{"\"42\""});
+}
+
+static void test_generic_struct_materialization_substitutes_field_types() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+struct Box<T> {
+    value: T
+}
+
+fn wrap() -> Box<num> {
+    Box<num> { value: 1 }
+}
+)");
+
+    const TyStructInit& init = require_struct_init(require_tail(find_fn(program, "wrap")));
+    assert(init.generic_args.size() == 1);
+    assert(init.generic_args[0] == ty::num());
+    assert(init.fields.size() == 1);
+    assert(init.fields[0].name == Symbol::intern("value"));
+    assert(init.fields[0].value->ty == ty::num());
+
+    const TyLiteral& value = require_literal(init.fields[0].value);
+    assert(value.kind == TyLiteral::Kind::Num);
+    assert(value.symbol.as_str() == std::string_view{"1"});
 }
 
 static void test_string_intrinsics_fold_to_owned_string() {
@@ -772,6 +801,7 @@ int main() {
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
     test_move_only_local_and_borrow_can_fold();
     test_move_only_return_materializes_owned_string();
+    test_generic_struct_materialization_substitutes_field_types();
     test_string_intrinsics_fold_to_owned_string();
     test_assert_intrinsics_fold_to_unit();
     test_borrowed_str_free_intrinsic_is_noop();
