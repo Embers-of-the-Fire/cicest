@@ -251,7 +251,8 @@ static void test_fn_where_clause_rejects_parameter_references() {
 
 static void test_struct_where_clause_rejects_return() {
     must_fail_with_message(
-        "struct Box<T> where return { value: T }", "where clauses cannot contain 'return'");
+        "struct Box<T> where if true { return true; } else { true } { value: T }",
+        "where clauses cannot contain 'return'");
 }
 
 static void test_fn_where_clause_rejects_return() {
