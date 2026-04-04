@@ -543,6 +543,14 @@ struct TyBlock {
     cstc::span::SourceSpan span;
 };
 
+/// Typed generic constraint attached to a generic declaration.
+struct TyGenericConstraint {
+    /// Type-annotated constraint expression.
+    TyExprPtr expr;
+    /// Source location for the full constraint.
+    cstc::span::SourceSpan span;
+};
+
 // ─── Item declarations ────────────────────────────────────────────────────────
 
 /// Typed named field declaration inside a struct.
@@ -569,6 +577,8 @@ struct TyStructDecl {
     cstc::span::SourceSpan span;
     /// Optional generic `where` constraints preserved from the AST.
     std::vector<cstc::ast::GenericConstraint> where_clause;
+    /// Lowered generic `where` constraints used by later evaluation passes.
+    std::vector<TyGenericConstraint> lowered_where_clause;
 };
 
 /// Typed fieldless enum variant.
@@ -593,6 +603,8 @@ struct TyEnumDecl {
     cstc::span::SourceSpan span;
     /// Optional generic `where` constraints preserved from the AST.
     std::vector<cstc::ast::GenericConstraint> where_clause;
+    /// Lowered generic `where` constraints used by later evaluation passes.
+    std::vector<TyGenericConstraint> lowered_where_clause;
 };
 
 /// Typed function parameter declaration.
@@ -629,6 +641,8 @@ struct TyFnDecl {
     bool is_runtime = false;
     /// Optional generic `where` constraints preserved from the AST.
     std::vector<cstc::ast::GenericConstraint> where_clause;
+    /// Lowered generic `where` constraints used by later evaluation passes.
+    std::vector<TyGenericConstraint> lowered_where_clause;
 };
 
 /// Typed extern function declaration (no body).

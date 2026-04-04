@@ -67,15 +67,29 @@ static void test_zst_struct() {
 }
 
 static void test_generic_struct_decl_preserves_metadata_and_field_type() {
-    const auto prog = must_lower("struct Box<T> where ready { value: T }");
+    const auto prog = must_lower("struct Box<T> where true { value: T }");
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyStructDecl>(prog.items[0]);
     assert(decl.generic_params.size() == 1);
     assert(decl.generic_params[0].name == Symbol::intern("T"));
     assert(decl.where_clause.size() == 1);
+    assert(decl.lowered_where_clause.size() == 1);
     assert(decl.fields.size() == 1);
     assert(decl.fields[0].ty.name == Symbol::intern("T"));
     assert(decl.fields[0].ty.generic_args.empty());
+}
+
+static void test_generic_struct_where_clause_lowers_generic_type_args() {
+    const auto prog = must_lower(
+        "fn helper<T>() -> bool { true }"
+        "struct Box<T> where helper::<T>() { value: T }");
+    assert(prog.items.size() == 2);
+    const auto& decl = std::get<TyStructDecl>(prog.items[1]);
+    assert(decl.lowered_where_clause.size() == 1);
+    const auto& call = std::get<TyCall>(decl.lowered_where_clause[0].expr->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0].name == Symbol::intern("T"));
+    assert(call.generic_args[0].generic_args.empty());
 }
 
 static void test_struct_with_named_field() {
@@ -123,13 +137,14 @@ static void test_duplicate_enum_name_error() {
 }
 
 static void test_generic_enum_decl_preserves_metadata() {
-    const auto prog = must_lower("enum Result<T, E> where ready { Ok, Err }");
+    const auto prog = must_lower("enum Result<T, E> where true { Ok, Err }");
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyEnumDecl>(prog.items[0]);
     assert(decl.generic_params.size() == 2);
     assert(decl.generic_params[0].name == Symbol::intern("T"));
     assert(decl.generic_params[1].name == Symbol::intern("E"));
     assert(decl.where_clause.size() == 1);
+    assert(decl.lowered_where_clause.size() == 1);
 }
 
 static void test_enum_struct_name_collision_error() {
@@ -216,15 +231,73 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
 }
 
 static void test_fn_preserves_generic_metadata() {
-    const auto prog = must_lower("fn id<T>(value: T) -> T where T, value == value { value }");
+    const auto prog = must_lower("fn id<T>(value: T) -> T where true, 1 == 1 { value }");
     const auto& fn = std::get<TyFnDecl>(prog.items[0]);
     assert(fn.generic_params.size() == 1);
     assert(fn.generic_params[0].name == Symbol::intern("T"));
     assert(fn.params[0].ty.name == Symbol::intern("T"));
     assert(fn.return_ty.name == Symbol::intern("T"));
     assert(fn.where_clause.size() == 2);
-    assert(std::holds_alternative<cstc::ast::PathExpr>(fn.where_clause[0].expr->node));
+    assert(fn.lowered_where_clause.size() == 2);
+    assert(std::holds_alternative<cstc::ast::LiteralExpr>(fn.where_clause[0].expr->node));
     assert(std::holds_alternative<cstc::ast::BinaryExpr>(fn.where_clause[1].expr->node));
+}
+
+static void test_fn_where_clause_rejects_parameter_references() {
+    must_fail_with_message(
+        "fn id<T>(value: T) -> T where value == value { value }",
+        "function where clauses cannot reference parameter 'value'");
+}
+
+static void test_struct_where_clause_rejects_return() {
+    must_fail_with_message(
+        "struct Box<T> where if true { return true; } else { true } { value: T }",
+        "where clauses cannot contain 'return'");
+}
+
+static void test_fn_where_clause_rejects_return() {
+    must_fail_with_message(
+        "fn id<T>(value: T) -> T where if true { return true; } else { true } { value }",
+        "where clauses cannot contain 'return'");
+}
+
+static void test_fn_where_clause_lowers_generic_type_args() {
+    const auto prog = must_lower(
+        "fn helper<T>() -> bool { true }"
+        "fn id<T>(value: T) -> T where helper::<T>() { value }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.lowered_where_clause.size() == 1);
+    const auto& call = std::get<TyCall>(fn.lowered_where_clause[0].expr->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0].name == Symbol::intern("T"));
+    assert(call.generic_args[0].generic_args.empty());
+}
+
+static void test_fn_where_clause_allows_call_callee_name_collision_with_parameter() {
+    const auto prog = must_lower(
+        "fn helper() -> bool { true }"
+        "fn id<T>(helper: T) -> T where helper() { helper }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.lowered_where_clause.size() == 1);
+    const auto& call = std::get<TyCall>(fn.lowered_where_clause[0].expr->node);
+    assert(call.fn_name == Symbol::intern("helper"));
+    assert(call.args.empty());
+}
+
+static void test_fn_where_clause_allows_generic_call_callee_name_collision_with_parameter() {
+    const auto prog = must_lower(
+        "fn helper<T>() -> bool { true }"
+        "fn id<T>(helper: T) -> T where helper::<T>() { helper }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.lowered_where_clause.size() == 1);
+    const auto& call = std::get<TyCall>(fn.lowered_where_clause[0].expr->node);
+    assert(call.fn_name == Symbol::intern("helper"));
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0].name == Symbol::intern("T"));
+    assert(call.generic_args[0].generic_args.empty());
 }
 
 static void test_generic_type_arguments_lower_in_signatures() {
@@ -387,6 +460,7 @@ int main() {
     test_struct_decl();
     test_zst_struct();
     test_generic_struct_decl_preserves_metadata_and_field_type();
+    test_generic_struct_where_clause_lowers_generic_type_args();
     test_struct_with_named_field();
     test_struct_undefined_type_error();
     test_struct_ref_field_error();
@@ -404,6 +478,12 @@ int main() {
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
     test_fn_preserves_generic_metadata();
+    test_fn_where_clause_rejects_parameter_references();
+    test_struct_where_clause_rejects_return();
+    test_fn_where_clause_rejects_return();
+    test_fn_where_clause_lowers_generic_type_args();
+    test_fn_where_clause_allows_call_callee_name_collision_with_parameter();
+    test_fn_where_clause_allows_generic_call_callee_name_collision_with_parameter();
     test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();
     test_runtime_return_type_mismatch_rejected();

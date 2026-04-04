@@ -35,6 +35,14 @@ static cstc::tyir_interp::EvalError must_fail_to_fold(const char* source) {
     return folded.error();
 }
 
+static cstc::tyir_builder::LowerError must_fail_to_lower(const char* source) {
+    const auto ast = cstc::parser::parse_source(source);
+    assert(ast.has_value());
+    const auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(!tyir.has_value());
+    return tyir.error();
+}
+
 static const TyFnDecl& find_fn(const TyProgram& program, std::string_view name) {
     const Symbol fn_name = Symbol::intern(name);
     for (const TyItem& item : program.items) {
@@ -237,6 +245,7 @@ static void test_borrowed_str_free_intrinsic_is_noop() {
         {},
         cstc::tyir_interp::detail::kDefaultEvalStepBudget,
         cstc::tyir_interp::detail::kDefaultEvalCallDepth,
+        {},
     };
     TyExternFnDecl decl;
     decl.name = Symbol::intern("str_free");
@@ -596,6 +605,7 @@ static void test_intrinsic_decl_arity_mismatch_reports_error() {
         {},
         cstc::tyir_interp::detail::kDefaultEvalStepBudget,
         cstc::tyir_interp::detail::kDefaultEvalCallDepth,
+        {},
     };
     TyExternFnDecl decl;
     decl.name = Symbol::intern("assert_eq");
@@ -795,6 +805,251 @@ static void test_numeric_equality_treats_nan_as_not_equal() {
         cstc::tyir_interp::detail::make_num(nan), cstc::tyir_interp::detail::make_num(nan)));
 }
 
+static void test_generic_where_true_allows_instantiation() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn always_true() -> bool {
+    true
+}
+
+fn id<T>(value: T) -> T where always_true() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"1"});
+}
+
+static void test_generic_where_false_reports_constraint_failure() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+fn always_false() -> bool {
+    false
+}
+
+fn id<T>(value: T) -> T where always_false() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'id'") != std::string::npos);
+}
+
+static void test_generic_where_parameter_references_are_rejected_while_lowering() {
+    SymbolSession session;
+    const auto error = must_fail_to_lower(R"(
+fn id<T>(value: T) -> T where value == value {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(
+        error.message.find("function where clauses cannot reference parameter 'value'")
+        != std::string::npos);
+}
+
+static void test_generic_where_runtime_call_reports_runtime_only() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+runtime fn runtime_true() -> bool {
+    true
+}
+
+fn id<T>(value: T) -> T where runtime_true() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("runtime-only behavior") != std::string::npos);
+    assert(error.message.find("function 'id'") != std::string::npos);
+}
+
+static void test_generic_where_runtime_loop_reports_runtime_only() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+runtime fn runtime_true() -> bool {
+    true
+}
+
+fn loop_true() -> bool {
+    loop {
+        runtime_true();
+    }
+}
+
+fn id<T>(value: T) -> T where loop_true() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("runtime-only behavior") != std::string::npos);
+    assert(error.message.find("function 'id'") != std::string::npos);
+}
+
+static void test_generic_where_runtime_while_reports_runtime_only() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold(R"(
+runtime fn runtime_true() -> bool {
+    true
+}
+
+fn while_true() -> bool {
+    while true {
+        runtime_true()
+    }
+    false
+}
+
+fn id<T>(value: T) -> T where while_true() {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("runtime-only behavior") != std::string::npos);
+    assert(error.message.find("function 'id'") != std::string::npos);
+}
+
+static void test_unused_generic_where_is_deferred_until_instantiation() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+fn id<T>(value: T) -> T where always_false::<T>() {
+    value
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
+static void test_generic_call_constraint_is_deferred_inside_generic_body() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+fn constrained<T>(value: T) -> T where always_false::<T>() {
+    value
+}
+
+fn wrapper<T>(value: T) -> T {
+    constrained::<T>(value)
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+fn constrained<T>(value: T) -> T where always_false::<T>() {
+    value
+}
+
+fn wrapper<T>(value: T) -> T {
+    constrained::<T>(value)
+}
+
+fn main() -> num {
+    wrapper(1)
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'constrained'") != std::string::npos);
+}
+
+static void test_generic_struct_constraint_is_deferred_inside_generic_body() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+struct Box<T> where always_false::<T>() {
+    value: T
+}
+
+fn make_box<T>(value: T) -> Box<T> {
+    Box<T> { value: value }
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+struct Box<T> where always_false::<T>() {
+    value: T
+}
+
+fn make_box<T>(value: T) -> Box<T> {
+    Box<T> { value: value }
+}
+
+fn main() -> num {
+    let b: Box<num> = make_box(1);
+    b.value
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("type 'Box'") != std::string::npos);
+}
+
 int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
@@ -831,5 +1086,14 @@ int main() {
     test_null_materialization_reports_error();
     test_comparison_requires_numeric_operands();
     test_numeric_equality_treats_nan_as_not_equal();
+    test_generic_where_true_allows_instantiation();
+    test_generic_where_false_reports_constraint_failure();
+    test_generic_where_parameter_references_are_rejected_while_lowering();
+    test_generic_where_runtime_call_reports_runtime_only();
+    test_generic_where_runtime_loop_reports_runtime_only();
+    test_generic_where_runtime_while_reports_runtime_only();
+    test_unused_generic_where_is_deferred_until_instantiation();
+    test_generic_call_constraint_is_deferred_inside_generic_body();
+    test_generic_struct_constraint_is_deferred_inside_generic_body();
     return 0;
 }
