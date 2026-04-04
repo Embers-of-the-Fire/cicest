@@ -145,6 +145,22 @@ static void test_print_generic_enum() {
     assert(contains(out, "TyEnumDecl Result<T, E>"));
 }
 
+static void test_print_lang_item_enum() {
+    TyEnumDecl decl;
+    decl.name = Symbol::intern("Constraint");
+    decl.lang_name = Symbol::intern("cstc_constraint");
+    decl.variants = {
+        TyEnumVariant{  Symbol::intern("Valid"), std::nullopt, {}},
+        TyEnumVariant{Symbol::intern("Invalid"), std::nullopt, {}},
+    };
+
+    TyProgram prog;
+    prog.items.push_back(std::move(decl));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyEnumDecl Constraint [[lang = \"cstc_constraint\"]]"));
+}
+
 static void test_print_enum_with_discriminant() {
     TyEnumDecl decl;
     decl.name = Symbol::intern("Status");
@@ -652,6 +668,7 @@ int main() {
     test_print_generic_zst_struct_where_clause();
     test_print_enum();
     test_print_generic_enum();
+    test_print_lang_item_enum();
     test_print_enum_with_discriminant();
     test_print_runtime_items();
     test_print_generic_fn_metadata();

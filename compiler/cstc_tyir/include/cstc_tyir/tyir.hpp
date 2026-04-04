@@ -567,6 +567,8 @@ struct TyFieldDecl {
 struct TyStructDecl {
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Optional lang item name for compiler-recognized types.
+    cstc::symbol::Symbol lang_name = cstc::symbol::kInvalidSymbol;
     /// Declared generic parameter list preserved from the AST.
     std::vector<cstc::ast::GenericParam> generic_params;
     /// Resolved named field list.
@@ -595,6 +597,8 @@ struct TyEnumVariant {
 struct TyEnumDecl {
     /// Enum type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Optional lang item name for compiler-recognized types.
+    cstc::symbol::Symbol lang_name = cstc::symbol::kInvalidSymbol;
     /// Declared generic parameter list preserved from the AST.
     std::vector<cstc::ast::GenericParam> generic_params;
     /// Declared variant list.
@@ -679,6 +683,8 @@ struct TyExternStructDecl {
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Optional lang item name for compiler-recognized types.
+    cstc::symbol::Symbol lang_name = cstc::symbol::kInvalidSymbol;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
 };

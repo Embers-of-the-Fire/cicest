@@ -1,3 +1,9 @@
+[[lang = "cstc_constraint"]]
+pub enum Constraint {
+    Valid,
+    Invalid,
+}
+
 [[lang = "cstc_std_print"]]
 pub runtime extern "lang" fn print(value: &str);
 [[lang = "cstc_std_println"]]
@@ -14,3 +20,5 @@ pub extern "lang" fn str_free(value: str);
 pub extern "lang" fn assert(condition: bool);
 [[lang = "cstc_std_assert_eq"]]
 pub extern "lang" fn assert_eq(a: num, b: num);
+[[lang = "cstc_std_constraint"]]
+pub extern "lang" fn constraint(value: bool) -> Constraint;

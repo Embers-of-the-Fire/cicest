@@ -53,6 +53,10 @@ struct TypeEnv {
     /// annotations but cannot be constructed via struct-init expressions.
     std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> extern_struct_names;
 
+    /// Maps lang item names to the named type declaration carrying them.
+    std::unordered_map<cstc::symbol::Symbol, cstc::symbol::Symbol, cstc::symbol::SymbolHash>
+        lang_type_names;
+
     /// Cached ownership classification for named type instantiations after field resolution.
     mutable std::unordered_map<std::string, tyir::ValueSemantics> named_semantics_cache;
     /// Recursion guard used while classifying aggregate types.
@@ -588,39 +592,50 @@ template <typename Decl>
     return std::nullopt;
 }
 
-/// Resolves the linked symbol name for an extern function declaration.
-[[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
-    resolve_extern_link_name(const ast::ExternFnDecl& decl) {
+[[nodiscard]] static std::expected<std::optional<cstc::symbol::Symbol>, LowerError>
+    resolve_lang_item_name(
+        const std::vector<ast::Attribute>& attributes, cstc::span::SourceSpan item_span,
+        std::string_view item_kind, bool require_lang_abi = false,
+        cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol) {
+    (void)item_span;
     const auto lang_attr_name = cstc::symbol::Symbol::intern("lang");
-    std::optional<cstc::symbol::Symbol> link_name;
+    std::optional<cstc::symbol::Symbol> lang_name;
 
-    for (const ast::Attribute& attr : decl.attributes) {
+    for (const ast::Attribute& attr : attributes) {
         if (attr.name != lang_attr_name)
             continue;
 
-        if (decl.abi.as_str() != "lang") {
+        if (require_lang_abi && abi.as_str() != "lang") {
             return std::unexpected(
                 LowerError{
                     attr.span,
-                    "attribute `lang` is only supported on `extern \"lang\" fn` declarations",
+                    "attribute `lang` is only supported on `extern \"lang\" "
+                        + std::string(item_kind) + "` declarations",
                 });
         }
-        if (!attr.value.has_value()) {
+        if (!attr.value.has_value())
             return std::unexpected(
                 LowerError{attr.span, "attribute `lang` requires a string value"});
-        }
         if (attr.value->as_str().empty()) {
             return std::unexpected(
                 LowerError{attr.span, "attribute `lang` requires a non-empty string value"});
         }
-        if (link_name.has_value()) {
+        if (lang_name.has_value())
             return std::unexpected(LowerError{attr.span, "duplicate `lang` attribute"});
-        }
 
-        link_name = *attr.value;
+        lang_name = *attr.value;
     }
 
-    return link_name.value_or(source_symbol(decl.display_name, decl.name));
+    return lang_name;
+}
+
+/// Resolves the linked symbol name for an extern function declaration.
+[[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
+    resolve_extern_link_name(const ast::ExternFnDecl& decl) {
+    auto link_name = resolve_lang_item_name(decl.attributes, decl.span, "fn", true, decl.abi);
+    if (!link_name)
+        return std::unexpected(std::move(link_name.error()));
+    return link_name->value_or(source_symbol(decl.display_name, decl.name));
 }
 
 // ─── Type resolution ─────────────────────────────────────────────────────────
@@ -2409,6 +2424,20 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                     struct_decl->span,
                     "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
 
+            auto lang_name = detail::resolve_lang_item_name(
+                struct_decl->attributes, struct_decl->span, "struct");
+            if (!lang_name)
+                return std::unexpected(std::move(lang_name.error()));
+            if (lang_name->has_value()) {
+                const auto [it, inserted] =
+                    env.lang_type_names.emplace(**lang_name, struct_decl->name);
+                if (!inserted) {
+                    return detail::make_error(
+                        struct_decl->span,
+                        "duplicate lang item '" + std::string((**lang_name).as_str()) + "'");
+                }
+            }
+
             const auto insert_result =
                 env.struct_fields.emplace(struct_decl->name, std::vector<tyir::TyFieldDecl>{});
             if (!insert_result.second)
@@ -2423,6 +2452,20 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     enum_decl->span,
                     "duplicate enum name '" + detail::display_decl_name(*enum_decl) + "'");
+
+            auto lang_name =
+                detail::resolve_lang_item_name(enum_decl->attributes, enum_decl->span, "enum");
+            if (!lang_name)
+                return std::unexpected(std::move(lang_name.error()));
+            if (lang_name->has_value()) {
+                const auto [it, inserted] =
+                    env.lang_type_names.emplace(**lang_name, enum_decl->name);
+                if (!inserted) {
+                    return detail::make_error(
+                        enum_decl->span,
+                        "duplicate lang item '" + std::string((**lang_name).as_str()) + "'");
+                }
+            }
 
             const auto insert_result =
                 env.enum_variants.emplace(enum_decl->name, std::vector<tyir::TyEnumVariant>{});
@@ -2442,6 +2485,20 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     extern_struct->span,
                     "duplicate type name '" + detail::display_decl_name(*extern_struct) + "'");
+
+            auto lang_name = detail::resolve_lang_item_name(
+                extern_struct->attributes, extern_struct->span, "struct", true, extern_struct->abi);
+            if (!lang_name)
+                return std::unexpected(std::move(lang_name.error()));
+            if (lang_name->has_value()) {
+                const auto [it, inserted] =
+                    env.lang_type_names.emplace(**lang_name, extern_struct->name);
+                if (!inserted) {
+                    return detail::make_error(
+                        extern_struct->span,
+                        "duplicate lang item '" + std::string((**lang_name).as_str()) + "'");
+                }
+            }
 
             env.extern_struct_names.insert(extern_struct->name);
             env.type_generic_arity.emplace(extern_struct->name, 0);
@@ -2526,6 +2583,9 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
         if (const auto* s = std::get_if<ast::StructDecl>(&item)) {
             tyir::TyStructDecl ty_decl;
             ty_decl.name = s->name;
+            if (auto lang_name = detail::resolve_lang_item_name(s->attributes, s->span, "struct");
+                lang_name && lang_name->has_value())
+                ty_decl.lang_name = **lang_name;
             ty_decl.generic_params = s->generic_params;
             ty_decl.is_zst = s->is_zst;
             ty_decl.span = s->span;
@@ -2540,6 +2600,9 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
         } else if (const auto* e = std::get_if<ast::EnumDecl>(&item)) {
             tyir::TyEnumDecl ty_decl;
             ty_decl.name = e->name;
+            if (auto lang_name = detail::resolve_lang_item_name(e->attributes, e->span, "enum");
+                lang_name && lang_name->has_value())
+                ty_decl.lang_name = **lang_name;
             ty_decl.generic_params = e->generic_params;
             ty_decl.span = e->span;
             ty_decl.variants = env.enum_variants.at(e->name);
@@ -2580,6 +2643,10 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             tyir::TyExternStructDecl ty_decl;
             ty_decl.abi = ext_struct->abi;
             ty_decl.name = ext_struct->name;
+            if (auto lang_name = detail::resolve_lang_item_name(
+                    ext_struct->attributes, ext_struct->span, "struct", true, ext_struct->abi);
+                lang_name && lang_name->has_value())
+                ty_decl.lang_name = **lang_name;
             ty_decl.span = ext_struct->span;
             result.items.push_back(std::move(ty_decl));
         }

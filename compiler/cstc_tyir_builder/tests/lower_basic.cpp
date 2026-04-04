@@ -79,6 +79,13 @@ static void test_generic_struct_decl_preserves_metadata_and_field_type() {
     assert(decl.fields[0].ty.generic_args.empty());
 }
 
+static void test_struct_decl_preserves_lang_item_name() {
+    const auto prog = must_lower("[[lang = \"cstc_marker\"]] struct Marker;");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyStructDecl>(prog.items[0]);
+    assert(decl.lang_name == Symbol::intern("cstc_marker"));
+}
+
 static void test_generic_struct_where_clause_lowers_generic_type_args() {
     const auto prog = must_lower(
         "fn helper<T>() -> bool { true }"
@@ -145,6 +152,14 @@ static void test_generic_enum_decl_preserves_metadata() {
     assert(decl.generic_params[1].name == Symbol::intern("E"));
     assert(decl.where_clause.size() == 1);
     assert(decl.lowered_where_clause.size() == 1);
+}
+
+static void test_enum_decl_preserves_lang_item_name() {
+    const auto prog =
+        must_lower("[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyEnumDecl>(prog.items[0]);
+    assert(decl.lang_name == Symbol::intern("cstc_constraint"));
 }
 
 static void test_enum_struct_name_collision_error() {
@@ -460,6 +475,7 @@ int main() {
     test_struct_decl();
     test_zst_struct();
     test_generic_struct_decl_preserves_metadata_and_field_type();
+    test_struct_decl_preserves_lang_item_name();
     test_generic_struct_where_clause_lowers_generic_type_args();
     test_struct_with_named_field();
     test_struct_undefined_type_error();
@@ -468,6 +484,7 @@ int main() {
     test_enum_decl();
     test_duplicate_enum_name_error();
     test_generic_enum_decl_preserves_metadata();
+    test_enum_decl_preserves_lang_item_name();
     test_enum_struct_name_collision_error();
     test_struct_enum_name_collision_error();
     test_fn_no_return();

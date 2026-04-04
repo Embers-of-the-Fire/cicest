@@ -282,6 +282,8 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
             if constexpr (std::is_same_v<T, TyStructDecl>) {
                 indent(out, level);
                 out << "TyStructDecl " << node.name.as_str();
+                if (node.lang_name.is_valid())
+                    out << " [[lang = \"" << node.lang_name.as_str() << "\"]]";
                 cstc::ast::detail::print_generic_params(out, node.generic_params);
                 if (node.is_zst) {
                     if (node.where_clause.empty()) {
@@ -303,6 +305,8 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
             } else if constexpr (std::is_same_v<T, TyEnumDecl>) {
                 indent(out, level);
                 out << "TyEnumDecl " << node.name.as_str();
+                if (node.lang_name.is_valid())
+                    out << " [[lang = \"" << node.lang_name.as_str() << "\"]]";
                 cstc::ast::detail::print_generic_params(out, node.generic_params);
                 out << "\n";
                 cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
@@ -339,6 +343,9 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
             } else if constexpr (std::is_same_v<T, TyExternStructDecl>) {
                 indent(out, level);
                 out << "TyExternStructDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()
+                    << (node.lang_name.is_valid()
+                            ? " [[lang = \"" + std::string(node.lang_name.as_str()) + "\"]]"
+                            : "")
                     << "\n";
             }
         },

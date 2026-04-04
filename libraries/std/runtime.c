@@ -13,6 +13,7 @@
 ///   cstc_std_str_free(ptr)       → void
 ///   cstc_std_assert(i1)          → void
 ///   cstc_std_assert_eq(double,double) → void
+///   cstc_std_constraint(i1)      → { i32 }
 
 #include <math.h>
 #include <stdbool.h>
@@ -27,6 +28,10 @@ typedef struct cstc_rt_str {
     uint64_t len;
     uint8_t owns_bytes;
 } cstc_rt_str;
+
+typedef struct cstc_rt_constraint {
+    int32_t discriminant;
+} cstc_rt_constraint;
 
 static char cstc_rt_empty_data[] = "";
 
@@ -142,4 +147,10 @@ void cstc_std_assert_eq(double a, double b) {
         fprintf(stderr, "assertion failed: %g != %g\n", a, b);
         exit(1);
     }
+}
+
+cstc_rt_constraint cstc_std_constraint(int value) {
+    return (cstc_rt_constraint){
+        .discriminant = value ? 0 : 1,
+    };
 }
