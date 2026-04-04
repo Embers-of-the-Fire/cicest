@@ -388,5 +388,4 @@ LIR is designed for straightforward translation to LLVM IR:
 - Moves from projected places are not yet supported; only whole-local moves are
   lowered.
 - No first-class functions or closures — all calls are direct.
-- No generics (none in Cicest source language).
 - Enum variants are fieldless (no data-carrying variants).
