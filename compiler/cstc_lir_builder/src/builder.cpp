@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <cstc_symbol/symbol.hpp>
@@ -950,7 +951,7 @@ using TypeSubstitution =
     }
     }
 
-    return "unknown";
+    std::unreachable();
 }
 
 [[nodiscard]] static std::string instantiation_cache_key(
