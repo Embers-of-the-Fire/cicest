@@ -841,6 +841,38 @@ static void test_call_infers_generic_args_from_arguments() {
     assert(call.generic_args[0] == ty::num());
 }
 
+static void test_let_annotation_resolves_deferred_call_in_block_tail() {
+    const auto prog = must_lower(
+        "fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn f() { let x: num = { make_default(true) }; }");
+    const auto& stmt = std::get<TyLetStmt>(second_fn(prog).body->stmts[0]);
+    assert(stmt.ty == ty::num());
+    assert(stmt.init->ty == ty::num());
+    const auto& block = *std::get<TyBlockPtr>(stmt.init->node);
+    assert(block.ty == ty::num());
+    assert(block.tail.has_value());
+    const auto& call = std::get<TyCall>((*block.tail)->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+}
+
+static void test_return_type_resolves_deferred_call_through_if_branches() {
+    const auto prog = must_lower(
+        "fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn f(cond: bool) -> num { return if cond { make_default(true) } else { 0 }; }");
+    const auto& stmt = std::get<TyExprStmt>(second_fn(prog).body->stmts[0]);
+    const auto& ret = std::get<TyReturn>(stmt.expr->node);
+    assert(ret.value.has_value());
+    const auto& if_expr = **ret.value;
+    assert(if_expr.ty == ty::num());
+    const auto& branch = std::get<TyIf>(if_expr.node);
+    assert(branch.then_block->ty == ty::num());
+    assert(branch.then_block->tail.has_value());
+    const auto& call = std::get<TyCall>((*branch.then_block->tail)->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+}
+
 static void test_path_expr_rejects_bare_generic_args() {
     const Symbol fn_name = Symbol::intern("f");
     const Symbol local_name = Symbol::intern("x");
@@ -1299,6 +1331,8 @@ int main() {
     test_call_arg_type_error();
     test_call_explicit_generic_args();
     test_call_infers_generic_args_from_arguments();
+    test_let_annotation_resolves_deferred_call_in_block_tail();
+    test_return_type_resolves_deferred_call_through_if_branches();
     test_path_expr_rejects_bare_generic_args();
     test_path_expr_rejects_enum_variant_generic_args();
     test_enum_variant_ref();

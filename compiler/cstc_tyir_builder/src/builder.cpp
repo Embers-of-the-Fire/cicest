@@ -770,6 +770,10 @@ struct LoweredPlace {
 [[nodiscard]] static std::expected<tyir::TyBlock, LowerError>
     lower_block(const ast::BlockExpr& block, LowerCtx& ctx);
 
+[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
+
+[[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
+
 [[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
     const tyir::TyExprPtr& expr, const tyir::Ty& expected_ty, LowerCtx& ctx);
 
@@ -1123,6 +1127,51 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
     if (expr == nullptr)
         return expr;
 
+    if (auto* block = std::get_if<tyir::TyBlockPtr>(&expr->node); block != nullptr) {
+        if (*block != nullptr && (*block)->tail.has_value()) {
+            auto resolved_tail = resolve_expr_against_type(*(*block)->tail, expected_ty, ctx);
+            if (!resolved_tail)
+                return std::unexpected(std::move(resolved_tail.error()));
+            (*block)->tail = std::move(*resolved_tail);
+            (*block)->ty =
+                block_can_fallthrough(**block) ? (*(*block)->tail)->ty : tyir::ty::never();
+            expr->ty = (*block)->ty;
+        }
+        return expr;
+    }
+
+    if (auto* if_expr = std::get_if<tyir::TyIf>(&expr->node); if_expr != nullptr) {
+        if (if_expr->then_block->tail.has_value()) {
+            auto resolved_then =
+                resolve_expr_against_type(*if_expr->then_block->tail, expected_ty, ctx);
+            if (!resolved_then)
+                return std::unexpected(std::move(resolved_then.error()));
+            if_expr->then_block->tail = std::move(*resolved_then);
+            if_expr->then_block->ty = block_can_fallthrough(*if_expr->then_block)
+                                        ? (*if_expr->then_block->tail)->ty
+                                        : tyir::ty::never();
+        }
+
+        if (if_expr->else_branch.has_value() && expr_can_fallthrough(*(*if_expr->else_branch))) {
+            auto resolved_else = resolve_expr_against_type(*if_expr->else_branch, expected_ty, ctx);
+            if (!resolved_else)
+                return std::unexpected(std::move(resolved_else.error()));
+            if_expr->else_branch = std::move(*resolved_else);
+        }
+
+        if (if_expr->else_branch.has_value()) {
+            const tyir::Ty else_ty = (*if_expr->else_branch)->ty;
+            const auto joined_ty = common_type(if_expr->then_block->ty, else_ty);
+            if (!joined_ty.has_value()) {
+                return make_error(
+                    expr->span, "'if' then-branch has type '" + if_expr->then_block->ty.display()
+                                    + "' but else-branch has type '" + else_ty.display() + "'");
+            }
+            expr->ty = *joined_ty;
+        }
+        return expr;
+    }
+
     const auto* deferred = std::get_if<tyir::TyDeferredGenericCall>(&expr->node);
     if (deferred == nullptr)
         return expr;
@@ -1270,6 +1319,126 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
     return lowered_constraints;
 }
 
+[[nodiscard]] static std::optional<cstc::symbol::Symbol> find_unresolved_deferred_generic_call(
+    const tyir::TyExprPtr& expr, const GenericParamSet& generic_params) {
+    if (expr == nullptr)
+        return std::nullopt;
+
+    return std::visit(
+        [&](const auto& node) -> std::optional<cstc::symbol::Symbol> {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (
+                std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
+                || std::is_same_v<Node, tyir::EnumVariantRef>
+                || std::is_same_v<Node, tyir::TyContinue>) {
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    auto unresolved =
+                        find_unresolved_deferred_generic_call(field.value, generic_params);
+                    if (unresolved.has_value())
+                        return unresolved;
+                }
+                return std::nullopt;
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                return find_unresolved_deferred_generic_call(node.rhs, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                auto lhs = find_unresolved_deferred_generic_call(node.lhs, generic_params);
+                if (lhs.has_value())
+                    return lhs;
+                return find_unresolved_deferred_generic_call(node.rhs, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                return find_unresolved_deferred_generic_call(node.base, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    auto unresolved = find_unresolved_deferred_generic_call(arg, generic_params);
+                    if (unresolved.has_value())
+                        return unresolved;
+                }
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                if (!type_depends_on_generic_params(expr->ty, generic_params))
+                    return node.fn_name;
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    auto unresolved = find_unresolved_deferred_generic_call(arg, generic_params);
+                    if (unresolved.has_value())
+                        return unresolved;
+                }
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                if (node == nullptr)
+                    return std::nullopt;
+                for (const tyir::TyStmt& stmt : node->stmts) {
+                    auto unresolved = std::visit(
+                        [&](const auto& stmt_node) -> std::optional<cstc::symbol::Symbol> {
+                            using StmtNode = std::decay_t<decltype(stmt_node)>;
+                            if constexpr (std::is_same_v<StmtNode, tyir::TyLetStmt>)
+                                return find_unresolved_deferred_generic_call(
+                                    stmt_node.init, generic_params);
+                            else
+                                return find_unresolved_deferred_generic_call(
+                                    stmt_node.expr, generic_params);
+                        },
+                        stmt);
+                    if (unresolved.has_value())
+                        return unresolved;
+                }
+                if (node->tail.has_value())
+                    return find_unresolved_deferred_generic_call(*node->tail, generic_params);
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                auto condition =
+                    find_unresolved_deferred_generic_call(node.condition, generic_params);
+                if (condition.has_value())
+                    return condition;
+                auto then_branch = find_unresolved_deferred_generic_call(
+                    node.then_block->tail.value_or(nullptr), generic_params);
+                if (then_branch.has_value())
+                    return then_branch;
+                if (node.else_branch.has_value())
+                    return find_unresolved_deferred_generic_call(*node.else_branch, generic_params);
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                return find_unresolved_deferred_generic_call(
+                    node.body->tail.value_or(nullptr), generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                auto condition =
+                    find_unresolved_deferred_generic_call(node.condition, generic_params);
+                if (condition.has_value())
+                    return condition;
+                return find_unresolved_deferred_generic_call(
+                    node.body->tail.value_or(nullptr), generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                if (node.init.has_value()) {
+                    auto init =
+                        find_unresolved_deferred_generic_call(node.init->init, generic_params);
+                    if (init.has_value())
+                        return init;
+                }
+                if (node.condition.has_value()) {
+                    auto condition =
+                        find_unresolved_deferred_generic_call(*node.condition, generic_params);
+                    if (condition.has_value())
+                        return condition;
+                }
+                if (node.step.has_value()) {
+                    auto step = find_unresolved_deferred_generic_call(*node.step, generic_params);
+                    if (step.has_value())
+                        return step;
+                }
+                return find_unresolved_deferred_generic_call(
+                    node.body->tail.value_or(nullptr), generic_params);
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>) {
+                if (node.value.has_value())
+                    return find_unresolved_deferred_generic_call(*node.value, generic_params);
+                return std::nullopt;
+            }
+        },
+        expr->node);
+}
+
 // ─── Statement lowering ──────────────────────────────────────────────────────
 
 [[nodiscard]] static std::expected<tyir::TyStmt, LowerError>
@@ -1300,6 +1469,13 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                                         + "', found '" + init->expr->ty.display() + "'");
                     binding_ty = *ann;
                 } else {
+                    if (auto unresolved =
+                            find_unresolved_deferred_generic_call(init->expr, ctx.generic_params);
+                        unresolved.has_value()) {
+                        return make_error(
+                            s.span, "cannot infer generic argument(s) for function '"
+                                        + std::string(unresolved->as_str()) + "'");
+                    }
                     binding_ty = init->expr->ty;
                 }
 
@@ -1330,14 +1506,19 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                 auto expr = lower_expr(s.expr, ctx);
                 if (!expr)
                     return std::unexpected(std::move(expr.error()));
+                if (auto unresolved =
+                        find_unresolved_deferred_generic_call(expr->expr, ctx.generic_params);
+                    unresolved.has_value()) {
+                    return make_error(
+                        s.span, "cannot infer generic argument(s) for function '"
+                                    + std::string(unresolved->as_str()) + "'");
+                }
                 release_temp_borrows(ctx, expr->temp_borrows);
                 return tyir::TyExprStmt{std::move(expr->expr), s.span};
             }
         },
         stmt);
 }
-
-[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
 
 [[nodiscard]] static bool stmt_can_fallthrough(const tyir::TyStmt& stmt) {
     return std::visit(
@@ -1350,8 +1531,6 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         },
         stmt);
 }
-
-[[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
 
 [[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr) {
     if (expr.ty.is_never())
@@ -2107,13 +2286,6 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         resolved_return_ty);
                 }
 
-                if (std::holds_alternative<tyir::TyDeferredGenericCall>(lowered_expr->node)
-                    && !type_depends_on_generic_params(lowered_expr->ty, ctx.generic_params)) {
-                    return make_error(
-                        expr->span,
-                        "cannot infer generic argument(s) for function '" + display_fn_name + "'");
-                }
-
                 auto lowered = LoweredExpr{
                     std::move(lowered_expr),
                     {},
@@ -2167,12 +2339,24 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                     const tyir::Ty& else_ty = else_val->expr->ty;
                     const auto joined_ty = common_type(then_ptr->ty, else_ty);
-                    if (!joined_ty.has_value())
-                        return make_error(
-                            expr->span, "'if' then-branch has type '" + then_ptr->ty.display()
-                                            + "' but else-branch has type '" + else_ty.display()
-                                            + "'");
-                    result_ty = *joined_ty;
+                    if (!joined_ty.has_value()) {
+                        const bool then_needs_context =
+                            find_unresolved_deferred_generic_call(
+                                then_ptr->tail.value_or(nullptr), ctx.generic_params)
+                                .has_value();
+                        const bool else_needs_context = find_unresolved_deferred_generic_call(
+                                                            else_val->expr, ctx.generic_params)
+                                                            .has_value();
+                        if (then_needs_context != else_needs_context)
+                            result_ty = then_needs_context ? else_ty : then_ptr->ty;
+                        else
+                            return make_error(
+                                expr->span, "'if' then-branch has type '" + then_ptr->ty.display()
+                                                + "' but else-branch has type '" + else_ty.display()
+                                                + "'");
+                    } else {
+                        result_ty = *joined_ty;
+                    }
 
                     if (auto merged =
                             merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
