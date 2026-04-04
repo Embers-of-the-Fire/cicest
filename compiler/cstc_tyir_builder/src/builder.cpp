@@ -1349,7 +1349,7 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
 }
 
 [[nodiscard]] static std::optional<cstc::symbol::Symbol> find_unresolved_deferred_generic_call(
-    const tyir::TyExprPtr& expr, const GenericParamSet& generic_params) {
+    const tyir::TyExprPtr& expr, const TypeEnv& env, const GenericParamSet& generic_params) {
     if (expr == nullptr)
         return std::nullopt;
 
@@ -1364,33 +1364,39 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
             } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                 for (const tyir::TyStructInitField& field : node.fields) {
                     auto unresolved =
-                        find_unresolved_deferred_generic_call(field.value, generic_params);
+                        find_unresolved_deferred_generic_call(field.value, env, generic_params);
                     if (unresolved.has_value())
                         return unresolved;
                 }
                 return std::nullopt;
             } else if constexpr (
                 std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
-                return find_unresolved_deferred_generic_call(node.rhs, generic_params);
+                return find_unresolved_deferred_generic_call(node.rhs, env, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
-                auto lhs = find_unresolved_deferred_generic_call(node.lhs, generic_params);
+                auto lhs = find_unresolved_deferred_generic_call(node.lhs, env, generic_params);
                 if (lhs.has_value())
                     return lhs;
-                return find_unresolved_deferred_generic_call(node.rhs, generic_params);
+                return find_unresolved_deferred_generic_call(node.rhs, env, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
-                return find_unresolved_deferred_generic_call(node.base, generic_params);
+                return find_unresolved_deferred_generic_call(node.base, env, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
                 for (const tyir::TyExprPtr& arg : node.args) {
-                    auto unresolved = find_unresolved_deferred_generic_call(arg, generic_params);
+                    auto unresolved =
+                        find_unresolved_deferred_generic_call(arg, env, generic_params);
                     if (unresolved.has_value())
                         return unresolved;
                 }
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
-                if (!type_depends_on_generic_params(expr->ty, generic_params))
+                const auto sig_it = env.fn_signatures.find(node.fn_name);
+                assert(sig_it != env.fn_signatures.end());
+                const GenericParamSet deferred_generic_params =
+                    make_generic_param_set(sig_it->second.generic_params);
+                if (type_depends_on_generic_params(expr->ty, deferred_generic_params))
                     return node.fn_name;
                 for (const tyir::TyExprPtr& arg : node.args) {
-                    auto unresolved = find_unresolved_deferred_generic_call(arg, generic_params);
+                    auto unresolved =
+                        find_unresolved_deferred_generic_call(arg, env, generic_params);
                     if (unresolved.has_value())
                         return unresolved;
                 }
@@ -1404,64 +1410,66 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                             using StmtNode = std::decay_t<decltype(stmt_node)>;
                             if constexpr (std::is_same_v<StmtNode, tyir::TyLetStmt>)
                                 return find_unresolved_deferred_generic_call(
-                                    stmt_node.init, generic_params);
+                                    stmt_node.init, env, generic_params);
                             else
                                 return find_unresolved_deferred_generic_call(
-                                    stmt_node.expr, generic_params);
+                                    stmt_node.expr, env, generic_params);
                         },
                         stmt);
                     if (unresolved.has_value())
                         return unresolved;
                 }
                 if (node->tail.has_value())
-                    return find_unresolved_deferred_generic_call(*node->tail, generic_params);
+                    return find_unresolved_deferred_generic_call(*node->tail, env, generic_params);
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
                 auto condition =
-                    find_unresolved_deferred_generic_call(node.condition, generic_params);
+                    find_unresolved_deferred_generic_call(node.condition, env, generic_params);
                 if (condition.has_value())
                     return condition;
                 auto then_branch = find_unresolved_deferred_generic_call(
-                    node.then_block->tail.value_or(nullptr), generic_params);
+                    node.then_block->tail.value_or(nullptr), env, generic_params);
                 if (then_branch.has_value())
                     return then_branch;
                 if (node.else_branch.has_value())
-                    return find_unresolved_deferred_generic_call(*node.else_branch, generic_params);
+                    return find_unresolved_deferred_generic_call(
+                        *node.else_branch, env, generic_params);
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
                 return find_unresolved_deferred_generic_call(
-                    node.body->tail.value_or(nullptr), generic_params);
+                    node.body->tail.value_or(nullptr), env, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
                 auto condition =
-                    find_unresolved_deferred_generic_call(node.condition, generic_params);
+                    find_unresolved_deferred_generic_call(node.condition, env, generic_params);
                 if (condition.has_value())
                     return condition;
                 return find_unresolved_deferred_generic_call(
-                    node.body->tail.value_or(nullptr), generic_params);
+                    node.body->tail.value_or(nullptr), env, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
                 if (node.init.has_value()) {
                     auto init =
-                        find_unresolved_deferred_generic_call(node.init->init, generic_params);
+                        find_unresolved_deferred_generic_call(node.init->init, env, generic_params);
                     if (init.has_value())
                         return init;
                 }
                 if (node.condition.has_value()) {
                     auto condition =
-                        find_unresolved_deferred_generic_call(*node.condition, generic_params);
+                        find_unresolved_deferred_generic_call(*node.condition, env, generic_params);
                     if (condition.has_value())
                         return condition;
                 }
                 if (node.step.has_value()) {
-                    auto step = find_unresolved_deferred_generic_call(*node.step, generic_params);
+                    auto step =
+                        find_unresolved_deferred_generic_call(*node.step, env, generic_params);
                     if (step.has_value())
                         return step;
                 }
                 return find_unresolved_deferred_generic_call(
-                    node.body->tail.value_or(nullptr), generic_params);
+                    node.body->tail.value_or(nullptr), env, generic_params);
             } else if constexpr (
                 std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>) {
                 if (node.value.has_value())
-                    return find_unresolved_deferred_generic_call(*node.value, generic_params);
+                    return find_unresolved_deferred_generic_call(*node.value, env, generic_params);
                 return std::nullopt;
             }
         },
@@ -1498,8 +1506,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                                         + "', found '" + init->expr->ty.display() + "'");
                     binding_ty = *ann;
                 } else {
-                    if (auto unresolved =
-                            find_unresolved_deferred_generic_call(init->expr, ctx.generic_params);
+                    if (auto unresolved = find_unresolved_deferred_generic_call(
+                            init->expr, ctx.env, ctx.generic_params);
                         unresolved.has_value()) {
                         return make_error(
                             s.span, "cannot infer generic argument(s) for function '"
@@ -1535,8 +1543,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                 auto expr = lower_expr(s.expr, ctx);
                 if (!expr)
                     return std::unexpected(std::move(expr.error()));
-                if (auto unresolved =
-                        find_unresolved_deferred_generic_call(expr->expr, ctx.generic_params);
+                if (auto unresolved = find_unresolved_deferred_generic_call(
+                        expr->expr, ctx.env, ctx.generic_params);
                     unresolved.has_value()) {
                     return make_error(
                         s.span, "cannot infer generic argument(s) for function '"
@@ -2382,11 +2390,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (!joined_ty.has_value()) {
                         const bool then_needs_context =
                             find_unresolved_deferred_generic_call(
-                                then_ptr->tail.value_or(nullptr), ctx.generic_params)
+                                then_ptr->tail.value_or(nullptr), ctx.env, ctx.generic_params)
                                 .has_value();
-                        const bool else_needs_context = find_unresolved_deferred_generic_call(
-                                                            else_val->expr, ctx.generic_params)
-                                                            .has_value();
+                        const bool else_needs_context =
+                            find_unresolved_deferred_generic_call(
+                                else_val->expr, ctx.env, ctx.generic_params)
+                                .has_value();
                         if (then_needs_context != else_needs_context)
                             result_ty = then_needs_context ? else_ty : then_ptr->ty;
                         else

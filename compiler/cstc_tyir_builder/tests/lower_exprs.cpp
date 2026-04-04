@@ -869,6 +869,18 @@ static void test_let_annotation_resolves_deferred_call_in_block_tail() {
     assert(call.generic_args[0] == ty::num());
 }
 
+static void test_let_annotation_resolves_direct_deferred_call() {
+    const auto prog = must_lower(
+        "fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn f(flag: bool) { let x: num = make_default(flag); }");
+    const auto& stmt = std::get<TyLetStmt>(second_fn(prog).body->stmts[0]);
+    assert(stmt.ty == ty::num());
+    assert(stmt.init->ty == ty::num());
+    const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+}
+
 static void test_return_type_resolves_deferred_call_through_if_branches() {
     const auto prog = must_lower(
         "fn make_default<T>(flag: bool) -> T { loop {} }"
@@ -1383,6 +1395,7 @@ int main() {
     test_call_explicit_generic_args();
     test_call_infers_generic_args_from_arguments();
     test_let_annotation_resolves_deferred_call_in_block_tail();
+    test_let_annotation_resolves_direct_deferred_call();
     test_return_type_resolves_deferred_call_through_if_branches();
     test_expected_type_resolves_nested_deferred_generic_argument();
     test_deferred_resolution_uses_specialized_parameter_type();
