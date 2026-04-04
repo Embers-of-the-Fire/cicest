@@ -249,6 +249,17 @@ static void test_fn_where_clause_rejects_parameter_references() {
         "function where clauses cannot reference parameter 'value'");
 }
 
+static void test_struct_where_clause_rejects_return() {
+    must_fail_with_message(
+        "struct Box<T> where return { value: T }", "where clauses cannot contain 'return'");
+}
+
+static void test_fn_where_clause_rejects_return() {
+    must_fail_with_message(
+        "fn id<T>(value: T) -> T where if true { return true; } else { true } { value }",
+        "where clauses cannot contain 'return'");
+}
+
 static void test_fn_where_clause_lowers_generic_type_args() {
     const auto prog = must_lower(
         "fn helper<T>() -> bool { true }"
@@ -467,6 +478,8 @@ int main() {
     test_runtime_fn_return_uses_runtime_sugar();
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();
+    test_struct_where_clause_rejects_return();
+    test_fn_where_clause_rejects_return();
     test_fn_where_clause_lowers_generic_type_args();
     test_fn_where_clause_allows_call_callee_name_collision_with_parameter();
     test_fn_where_clause_allows_generic_call_callee_name_collision_with_parameter();
