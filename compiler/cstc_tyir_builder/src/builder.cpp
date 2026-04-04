@@ -57,6 +57,10 @@ struct TypeEnv {
     std::unordered_map<cstc::symbol::Symbol, cstc::symbol::Symbol, cstc::symbol::SymbolHash>
         lang_type_names;
 
+    /// Maps lang item names to the function declaration carrying them.
+    std::unordered_map<cstc::symbol::Symbol, cstc::symbol::Symbol, cstc::symbol::SymbolHash>
+        lang_fn_names;
+
     /// Cached ownership classification for named type instantiations after field resolution.
     mutable std::unordered_map<std::string, tyir::ValueSemantics> named_semantics_cache;
     /// Recursion guard used while classifying aggregate types.
@@ -257,6 +261,18 @@ using TypeSubstitution =
             return true;
     }
     return false;
+}
+
+[[nodiscard]] static std::optional<tyir::Ty> constraint_type(const TypeEnv& env) {
+    const auto it = env.lang_type_names.find(cstc::symbol::Symbol::intern("cstc_constraint"));
+    if (it == env.lang_type_names.end())
+        return std::nullopt;
+    return annotate_type_semantics(tyir::ty::named(it->second), env);
+}
+
+[[nodiscard]] static bool is_constraint_type(const tyir::Ty& ty, const TypeEnv& env) {
+    const auto constraint_ty = constraint_type(env);
+    return constraint_ty.has_value() && ty == *constraint_ty;
 }
 
 // ─── Scope (local variable environment) ─────────────────────────────────────
@@ -1177,6 +1193,30 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         resolved_return_ty);
 }
 
+[[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError>
+    normalize_constraint_expr(const tyir::TyExprPtr& expr, const TypeEnv& env) {
+    const auto constraint_ty = constraint_type(env);
+    if (!constraint_ty) {
+        return make_error(expr->span, "missing lang enum 'cstc_constraint' for where clauses");
+    }
+    if (is_constraint_type(expr->ty, env))
+        return expr;
+    if (!matches_type_shape(expr->ty, tyir::ty::bool_())) {
+        return make_error(
+            expr->span,
+            "where clauses must evaluate to 'Constraint'; implicit conversion is only supported "
+            "from 'bool'");
+    }
+
+    const auto fn_it = env.lang_fn_names.find(cstc::symbol::Symbol::intern("cstc_std_constraint"));
+    if (fn_it == env.lang_fn_names.end()) {
+        return make_error(
+            expr->span, "missing lang intrinsic 'cstc_std_constraint' for where clauses");
+    }
+
+    return tyir::make_ty_expr(expr->span, tyir::TyCall{fn_it->second, {}, {expr}}, *constraint_ty);
+}
+
 [[nodiscard]] static std::expected<std::vector<tyir::TyGenericConstraint>, LowerError>
     lower_where_clause(
         const std::vector<cstc::ast::GenericConstraint>& constraints, const TypeEnv& env,
@@ -1218,7 +1258,12 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
             return std::unexpected(std::move(lowered.error()));
         }
         release_temp_borrows(ctx, lowered->temp_borrows);
-        lowered_constraints.push_back({std::move(lowered->expr), constraint.span});
+        auto normalized = normalize_constraint_expr(lowered->expr, env);
+        if (!normalized) {
+            ctx.scope.pop();
+            return std::unexpected(std::move(normalized.error()));
+        }
+        lowered_constraints.push_back({std::move(*normalized), constraint.span});
     }
 
     ctx.scope.pop();
@@ -2703,6 +2748,14 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     ext_fn->span,
                     "duplicate function name '" + detail::display_decl_name(*ext_fn) + "'");
+            if (ext_fn->abi.as_str() == std::string_view{"lang"}) {
+                const auto [it, inserted] = env.lang_fn_names.emplace(*link_name, ext_fn->name);
+                if (!inserted) {
+                    return detail::make_error(
+                        ext_fn->span,
+                        "duplicate lang item '" + std::string(link_name->as_str()) + "'");
+                }
+            }
         }
     }
 

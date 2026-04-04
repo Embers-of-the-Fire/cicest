@@ -43,6 +43,37 @@ static cstc::tyir_builder::LowerError must_fail_to_lower(const char* source) {
     return tyir.error();
 }
 
+static TyProgram must_fold_with_constraint_prelude(const char* source) {
+    const std::string full_source =
+        std::string(
+            "[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }"
+            "[[lang = \"cstc_std_constraint\"]] extern \"lang\" fn "
+            "constraint(value: bool) -> Constraint;")
+        + source;
+    return must_fold(full_source.c_str());
+}
+
+static cstc::tyir_interp::EvalError must_fail_to_fold_with_constraint_prelude(const char* source) {
+    const std::string full_source =
+        std::string(
+            "[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }"
+            "[[lang = \"cstc_std_constraint\"]] extern \"lang\" fn "
+            "constraint(value: bool) -> Constraint;")
+        + source;
+    return must_fail_to_fold(full_source.c_str());
+}
+
+static cstc::tyir_builder::LowerError
+    must_fail_to_lower_with_constraint_prelude(const char* source) {
+    const std::string full_source =
+        std::string(
+            "[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }"
+            "[[lang = \"cstc_std_constraint\"]] extern \"lang\" fn "
+            "constraint(value: bool) -> Constraint;")
+        + source;
+    return must_fail_to_lower(full_source.c_str());
+}
+
 static const TyFnDecl& find_fn(const TyProgram& program, std::string_view name) {
     const Symbol fn_name = Symbol::intern(name);
     for (const TyItem& item : program.items) {
@@ -261,6 +292,30 @@ static void test_borrowed_str_free_intrinsic_is_noop() {
     assert((*result)->kind == cstc::tyir_interp::detail::Value::Kind::Unit);
 }
 
+static void test_constraint_intrinsic_returns_constraint_enum() {
+    SymbolSession session;
+    cstc::tyir_interp::detail::ProgramView program;
+    cstc::tyir_interp::detail::EvalContext ctx{
+        program,
+        {},
+        cstc::tyir_interp::detail::kDefaultEvalStepBudget,
+        cstc::tyir_interp::detail::kDefaultEvalCallDepth,
+        {},
+    };
+    TyExternFnDecl decl;
+    decl.name = Symbol::intern("constraint");
+    decl.link_name = Symbol::intern("cstc_std_constraint");
+    decl.params.resize(1);
+    decl.return_ty = ty::named(Symbol::intern("Constraint"));
+
+    auto result = cstc::tyir_interp::detail::eval_lang_intrinsic(
+        decl, {cstc::tyir_interp::detail::make_bool(false)}, ctx, {});
+    assert(result.has_value());
+    assert((*result)->kind == cstc::tyir_interp::detail::Value::Kind::Enum);
+    assert((*result)->type_name == Symbol::intern("Constraint"));
+    assert((*result)->variant_name == Symbol::intern("Invalid"));
+}
+
 static void test_borrow_of_folded_owned_string_keeps_folded_rhs() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -382,7 +437,7 @@ fn main() {
 
 static void test_dead_for_still_folds_reachable_init() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 extern "lang" fn assert(condition: bool);
 
 fn main() {
@@ -476,7 +531,7 @@ fn main() {
 
 static void test_reached_assertion_failure_reports_error() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 extern "lang" fn assert(condition: bool);
 
 fn main() {
@@ -490,7 +545,7 @@ fn main() {
 
 static void test_error_stack_records_called_function() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 extern "lang" fn assert_eq(a: num, b: num);
 
 fn check(value: num) {
@@ -509,7 +564,7 @@ fn main() {
 
 static void test_assert_eq_requires_exact_runtime_equality() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 extern "lang" fn assert_eq(a: num, b: num);
 
 fn main() {
@@ -623,7 +678,7 @@ static void test_intrinsic_decl_arity_mismatch_reports_error() {
 
 static void test_recursive_const_eval_reports_call_depth_error() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 fn recur() -> num {
     recur()
 }
@@ -637,7 +692,7 @@ fn recur() -> num {
 
 static void test_infinite_loop_reports_step_budget_error() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 fn main() -> ! {
     loop {}
 }
@@ -649,7 +704,7 @@ fn main() -> ! {
 
 static void test_infinite_while_reports_step_budget_error() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 fn main() {
     while true {}
 }
@@ -661,7 +716,7 @@ fn main() {
 
 static void test_infinite_for_reports_step_budget_error() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 fn main() {
     for (;;) {}
 }
@@ -673,7 +728,7 @@ fn main() {
 
 static void test_bare_break_in_for_still_folds_to_unit() {
     SymbolSession session;
-    const auto program = must_fold(R"(
+    const auto program = must_fold_with_constraint_prelude(R"(
 fn main() {
     for (;;) { break; }
 }
@@ -807,7 +862,7 @@ static void test_numeric_equality_treats_nan_as_not_equal() {
 
 static void test_generic_where_true_allows_instantiation() {
     SymbolSession session;
-    const auto program = must_fold(R"(
+    const auto program = must_fold_with_constraint_prelude(R"(
 fn always_true() -> bool {
     true
 }
@@ -828,7 +883,7 @@ fn main() -> num {
 
 static void test_generic_where_false_reports_constraint_failure() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 fn always_false() -> bool {
     false
 }
@@ -846,9 +901,24 @@ fn main() -> num {
     assert(error.message.find("function 'id'") != std::string::npos);
 }
 
+static void test_explicit_constraint_invalid_reports_constraint_failure() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn id<T>(value: T) -> T where Constraint::Invalid {
+    value
+}
+
+fn main() -> num {
+    id(1)
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+}
+
 static void test_generic_where_parameter_references_are_rejected_while_lowering() {
     SymbolSession session;
-    const auto error = must_fail_to_lower(R"(
+    const auto error = must_fail_to_lower_with_constraint_prelude(R"(
 fn id<T>(value: T) -> T where value == value {
     value
 }
@@ -865,7 +935,7 @@ fn main() -> num {
 
 static void test_generic_where_runtime_call_reports_runtime_only() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 runtime fn runtime_true() -> bool {
     true
 }
@@ -885,7 +955,7 @@ fn main() -> num {
 
 static void test_generic_where_runtime_loop_reports_runtime_only() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 runtime fn runtime_true() -> bool {
     true
 }
@@ -911,7 +981,7 @@ fn main() -> num {
 
 static void test_generic_where_runtime_while_reports_runtime_only() {
     SymbolSession session;
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 runtime fn runtime_true() -> bool {
     true
 }
@@ -938,7 +1008,7 @@ fn main() -> num {
 
 static void test_unused_generic_where_is_deferred_until_instantiation() {
     SymbolSession session;
-    const auto program = must_fold(R"(
+    const auto program = must_fold_with_constraint_prelude(R"(
 fn always_false<T>() -> bool {
     false
 }
@@ -959,7 +1029,7 @@ fn main() -> num {
 
 static void test_generic_call_constraint_is_deferred_inside_generic_body() {
     SymbolSession session;
-    const auto program = must_fold(R"(
+    const auto program = must_fold_with_constraint_prelude(R"(
 fn always_false<T>() -> bool {
     false
 }
@@ -981,7 +1051,7 @@ fn main() -> num {
     assert(literal.kind == TyLiteral::Kind::Num);
     assert(literal.symbol.as_str() == std::string_view{"0"});
 
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 fn always_false<T>() -> bool {
     false
 }
@@ -1005,7 +1075,7 @@ fn main() -> num {
 
 static void test_generic_struct_constraint_is_deferred_inside_generic_body() {
     SymbolSession session;
-    const auto program = must_fold(R"(
+    const auto program = must_fold_with_constraint_prelude(R"(
 fn always_false<T>() -> bool {
     false
 }
@@ -1027,7 +1097,7 @@ fn main() -> num {
     assert(literal.kind == TyLiteral::Kind::Num);
     assert(literal.symbol.as_str() == std::string_view{"0"});
 
-    const auto error = must_fail_to_fold(R"(
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 fn always_false<T>() -> bool {
     false
 }
@@ -1060,6 +1130,7 @@ int main() {
     test_string_intrinsics_fold_to_owned_string();
     test_assert_intrinsics_fold_to_unit();
     test_borrowed_str_free_intrinsic_is_noop();
+    test_constraint_intrinsic_returns_constraint_enum();
     test_borrow_of_folded_owned_string_keeps_folded_rhs();
     test_borrow_preserves_folded_rhs_when_ref_cannot_materialize();
     test_runtime_intrinsic_call_is_preserved();
@@ -1088,6 +1159,7 @@ int main() {
     test_numeric_equality_treats_nan_as_not_equal();
     test_generic_where_true_allows_instantiation();
     test_generic_where_false_reports_constraint_failure();
+    test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();
     test_generic_where_runtime_call_reports_runtime_only();
     test_generic_where_runtime_loop_reports_runtime_only();

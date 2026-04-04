@@ -715,10 +715,21 @@ ConstraintEvalResult evaluate_constraint(
     if (value->kind != EvalState::Kind::Value)
         return {ConstraintEvalKind::NotConstEvaluable, "constraint did not produce a value"};
     const Value* actual = deref_value(value->value);
-    if (actual == nullptr || actual->kind != Value::Kind::Bool)
-        return {ConstraintEvalKind::InvalidType, "constraint expression must evaluate to 'bool'"};
+    if (actual == nullptr || actual->kind != Value::Kind::Enum
+        || actual->type_name != program.constraint_enum_name) {
+        return {
+            ConstraintEvalKind::InvalidType,
+            "constraint expression must evaluate to 'Constraint'",
+        };
+    }
+    if (actual->variant_name == Symbol::intern("Valid"))
+        return {ConstraintEvalKind::Satisfied, {}};
+    if (actual->variant_name == Symbol::intern("Invalid"))
+        return {ConstraintEvalKind::Unsatisfied, {}};
     return {
-        actual->bool_value ? ConstraintEvalKind::Satisfied : ConstraintEvalKind::Unsatisfied, {}};
+        ConstraintEvalKind::InvalidType,
+        "constraint must be Constraint::Valid or Constraint::Invalid",
+    };
 }
 
 [[nodiscard]] static std::expected<void, EvalError> enforce_constraints(
@@ -857,6 +868,18 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                     + ", right=" + format_num(operands->rhs));
         }
         return make_unit();
+    }
+
+    if (name == "constraint" || name == "cstc_std_constraint") {
+        auto arity = require_intrinsic_arity(1);
+        if (!arity)
+            return std::unexpected(std::move(arity.error()));
+        const Value* value = deref_value(args[0]);
+        if (value == nullptr || value->kind != Value::Kind::Bool)
+            return unsupported_value_error(ctx, span, "boolean constraint argument");
+        return make_enum(
+            decl.return_ty.name,
+            value->bool_value ? Symbol::intern("Valid") : Symbol::intern("Invalid"));
     }
 
     if (name == "print" || name == "println" || name == "cstc_std_print"
@@ -2298,6 +2321,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     view.structs.emplace(node.name, &node);
                 } else if constexpr (std::is_same_v<Node, tyir::TyEnumDecl>) {
                     view.enums.emplace(node.name, &node);
+                    if (node.lang_name == Symbol::intern("cstc_constraint"))
+                        view.constraint_enum_name = node.name;
                 } else if constexpr (std::is_same_v<Node, tyir::TyFnDecl>) {
                     view.fns.emplace(node.name, &node);
                 } else if constexpr (std::is_same_v<Node, tyir::TyExternFnDecl>) {
