@@ -213,6 +213,26 @@ static void test_where_clause_rejects_non_constraint_types() {
         "fn id<T>(value: T) -> T where 1 { value }", "where clauses must evaluate to 'Constraint'");
 }
 
+static void test_where_clause_requires_explicit_constraint_intrinsic_annotation() {
+    must_fail_with_message(
+        R"(
+[[lang = "cstc_constraint"]] enum Constraint { Valid, Invalid }
+extern "lang" fn cstc_std_constraint(value: bool) -> Constraint;
+fn id<T>(value: T) -> T where true { value }
+)",
+        "missing lang intrinsic 'cstc_std_constraint'");
+}
+
+static void test_where_clause_rejects_malformed_constraint_intrinsic_signature() {
+    must_fail_with_message(
+        R"(
+[[lang = "cstc_constraint"]] enum Constraint { Valid, Invalid }
+[[lang = "cstc_std_constraint"]] extern "lang" fn constraint() -> Constraint;
+fn id<T>(value: T) -> T where true { value }
+)",
+        "lang intrinsic 'cstc_std_constraint' must have signature 'fn(bool) -> Constraint'");
+}
+
 static void test_enum_struct_name_collision_error() {
     must_fail_with_message(
         "enum Thing { A }"
@@ -542,6 +562,8 @@ int main() {
     test_enum_decl_preserves_lang_item_name();
     test_where_clause_accepts_explicit_constraint_value();
     test_where_clause_rejects_non_constraint_types();
+    test_where_clause_requires_explicit_constraint_intrinsic_annotation();
+    test_where_clause_rejects_malformed_constraint_intrinsic_signature();
     test_enum_struct_name_collision_error();
     test_struct_enum_name_collision_error();
     test_fn_no_return();

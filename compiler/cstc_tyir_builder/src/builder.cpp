@@ -1248,6 +1248,31 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         resolved_return_ty);
 }
 
+[[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
+    find_constraint_lang_fn(const TypeEnv& env, cstc::span::SourceSpan span) {
+    const auto lang_name = cstc::symbol::Symbol::intern("cstc_std_constraint");
+    const auto fn_it = env.lang_fn_names.find(lang_name);
+    if (fn_it == env.lang_fn_names.end()) {
+        return make_error(span, "missing lang intrinsic 'cstc_std_constraint' for where clauses");
+    }
+
+    const auto sig_it = env.fn_signatures.find(fn_it->second);
+    assert(sig_it != env.fn_signatures.end());
+    const FnSignature& sig = sig_it->second;
+    const auto expected_return_ty = constraint_type(env);
+    assert(expected_return_ty.has_value());
+
+    if (!sig.generic_params.empty() || sig.param_types.size() != 1
+        || !matches_type_shape(sig.param_types[0], tyir::ty::bool_())
+        || !matches_type_shape(sig.return_ty, *expected_return_ty)) {
+        return make_error(
+            sig.span,
+            "lang intrinsic 'cstc_std_constraint' must have signature 'fn(bool) -> Constraint'");
+    }
+
+    return fn_it->second;
+}
+
 [[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError>
     normalize_constraint_expr(const tyir::TyExprPtr& expr, const TypeEnv& env) {
     const auto constraint_ty = constraint_type(env);
@@ -1263,13 +1288,11 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
             "from 'bool'");
     }
 
-    const auto fn_it = env.lang_fn_names.find(cstc::symbol::Symbol::intern("cstc_std_constraint"));
-    if (fn_it == env.lang_fn_names.end()) {
-        return make_error(
-            expr->span, "missing lang intrinsic 'cstc_std_constraint' for where clauses");
-    }
+    auto constraint_fn = find_constraint_lang_fn(env, expr->span);
+    if (!constraint_fn)
+        return std::unexpected(std::move(constraint_fn.error()));
 
-    return tyir::make_ty_expr(expr->span, tyir::TyCall{fn_it->second, {}, {expr}}, *constraint_ty);
+    return tyir::make_ty_expr(expr->span, tyir::TyCall{*constraint_fn, {}, {expr}}, *constraint_ty);
 }
 
 [[nodiscard]] static std::expected<std::vector<tyir::TyGenericConstraint>, LowerError>
@@ -2949,12 +2972,16 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     ext_fn->span,
                     "duplicate function name '" + detail::display_decl_name(*ext_fn) + "'");
-            if (ext_fn->abi.as_str() == std::string_view{"lang"}) {
-                const auto [it, inserted] = env.lang_fn_names.emplace(*link_name, ext_fn->name);
+            auto lang_name = detail::resolve_lang_item_name(
+                ext_fn->attributes, ext_fn->span, "fn", true, ext_fn->abi);
+            if (!lang_name)
+                return std::unexpected(std::move(lang_name.error()));
+            if (lang_name->has_value()) {
+                const auto [it, inserted] = env.lang_fn_names.emplace(**lang_name, ext_fn->name);
                 if (!inserted) {
                     return detail::make_error(
                         ext_fn->span,
-                        "duplicate lang item '" + std::string(link_name->as_str()) + "'");
+                        "duplicate lang item '" + std::string((**lang_name).as_str()) + "'");
                 }
             }
         }
