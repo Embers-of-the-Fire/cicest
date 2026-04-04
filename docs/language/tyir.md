@@ -61,8 +61,12 @@ TyIR is the last IR that may still contain generic declarations.
   `TyStructInit` nodes.
 - Calls without turbofish first attempt inference; when inference succeeds, TyIR
   records the concrete argument list directly.
-- `where` constraints are lowered into typed expressions so const-eval can
-  validate them after substitution.
+- If inference cannot finish yet, TyIR preserves the call as
+  `TyDeferredGenericCall` until later substitution or contextual typing resolves
+  the remaining generic arguments.
+- `where` constraints are lowered into typed expressions that always produce the
+  lang `Constraint` enum. Source `bool` expressions are implicitly wrapped to
+  `Constraint::Valid` / `Constraint::Invalid` through the constraint intrinsic.
 
 By the time TyIR is handed to LIR lowering, all generic arguments used by the
 backend must be concrete and all constraints must already have passed.
@@ -81,6 +85,7 @@ TyUnary          — -expr or !expr
 TyBinary         — expr op expr
 TyFieldAccess    — expr.field
 TyCall           — fn_name(args…)   (always direct; no first-class fns)
+TyDeferredGenericCall — generic call awaiting later inference/substitution
 TyBlockPtr       — { stmts… [tail] }
 TyIf             — if (cond) { … } [else { … }]
 TyLoop           — loop { … }

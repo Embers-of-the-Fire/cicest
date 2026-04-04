@@ -35,6 +35,42 @@ static void must_fail_with_message(const char* source, const char* expected_mess
     assert(tyir.error().message.find(expected_message_part) != std::string::npos);
 }
 
+static TyProgram must_lower_with_constraint_prelude(const char* source) {
+    const std::string full_source =
+        std::string(
+            "[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }"
+            "[[lang = \"cstc_std_constraint\"]] extern \"lang\" fn "
+            "constraint(value: bool) -> Constraint;")
+        + source;
+    const auto ast = cstc::parser::parse_source(full_source);
+    assert(ast.has_value());
+    const auto tyir = lower_program(*ast);
+    assert(tyir.has_value());
+    return *tyir;
+}
+
+static void
+    must_fail_with_constraint_prelude(const char* source, const char* expected_message_part) {
+    const std::string full_source =
+        std::string(
+            "[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }"
+            "[[lang = \"cstc_std_constraint\"]] extern \"lang\" fn "
+            "constraint(value: bool) -> Constraint;")
+        + source;
+    const auto ast = cstc::parser::parse_source(full_source);
+    assert(ast.has_value());
+    const auto tyir = lower_program(*ast);
+    assert(!tyir.has_value());
+    assert(tyir.error().message.find(expected_message_part) != std::string::npos);
+}
+
+static const TyCall& require_constraint_call(const TyExprPtr& expr) {
+    const auto& call = std::get<TyCall>(expr->node);
+    assert(call.fn_name == Symbol::intern("constraint"));
+    assert(call.args.size() == 1);
+    return call;
+}
+
 // ─── Empty program ────────────────────────────────────────────────────────────
 
 static void test_empty_program() {
@@ -67,9 +103,9 @@ static void test_zst_struct() {
 }
 
 static void test_generic_struct_decl_preserves_metadata_and_field_type() {
-    const auto prog = must_lower("struct Box<T> where true { value: T }");
-    assert(prog.items.size() == 1);
-    const auto& decl = std::get<TyStructDecl>(prog.items[0]);
+    const auto prog = must_lower_with_constraint_prelude("struct Box<T> where true { value: T }");
+    assert(prog.items.size() == 3);
+    const auto& decl = std::get<TyStructDecl>(prog.items[2]);
     assert(decl.generic_params.size() == 1);
     assert(decl.generic_params[0].name == Symbol::intern("T"));
     assert(decl.where_clause.size() == 1);
@@ -79,14 +115,22 @@ static void test_generic_struct_decl_preserves_metadata_and_field_type() {
     assert(decl.fields[0].ty.generic_args.empty());
 }
 
+static void test_struct_decl_preserves_lang_item_name() {
+    const auto prog = must_lower("[[lang = \"cstc_marker\"]] struct Marker;");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyStructDecl>(prog.items[0]);
+    assert(decl.lang_name == Symbol::intern("cstc_marker"));
+}
+
 static void test_generic_struct_where_clause_lowers_generic_type_args() {
-    const auto prog = must_lower(
+    const auto prog = must_lower_with_constraint_prelude(
         "fn helper<T>() -> bool { true }"
         "struct Box<T> where helper::<T>() { value: T }");
-    assert(prog.items.size() == 2);
-    const auto& decl = std::get<TyStructDecl>(prog.items[1]);
+    assert(prog.items.size() == 4);
+    const auto& decl = std::get<TyStructDecl>(prog.items[3]);
     assert(decl.lowered_where_clause.size() == 1);
-    const auto& call = std::get<TyCall>(decl.lowered_where_clause[0].expr->node);
+    const auto& wrapped = require_constraint_call(decl.lowered_where_clause[0].expr);
+    const auto& call = std::get<TyCall>(wrapped.args[0]->node);
     assert(call.generic_args.size() == 1);
     assert(call.generic_args[0].name == Symbol::intern("T"));
     assert(call.generic_args[0].generic_args.empty());
@@ -137,14 +181,56 @@ static void test_duplicate_enum_name_error() {
 }
 
 static void test_generic_enum_decl_preserves_metadata() {
-    const auto prog = must_lower("enum Result<T, E> where true { Ok, Err }");
-    assert(prog.items.size() == 1);
-    const auto& decl = std::get<TyEnumDecl>(prog.items[0]);
+    const auto prog =
+        must_lower_with_constraint_prelude("enum Result<T, E> where true { Ok, Err }");
+    assert(prog.items.size() == 3);
+    const auto& decl = std::get<TyEnumDecl>(prog.items[2]);
     assert(decl.generic_params.size() == 2);
     assert(decl.generic_params[0].name == Symbol::intern("T"));
     assert(decl.generic_params[1].name == Symbol::intern("E"));
     assert(decl.where_clause.size() == 1);
     assert(decl.lowered_where_clause.size() == 1);
+}
+
+static void test_enum_decl_preserves_lang_item_name() {
+    const auto prog =
+        must_lower("[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyEnumDecl>(prog.items[0]);
+    assert(decl.lang_name == Symbol::intern("cstc_constraint"));
+}
+
+static void test_where_clause_accepts_explicit_constraint_value() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn id<T>(value: T) -> T where Constraint::Valid { value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    assert(fn.lowered_where_clause.size() == 1);
+    assert(std::holds_alternative<EnumVariantRef>(fn.lowered_where_clause[0].expr->node));
+}
+
+static void test_where_clause_rejects_non_constraint_types() {
+    must_fail_with_constraint_prelude(
+        "fn id<T>(value: T) -> T where 1 { value }", "where clauses must evaluate to 'Constraint'");
+}
+
+static void test_where_clause_requires_explicit_constraint_intrinsic_annotation() {
+    must_fail_with_message(
+        R"(
+[[lang = "cstc_constraint"]] enum Constraint { Valid, Invalid }
+extern "lang" fn cstc_std_constraint(value: bool) -> Constraint;
+fn id<T>(value: T) -> T where true { value }
+)",
+        "missing lang intrinsic 'cstc_std_constraint'");
+}
+
+static void test_where_clause_rejects_malformed_constraint_intrinsic_signature() {
+    must_fail_with_message(
+        R"(
+[[lang = "cstc_constraint"]] enum Constraint { Valid, Invalid }
+[[lang = "cstc_std_constraint"]] extern "lang" fn constraint() -> Constraint;
+fn id<T>(value: T) -> T where true { value }
+)",
+        "lang intrinsic 'cstc_std_constraint' must have signature 'fn(bool) -> Constraint'");
 }
 
 static void test_enum_struct_name_collision_error() {
@@ -231,16 +317,17 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
 }
 
 static void test_fn_preserves_generic_metadata() {
-    const auto prog = must_lower("fn id<T>(value: T) -> T where true, 1 == 1 { value }");
-    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    const auto prog =
+        must_lower_with_constraint_prelude("fn id<T>(value: T) -> T where true, 1 == 1 { value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
     assert(fn.generic_params.size() == 1);
     assert(fn.generic_params[0].name == Symbol::intern("T"));
     assert(fn.params[0].ty.name == Symbol::intern("T"));
     assert(fn.return_ty.name == Symbol::intern("T"));
     assert(fn.where_clause.size() == 2);
     assert(fn.lowered_where_clause.size() == 2);
-    assert(std::holds_alternative<cstc::ast::LiteralExpr>(fn.where_clause[0].expr->node));
-    assert(std::holds_alternative<cstc::ast::BinaryExpr>(fn.where_clause[1].expr->node));
+    assert(fn.lowered_where_clause[0].expr->ty.name == Symbol::intern("Constraint"));
+    assert(fn.lowered_where_clause[1].expr->ty.name == Symbol::intern("Constraint"));
 }
 
 static void test_fn_where_clause_rejects_parameter_references() {
@@ -262,38 +349,41 @@ static void test_fn_where_clause_rejects_return() {
 }
 
 static void test_fn_where_clause_lowers_generic_type_args() {
-    const auto prog = must_lower(
+    const auto prog = must_lower_with_constraint_prelude(
         "fn helper<T>() -> bool { true }"
         "fn id<T>(value: T) -> T where helper::<T>() { value }");
-    assert(prog.items.size() == 2);
-    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(prog.items.size() == 4);
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
     assert(fn.lowered_where_clause.size() == 1);
-    const auto& call = std::get<TyCall>(fn.lowered_where_clause[0].expr->node);
+    const auto& wrapped = require_constraint_call(fn.lowered_where_clause[0].expr);
+    const auto& call = std::get<TyCall>(wrapped.args[0]->node);
     assert(call.generic_args.size() == 1);
     assert(call.generic_args[0].name == Symbol::intern("T"));
     assert(call.generic_args[0].generic_args.empty());
 }
 
 static void test_fn_where_clause_allows_call_callee_name_collision_with_parameter() {
-    const auto prog = must_lower(
+    const auto prog = must_lower_with_constraint_prelude(
         "fn helper() -> bool { true }"
         "fn id<T>(helper: T) -> T where helper() { helper }");
-    assert(prog.items.size() == 2);
-    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(prog.items.size() == 4);
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
     assert(fn.lowered_where_clause.size() == 1);
-    const auto& call = std::get<TyCall>(fn.lowered_where_clause[0].expr->node);
+    const auto& wrapped = require_constraint_call(fn.lowered_where_clause[0].expr);
+    const auto& call = std::get<TyCall>(wrapped.args[0]->node);
     assert(call.fn_name == Symbol::intern("helper"));
     assert(call.args.empty());
 }
 
 static void test_fn_where_clause_allows_generic_call_callee_name_collision_with_parameter() {
-    const auto prog = must_lower(
+    const auto prog = must_lower_with_constraint_prelude(
         "fn helper<T>() -> bool { true }"
         "fn id<T>(helper: T) -> T where helper::<T>() { helper }");
-    assert(prog.items.size() == 2);
-    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(prog.items.size() == 4);
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
     assert(fn.lowered_where_clause.size() == 1);
-    const auto& call = std::get<TyCall>(fn.lowered_where_clause[0].expr->node);
+    const auto& wrapped = require_constraint_call(fn.lowered_where_clause[0].expr);
+    const auto& call = std::get<TyCall>(wrapped.args[0]->node);
     assert(call.fn_name == Symbol::intern("helper"));
     assert(call.generic_args.size() == 1);
     assert(call.generic_args[0].name == Symbol::intern("T"));
@@ -460,6 +550,7 @@ int main() {
     test_struct_decl();
     test_zst_struct();
     test_generic_struct_decl_preserves_metadata_and_field_type();
+    test_struct_decl_preserves_lang_item_name();
     test_generic_struct_where_clause_lowers_generic_type_args();
     test_struct_with_named_field();
     test_struct_undefined_type_error();
@@ -468,6 +559,11 @@ int main() {
     test_enum_decl();
     test_duplicate_enum_name_error();
     test_generic_enum_decl_preserves_metadata();
+    test_enum_decl_preserves_lang_item_name();
+    test_where_clause_accepts_explicit_constraint_value();
+    test_where_clause_rejects_non_constraint_types();
+    test_where_clause_requires_explicit_constraint_intrinsic_annotation();
+    test_where_clause_rejects_malformed_constraint_intrinsic_signature();
     test_enum_struct_name_collision_error();
     test_struct_enum_name_collision_error();
     test_fn_no_return();

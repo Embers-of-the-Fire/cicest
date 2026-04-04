@@ -11,6 +11,12 @@ The prelude (`prelude.cst`) is compiled as a normal module whose `pub` items
 are implicitly imported into every non-prelude module. Additional std modules
 can be loaded explicitly through `@std/...` import paths.
 
+### Available Lang Items
+
+| Item | Declaration | Description |
+| ---- | ----------- | ----------- |
+| `Constraint` | `[[lang = "cstc_constraint"]] pub enum Constraint { Valid, Invalid }` | Compiler-recognized constraint result type used by generic `where` clauses. |
+
 ### Available Functions
 
 | Function     | Signature                              | Description                                                                                             |
@@ -23,10 +29,24 @@ can be loaded explicitly through `@std/...` import paths.
 | `str_free`   | `fn str_free(value: str)`              | Frees a heap-allocated string.                                                                          |
 | `assert`     | `fn assert(condition: bool)`           | Aborts the program with `assertion failed` on standard error when `condition` is `false`.               |
 | `assert_eq`  | `fn assert_eq(a: num, b: num)`         | Aborts the program when two numbers differ by more than `1e-9`, printing both values on standard error. |
+| `constraint` | `fn constraint(value: bool) -> Constraint` | Converts a boolean into `Constraint::Valid` / `Constraint::Invalid`; the compiler inserts this implicitly for boolean `where` clauses. |
 
 ## Architecture
 
-All standard library functions are declared using the `extern "lang"` syntax:
+All standard library lang items are declared in the prelude using `[[lang = "..."]]`:
+
+```cicest
+[[lang = "cstc_constraint"]]
+pub enum Constraint {
+    Valid,
+    Invalid,
+}
+
+[[lang = "cstc_std_constraint"]]
+pub extern "lang" fn constraint(value: bool) -> Constraint;
+```
+
+Extern lang functions continue to use the `extern "lang"` syntax:
 
 ```cicest
 [[lang = "cstc_std_print"]]
@@ -71,6 +91,18 @@ including macOS.
 | `fn str_free(value: str)`              | `void cstc_std_str_free(const cstc_rt_str*)`          |
 | `fn assert(condition: bool)`           | `void cstc_std_assert(int)`                           |
 | `fn assert_eq(a: num, b: num)`         | `void cstc_std_assert_eq(double, double)`             |
+| `fn constraint(value: bool) -> Constraint` | `cstc_rt_constraint cstc_std_constraint(int)`      |
+
+## Constraints And Generics
+
+`where` clauses now type-check strictly as `Constraint`.
+
+- If a clause already produces `Constraint`, it is used directly.
+- If a clause produces `bool`, the compiler implicitly lowers it to `constraint(expr)`.
+- Any other clause result type is rejected during TyIR lowering.
+
+This keeps generic constraint evaluation explicit in TyIR while preserving the
+surface-language convenience of writing boolean conditions.
 
 ### String Ownership
 

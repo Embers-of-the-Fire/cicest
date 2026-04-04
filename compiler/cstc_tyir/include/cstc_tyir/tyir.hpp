@@ -402,6 +402,16 @@ struct TyCall {
     std::vector<TyExprPtr> args;
 };
 
+/// Typed generic function call that still needs more type information.
+struct TyDeferredGenericCall {
+    /// Resolved top-level function name.
+    cstc::symbol::Symbol fn_name = cstc::symbol::kInvalidSymbol;
+    /// Generic arguments aligned to the callee's generic parameter order.
+    std::vector<std::optional<Ty>> generic_args;
+    /// Type-annotated argument list.
+    std::vector<TyExprPtr> args;
+};
+
 /// Typed conditional expression (`if … { … } else { … }`).
 struct TyIf {
     /// Condition expression; must have type `bool`.
@@ -479,8 +489,8 @@ struct TyExpr {
     /// Variant payload for all typed expression forms.
     using Node = std::variant<
         TyLiteral, LocalRef, EnumVariantRef, TyStructInit, TyBorrow, TyUnary, TyBinary,
-        TyFieldAccess, TyCall, TyBlockPtr, TyIf, TyLoop, TyWhile, TyFor, TyBreak, TyContinue,
-        TyReturn>;
+        TyFieldAccess, TyCall, TyDeferredGenericCall, TyBlockPtr, TyIf, TyLoop, TyWhile, TyFor,
+        TyBreak, TyContinue, TyReturn>;
 
     /// Concrete expression node payload.
     Node node;
@@ -567,6 +577,8 @@ struct TyFieldDecl {
 struct TyStructDecl {
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Optional lang item name for compiler-recognized types.
+    cstc::symbol::Symbol lang_name = cstc::symbol::kInvalidSymbol;
     /// Declared generic parameter list preserved from the AST.
     std::vector<cstc::ast::GenericParam> generic_params;
     /// Resolved named field list.
@@ -595,6 +607,8 @@ struct TyEnumVariant {
 struct TyEnumDecl {
     /// Enum type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Optional lang item name for compiler-recognized types.
+    cstc::symbol::Symbol lang_name = cstc::symbol::kInvalidSymbol;
     /// Declared generic parameter list preserved from the AST.
     std::vector<cstc::ast::GenericParam> generic_params;
     /// Declared variant list.
@@ -679,6 +693,8 @@ struct TyExternStructDecl {
     cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol;
     /// Struct type name.
     cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+    /// Optional lang item name for compiler-recognized types.
+    cstc::symbol::Symbol lang_name = cstc::symbol::kInvalidSymbol;
     /// Source location for the full item.
     cstc::span::SourceSpan span;
 };

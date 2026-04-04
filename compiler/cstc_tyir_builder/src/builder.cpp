@@ -53,6 +53,14 @@ struct TypeEnv {
     /// annotations but cannot be constructed via struct-init expressions.
     std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> extern_struct_names;
 
+    /// Maps lang item names to the named type declaration carrying them.
+    std::unordered_map<cstc::symbol::Symbol, cstc::symbol::Symbol, cstc::symbol::SymbolHash>
+        lang_type_names;
+
+    /// Maps lang item names to the function declaration carrying them.
+    std::unordered_map<cstc::symbol::Symbol, cstc::symbol::Symbol, cstc::symbol::SymbolHash>
+        lang_fn_names;
+
     /// Cached ownership classification for named type instantiations after field resolution.
     mutable std::unordered_map<std::string, tyir::ValueSemantics> named_semantics_cache;
     /// Recursion guard used while classifying aggregate types.
@@ -238,6 +246,33 @@ using TypeSubstitution =
             return result;
     }
     return {};
+}
+
+[[nodiscard]] static bool
+    type_depends_on_generic_params(const tyir::Ty& ty, const GenericParamSet& generic_params) {
+    if (ty.kind == tyir::TyKind::Ref)
+        return ty.pointee != nullptr && type_depends_on_generic_params(*ty.pointee, generic_params);
+    if (ty.kind != tyir::TyKind::Named)
+        return false;
+    if (ty.generic_args.empty() && generic_params.contains(ty.name))
+        return true;
+    for (const tyir::Ty& arg : ty.generic_args) {
+        if (type_depends_on_generic_params(arg, generic_params))
+            return true;
+    }
+    return false;
+}
+
+[[nodiscard]] static std::optional<tyir::Ty> constraint_type(const TypeEnv& env) {
+    const auto it = env.lang_type_names.find(cstc::symbol::Symbol::intern("cstc_constraint"));
+    if (it == env.lang_type_names.end())
+        return std::nullopt;
+    return annotate_type_semantics(tyir::ty::named(it->second), env);
+}
+
+[[nodiscard]] static bool is_constraint_type(const tyir::Ty& ty, const TypeEnv& env) {
+    const auto constraint_ty = constraint_type(env);
+    return constraint_ty.has_value() && ty == *constraint_ty;
 }
 
 // ─── Scope (local variable environment) ─────────────────────────────────────
@@ -588,39 +623,50 @@ template <typename Decl>
     return std::nullopt;
 }
 
-/// Resolves the linked symbol name for an extern function declaration.
-[[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
-    resolve_extern_link_name(const ast::ExternFnDecl& decl) {
+[[nodiscard]] static std::expected<std::optional<cstc::symbol::Symbol>, LowerError>
+    resolve_lang_item_name(
+        const std::vector<ast::Attribute>& attributes, cstc::span::SourceSpan item_span,
+        std::string_view item_kind, bool require_lang_abi = false,
+        cstc::symbol::Symbol abi = cstc::symbol::kInvalidSymbol) {
+    (void)item_span;
     const auto lang_attr_name = cstc::symbol::Symbol::intern("lang");
-    std::optional<cstc::symbol::Symbol> link_name;
+    std::optional<cstc::symbol::Symbol> lang_name;
 
-    for (const ast::Attribute& attr : decl.attributes) {
+    for (const ast::Attribute& attr : attributes) {
         if (attr.name != lang_attr_name)
             continue;
 
-        if (decl.abi.as_str() != "lang") {
+        if (require_lang_abi && abi.as_str() != "lang") {
             return std::unexpected(
                 LowerError{
                     attr.span,
-                    "attribute `lang` is only supported on `extern \"lang\" fn` declarations",
+                    "attribute `lang` is only supported on `extern \"lang\" "
+                        + std::string(item_kind) + "` declarations",
                 });
         }
-        if (!attr.value.has_value()) {
+        if (!attr.value.has_value())
             return std::unexpected(
                 LowerError{attr.span, "attribute `lang` requires a string value"});
-        }
         if (attr.value->as_str().empty()) {
             return std::unexpected(
                 LowerError{attr.span, "attribute `lang` requires a non-empty string value"});
         }
-        if (link_name.has_value()) {
+        if (lang_name.has_value())
             return std::unexpected(LowerError{attr.span, "duplicate `lang` attribute"});
-        }
 
-        link_name = *attr.value;
+        lang_name = *attr.value;
     }
 
-    return link_name.value_or(source_symbol(decl.display_name, decl.name));
+    return lang_name;
+}
+
+/// Resolves the linked symbol name for an extern function declaration.
+[[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
+    resolve_extern_link_name(const ast::ExternFnDecl& decl) {
+    auto link_name = resolve_lang_item_name(decl.attributes, decl.span, "fn", true, decl.abi);
+    if (!link_name)
+        return std::unexpected(std::move(link_name.error()));
+    return link_name->value_or(source_symbol(decl.display_name, decl.name));
 }
 
 // ─── Type resolution ─────────────────────────────────────────────────────────
@@ -723,6 +769,13 @@ struct LoweredPlace {
 
 [[nodiscard]] static std::expected<tyir::TyBlock, LowerError>
     lower_block(const ast::BlockExpr& block, LowerCtx& ctx);
+
+[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
+
+[[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
+
+[[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
+    const tyir::TyExprPtr& expr, const tyir::Ty& expected_ty, LowerCtx& ctx);
 
 // ─── Function signature resolution ──────────────────────────────────────────
 
@@ -1069,6 +1122,179 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         expr->node);
 }
 
+[[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
+    const tyir::TyExprPtr& expr, const tyir::Ty& expected_ty, LowerCtx& ctx) {
+    if (expr == nullptr)
+        return expr;
+
+    if (auto* block = std::get_if<tyir::TyBlockPtr>(&expr->node); block != nullptr) {
+        if (*block != nullptr && (*block)->tail.has_value()) {
+            auto resolved_tail = resolve_expr_against_type(*(*block)->tail, expected_ty, ctx);
+            if (!resolved_tail)
+                return std::unexpected(std::move(resolved_tail.error()));
+            (*block)->tail = std::move(*resolved_tail);
+            (*block)->ty =
+                block_can_fallthrough(**block) ? (*(*block)->tail)->ty : tyir::ty::never();
+            expr->ty = (*block)->ty;
+        }
+        return expr;
+    }
+
+    if (auto* if_expr = std::get_if<tyir::TyIf>(&expr->node); if_expr != nullptr) {
+        if (if_expr->then_block->tail.has_value()) {
+            auto resolved_then =
+                resolve_expr_against_type(*if_expr->then_block->tail, expected_ty, ctx);
+            if (!resolved_then)
+                return std::unexpected(std::move(resolved_then.error()));
+            if_expr->then_block->tail = std::move(*resolved_then);
+            if_expr->then_block->ty = block_can_fallthrough(*if_expr->then_block)
+                                        ? (*if_expr->then_block->tail)->ty
+                                        : tyir::ty::never();
+        }
+
+        if (if_expr->else_branch.has_value() && expr_can_fallthrough(*(*if_expr->else_branch))) {
+            auto resolved_else = resolve_expr_against_type(*if_expr->else_branch, expected_ty, ctx);
+            if (!resolved_else)
+                return std::unexpected(std::move(resolved_else.error()));
+            if_expr->else_branch = std::move(*resolved_else);
+        }
+
+        if (if_expr->else_branch.has_value()) {
+            const tyir::Ty else_ty = (*if_expr->else_branch)->ty;
+            const auto joined_ty = common_type(if_expr->then_block->ty, else_ty);
+            if (!joined_ty.has_value()) {
+                return make_error(
+                    expr->span, "'if' then-branch has type '" + if_expr->then_block->ty.display()
+                                    + "' but else-branch has type '" + else_ty.display() + "'");
+            }
+            expr->ty = *joined_ty;
+        }
+        return expr;
+    }
+
+    const auto* deferred = std::get_if<tyir::TyDeferredGenericCall>(&expr->node);
+    if (deferred == nullptr)
+        return expr;
+
+    const auto sig_it = ctx.env.fn_signatures.find(deferred->fn_name);
+    assert(sig_it != ctx.env.fn_signatures.end());
+    const FnSignature& sig = sig_it->second;
+    const GenericParamSet generic_param_set = make_generic_param_set(sig.generic_params);
+    TypeSubstitution substitution;
+    substitution.reserve(sig.generic_params.size());
+    for (std::size_t index = 0;
+         index < deferred->generic_args.size() && index < sig.generic_params.size(); ++index) {
+        if (deferred->generic_args[index].has_value())
+            substitution.emplace(sig.generic_params[index].name, *deferred->generic_args[index]);
+    }
+
+    auto inferred = infer_substitution(
+        sig.return_ty, expected_ty, generic_param_set, substitution, expr->span,
+        std::string_view{deferred->fn_name.as_str()});
+    if (!inferred)
+        return std::unexpected(std::move(inferred.error()));
+
+    std::vector<std::optional<tyir::Ty>> generic_args;
+    generic_args.reserve(sig.generic_params.size());
+    bool fully_resolved = true;
+    for (const ast::GenericParam& param : sig.generic_params) {
+        const auto found = substitution.find(param.name);
+        if (found == substitution.end()
+            || type_depends_on_generic_params(found->second, generic_param_set)) {
+            generic_args.push_back(std::nullopt);
+            fully_resolved = false;
+            continue;
+        }
+        generic_args.push_back(found->second);
+    }
+
+    const tyir::Ty resolved_return_ty =
+        annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env);
+    if (!fully_resolved) {
+        return tyir::make_ty_expr(
+            expr->span,
+            tyir::TyDeferredGenericCall{deferred->fn_name, std::move(generic_args), deferred->args},
+            resolved_return_ty);
+    }
+
+    std::vector<tyir::Ty> concrete_generic_args;
+    concrete_generic_args.reserve(generic_args.size());
+    for (const std::optional<tyir::Ty>& generic_arg : generic_args) {
+        assert(generic_arg.has_value());
+        concrete_generic_args.push_back(*generic_arg);
+    }
+
+    std::vector<tyir::TyExprPtr> resolved_args = deferred->args;
+    for (std::size_t index = 0; index < resolved_args.size(); ++index) {
+        const tyir::Ty expected_param_ty = annotate_type_semantics(
+            apply_substitution(sig.param_types[index], substitution), ctx.env);
+        auto resolved_arg = resolve_expr_against_type(resolved_args[index], expected_param_ty, ctx);
+        if (!resolved_arg)
+            return std::unexpected(std::move(resolved_arg.error()));
+        resolved_args[index] = std::move(*resolved_arg);
+        if (!compatible(resolved_args[index]->ty, expected_param_ty)) {
+            return make_error(
+                resolved_args[index]->span, "argument " + std::to_string(index + 1) + " of '"
+                                                + std::string(deferred->fn_name.as_str())
+                                                + "': expected '" + expected_param_ty.display()
+                                                + "', found '" + resolved_args[index]->ty.display()
+                                                + "'");
+        }
+    }
+
+    return tyir::make_ty_expr(
+        expr->span,
+        tyir::TyCall{deferred->fn_name, std::move(concrete_generic_args), std::move(resolved_args)},
+        resolved_return_ty);
+}
+
+[[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
+    find_constraint_lang_fn(const TypeEnv& env, cstc::span::SourceSpan span) {
+    const auto lang_name = cstc::symbol::Symbol::intern("cstc_std_constraint");
+    const auto fn_it = env.lang_fn_names.find(lang_name);
+    if (fn_it == env.lang_fn_names.end()) {
+        return make_error(span, "missing lang intrinsic 'cstc_std_constraint' for where clauses");
+    }
+
+    const auto sig_it = env.fn_signatures.find(fn_it->second);
+    assert(sig_it != env.fn_signatures.end());
+    const FnSignature& sig = sig_it->second;
+    const auto expected_return_ty = constraint_type(env);
+    assert(expected_return_ty.has_value());
+
+    if (!sig.generic_params.empty() || sig.param_types.size() != 1
+        || !matches_type_shape(sig.param_types[0], tyir::ty::bool_())
+        || !matches_type_shape(sig.return_ty, *expected_return_ty)) {
+        return make_error(
+            sig.span,
+            "lang intrinsic 'cstc_std_constraint' must have signature 'fn(bool) -> Constraint'");
+    }
+
+    return fn_it->second;
+}
+
+[[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError>
+    normalize_constraint_expr(const tyir::TyExprPtr& expr, const TypeEnv& env) {
+    const auto constraint_ty = constraint_type(env);
+    if (!constraint_ty) {
+        return make_error(expr->span, "missing lang enum 'cstc_constraint' for where clauses");
+    }
+    if (is_constraint_type(expr->ty, env))
+        return expr;
+    if (!matches_type_shape(expr->ty, tyir::ty::bool_())) {
+        return make_error(
+            expr->span,
+            "where clauses must evaluate to 'Constraint'; implicit conversion is only supported "
+            "from 'bool'");
+    }
+
+    auto constraint_fn = find_constraint_lang_fn(env, expr->span);
+    if (!constraint_fn)
+        return std::unexpected(std::move(constraint_fn.error()));
+
+    return tyir::make_ty_expr(expr->span, tyir::TyCall{*constraint_fn, {}, {expr}}, *constraint_ty);
+}
+
 [[nodiscard]] static std::expected<std::vector<tyir::TyGenericConstraint>, LowerError>
     lower_where_clause(
         const std::vector<cstc::ast::GenericConstraint>& constraints, const TypeEnv& env,
@@ -1110,11 +1336,144 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
             return std::unexpected(std::move(lowered.error()));
         }
         release_temp_borrows(ctx, lowered->temp_borrows);
-        lowered_constraints.push_back({std::move(lowered->expr), constraint.span});
+        auto normalized = normalize_constraint_expr(lowered->expr, env);
+        if (!normalized) {
+            ctx.scope.pop();
+            return std::unexpected(std::move(normalized.error()));
+        }
+        lowered_constraints.push_back({std::move(*normalized), constraint.span});
     }
 
     ctx.scope.pop();
     return lowered_constraints;
+}
+
+[[nodiscard]] static std::optional<cstc::symbol::Symbol> find_unresolved_deferred_generic_call(
+    const tyir::TyExprPtr& expr, const TypeEnv& env, const GenericParamSet& generic_params) {
+    if (expr == nullptr)
+        return std::nullopt;
+
+    return std::visit(
+        [&](const auto& node) -> std::optional<cstc::symbol::Symbol> {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (
+                std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
+                || std::is_same_v<Node, tyir::EnumVariantRef>
+                || std::is_same_v<Node, tyir::TyContinue>) {
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    auto unresolved =
+                        find_unresolved_deferred_generic_call(field.value, env, generic_params);
+                    if (unresolved.has_value())
+                        return unresolved;
+                }
+                return std::nullopt;
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                return find_unresolved_deferred_generic_call(node.rhs, env, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                auto lhs = find_unresolved_deferred_generic_call(node.lhs, env, generic_params);
+                if (lhs.has_value())
+                    return lhs;
+                return find_unresolved_deferred_generic_call(node.rhs, env, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                return find_unresolved_deferred_generic_call(node.base, env, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    auto unresolved =
+                        find_unresolved_deferred_generic_call(arg, env, generic_params);
+                    if (unresolved.has_value())
+                        return unresolved;
+                }
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                const auto sig_it = env.fn_signatures.find(node.fn_name);
+                assert(sig_it != env.fn_signatures.end());
+                const GenericParamSet deferred_generic_params =
+                    make_generic_param_set(sig_it->second.generic_params);
+                if (type_depends_on_generic_params(expr->ty, deferred_generic_params))
+                    return node.fn_name;
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    auto unresolved =
+                        find_unresolved_deferred_generic_call(arg, env, generic_params);
+                    if (unresolved.has_value())
+                        return unresolved;
+                }
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                if (node == nullptr)
+                    return std::nullopt;
+                for (const tyir::TyStmt& stmt : node->stmts) {
+                    auto unresolved = std::visit(
+                        [&](const auto& stmt_node) -> std::optional<cstc::symbol::Symbol> {
+                            using StmtNode = std::decay_t<decltype(stmt_node)>;
+                            if constexpr (std::is_same_v<StmtNode, tyir::TyLetStmt>)
+                                return find_unresolved_deferred_generic_call(
+                                    stmt_node.init, env, generic_params);
+                            else
+                                return find_unresolved_deferred_generic_call(
+                                    stmt_node.expr, env, generic_params);
+                        },
+                        stmt);
+                    if (unresolved.has_value())
+                        return unresolved;
+                }
+                if (node->tail.has_value())
+                    return find_unresolved_deferred_generic_call(*node->tail, env, generic_params);
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                auto condition =
+                    find_unresolved_deferred_generic_call(node.condition, env, generic_params);
+                if (condition.has_value())
+                    return condition;
+                auto then_branch = find_unresolved_deferred_generic_call(
+                    node.then_block->tail.value_or(nullptr), env, generic_params);
+                if (then_branch.has_value())
+                    return then_branch;
+                if (node.else_branch.has_value())
+                    return find_unresolved_deferred_generic_call(
+                        *node.else_branch, env, generic_params);
+                return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                return find_unresolved_deferred_generic_call(
+                    node.body->tail.value_or(nullptr), env, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                auto condition =
+                    find_unresolved_deferred_generic_call(node.condition, env, generic_params);
+                if (condition.has_value())
+                    return condition;
+                return find_unresolved_deferred_generic_call(
+                    node.body->tail.value_or(nullptr), env, generic_params);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                if (node.init.has_value()) {
+                    auto init =
+                        find_unresolved_deferred_generic_call(node.init->init, env, generic_params);
+                    if (init.has_value())
+                        return init;
+                }
+                if (node.condition.has_value()) {
+                    auto condition =
+                        find_unresolved_deferred_generic_call(*node.condition, env, generic_params);
+                    if (condition.has_value())
+                        return condition;
+                }
+                if (node.step.has_value()) {
+                    auto step =
+                        find_unresolved_deferred_generic_call(*node.step, env, generic_params);
+                    if (step.has_value())
+                        return step;
+                }
+                return find_unresolved_deferred_generic_call(
+                    node.body->tail.value_or(nullptr), env, generic_params);
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>) {
+                if (node.value.has_value())
+                    return find_unresolved_deferred_generic_call(*node.value, env, generic_params);
+                return std::nullopt;
+            }
+        },
+        expr->node);
 }
 
 // ─── Statement lowering ──────────────────────────────────────────────────────
@@ -1137,12 +1496,23 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                     auto ann = lower_type(*s.type_annotation, ctx.env, s.span, ctx.generic_params);
                     if (!ann)
                         return std::unexpected(std::move(ann.error()));
+                    auto resolved_init = resolve_expr_against_type(init->expr, *ann, ctx);
+                    if (!resolved_init)
+                        return std::unexpected(std::move(resolved_init.error()));
+                    init->expr = std::move(*resolved_init);
                     if (!compatible(init->expr->ty, *ann))
                         return make_error(
                             s.span, "type mismatch in let binding: expected '" + ann->display()
                                         + "', found '" + init->expr->ty.display() + "'");
                     binding_ty = *ann;
                 } else {
+                    if (auto unresolved = find_unresolved_deferred_generic_call(
+                            init->expr, ctx.env, ctx.generic_params);
+                        unresolved.has_value()) {
+                        return make_error(
+                            s.span, "cannot infer generic argument(s) for function '"
+                                        + std::string(unresolved->as_str()) + "'");
+                    }
                     binding_ty = init->expr->ty;
                 }
 
@@ -1173,14 +1543,19 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                 auto expr = lower_expr(s.expr, ctx);
                 if (!expr)
                     return std::unexpected(std::move(expr.error()));
+                if (auto unresolved = find_unresolved_deferred_generic_call(
+                        expr->expr, ctx.env, ctx.generic_params);
+                    unresolved.has_value()) {
+                    return make_error(
+                        s.span, "cannot infer generic argument(s) for function '"
+                                    + std::string(unresolved->as_str()) + "'");
+                }
                 release_temp_borrows(ctx, expr->temp_borrows);
                 return tyir::TyExprStmt{std::move(expr->expr), s.span};
             }
         },
         stmt);
 }
-
-[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
 
 [[nodiscard]] static bool stmt_can_fallthrough(const tyir::TyStmt& stmt) {
     return std::visit(
@@ -1193,8 +1568,6 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         },
         stmt);
 }
-
-[[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
 
 [[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr) {
     if (expr.ty.is_never())
@@ -1221,7 +1594,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                 return expr_can_fallthrough(*node.lhs) && expr_can_fallthrough(*node.rhs);
             } else if constexpr (std::is_same_v<N, tyir::TyFieldAccess>) {
                 return expr_can_fallthrough(*node.base);
-            } else if constexpr (std::is_same_v<N, tyir::TyCall>) {
+            } else if constexpr (
+                std::is_same_v<N, tyir::TyCall> || std::is_same_v<N, tyir::TyDeferredGenericCall>) {
                 for (const tyir::TyExprPtr& arg : node.args) {
                     if (!expr_can_fallthrough(*arg))
                         return false;
@@ -1578,6 +1952,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     auto val = lower_expr(field.value, ctx);
                     if (!val)
                         return std::unexpected(std::move(val.error()));
+                    auto resolved_val = resolve_expr_against_type(val->expr, *expected_ty, ctx);
+                    if (!resolved_val)
+                        return std::unexpected(std::move(resolved_val.error()));
+                    val->expr = std::move(*resolved_val);
 
                     if (!compatible(val->expr->ty, *expected_ty))
                         return make_error(
@@ -1884,6 +2262,17 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                         + std::to_string(node.args.size()) + " provided");
 
                 for (std::size_t i = 0; i < node.args.size(); ++i) {
+                    const tyir::Ty expected_param_ty = annotate_type_semantics(
+                        apply_substitution(sig.param_types[i], substitution), ctx.env);
+                    auto resolved_arg =
+                        resolve_expr_against_type(lowered_args[i], expected_param_ty, ctx);
+                    if (!resolved_arg)
+                        return std::unexpected(std::move(resolved_arg.error()));
+                    lowered_args[i] = std::move(*resolved_arg);
+                    if (std::holds_alternative<tyir::TyDeferredGenericCall>(lowered_args[i]->node)
+                        && type_depends_on_generic_params(lowered_args[i]->ty, generic_param_set)) {
+                        continue;
+                    }
                     auto inferred = infer_substitution(
                         sig.param_types[i], lowered_args[i]->ty, generic_param_set, substitution,
                         node.args[i]->span, display_fn_name);
@@ -1891,39 +2280,62 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(inferred.error()));
                 }
 
-                std::vector<tyir::Ty> resolved_generic_args;
+                std::vector<std::optional<tyir::Ty>> resolved_generic_args;
                 resolved_generic_args.reserve(sig.generic_params.size());
+                bool fully_resolved = true;
                 for (const ast::GenericParam& generic_param : sig.generic_params) {
                     const auto found = substitution.find(generic_param.name);
                     if (found == substitution.end()) {
-                        return make_error(
-                            expr->span, "cannot infer generic argument '"
-                                            + std::string(generic_param.name.as_str())
-                                            + "' for function '" + display_fn_name + "'");
+                        fully_resolved = false;
+                        resolved_generic_args.push_back(std::nullopt);
+                        continue;
                     }
                     resolved_generic_args.push_back(found->second);
-                }
-
-                for (std::size_t i = 0; i < node.args.size(); ++i) {
-                    const tyir::Ty expected_param_ty = annotate_type_semantics(
-                        apply_substitution(sig.param_types[i], substitution), ctx.env);
-                    if (!compatible(lowered_args[i]->ty, expected_param_ty))
-                        return make_error(
-                            node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
-                                                    + display_fn_name + "': expected '"
-                                                    + expected_param_ty.display() + "', found '"
-                                                    + lowered_args[i]->ty.display() + "'");
                 }
 
                 const tyir::Ty resolved_return_ty = annotate_type_semantics(
                     apply_substitution(sig.return_ty, substitution), ctx.env);
 
-                auto lowered = LoweredExpr{
-                    tyir::make_ty_expr(
+                tyir::TyExprPtr lowered_expr;
+                if (fully_resolved) {
+                    std::vector<tyir::Ty> concrete_generic_args;
+                    concrete_generic_args.reserve(resolved_generic_args.size());
+                    for (const std::optional<tyir::Ty>& generic_arg : resolved_generic_args) {
+                        assert(generic_arg.has_value());
+                        concrete_generic_args.push_back(*generic_arg);
+                    }
+
+                    for (std::size_t i = 0; i < node.args.size(); ++i) {
+                        const tyir::Ty expected_param_ty = annotate_type_semantics(
+                            apply_substitution(sig.param_types[i], substitution), ctx.env);
+                        auto resolved_arg =
+                            resolve_expr_against_type(lowered_args[i], expected_param_ty, ctx);
+                        if (!resolved_arg)
+                            return std::unexpected(std::move(resolved_arg.error()));
+                        lowered_args[i] = std::move(*resolved_arg);
+                        if (!compatible(lowered_args[i]->ty, expected_param_ty))
+                            return make_error(
+                                node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
+                                                        + display_fn_name + "': expected '"
+                                                        + expected_param_ty.display() + "', found '"
+                                                        + lowered_args[i]->ty.display() + "'");
+                    }
+
+                    lowered_expr = tyir::make_ty_expr(
                         expr->span,
                         tyir::TyCall{
+                            fn_name, std::move(concrete_generic_args), std::move(lowered_args)},
+                        resolved_return_ty);
+                } else {
+                    lowered_expr = tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyDeferredGenericCall{
                             fn_name, std::move(resolved_generic_args), std::move(lowered_args)},
-                        resolved_return_ty),
+                        resolved_return_ty);
+                }
+
+                auto lowered = LoweredExpr{
+                    std::move(lowered_expr),
                     {},
                     std::nullopt,
                 };
@@ -1975,12 +2387,25 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                     const tyir::Ty& else_ty = else_val->expr->ty;
                     const auto joined_ty = common_type(then_ptr->ty, else_ty);
-                    if (!joined_ty.has_value())
-                        return make_error(
-                            expr->span, "'if' then-branch has type '" + then_ptr->ty.display()
-                                            + "' but else-branch has type '" + else_ty.display()
-                                            + "'");
-                    result_ty = *joined_ty;
+                    if (!joined_ty.has_value()) {
+                        const bool then_needs_context =
+                            find_unresolved_deferred_generic_call(
+                                then_ptr->tail.value_or(nullptr), ctx.env, ctx.generic_params)
+                                .has_value();
+                        const bool else_needs_context =
+                            find_unresolved_deferred_generic_call(
+                                else_val->expr, ctx.env, ctx.generic_params)
+                                .has_value();
+                        if (then_needs_context != else_needs_context)
+                            result_ty = then_needs_context ? else_ty : then_ptr->ty;
+                        else
+                            return make_error(
+                                expr->span, "'if' then-branch has type '" + then_ptr->ty.display()
+                                                + "' but else-branch has type '" + else_ty.display()
+                                                + "'");
+                    } else {
+                        result_ty = *joined_ty;
+                    }
 
                     if (auto merged =
                             merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
@@ -2300,6 +2725,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     auto val = lower_expr(*node.value, ctx);
                     if (!val)
                         return std::unexpected(std::move(val.error()));
+                    auto resolved_val =
+                        resolve_expr_against_type(val->expr, ctx.current_return_ty, ctx);
+                    if (!resolved_val)
+                        return std::unexpected(std::move(resolved_val.error()));
+                    val->expr = std::move(*resolved_val);
                     if (!compatible(val->expr->ty, ctx.current_return_ty))
                         return make_error(
                             expr->span, "return type mismatch: expected '"
@@ -2355,6 +2785,14 @@ static std::expected<void, LowerError> merge_loop_break_types(
     if (!body)
         return std::unexpected(std::move(body.error()));
 
+    if (body->tail.has_value()) {
+        auto resolved_tail = resolve_expr_against_type(*body->tail, sig.return_ty, ctx);
+        if (!resolved_tail)
+            return std::unexpected(std::move(resolved_tail.error()));
+        body->tail = std::move(*resolved_tail);
+        body->ty = block_can_fallthrough(*body) ? (*body->tail)->ty : tyir::ty::never();
+    }
+
     // Check that body type matches declared return type (when a tail is present)
     if (body->tail.has_value() && !compatible(body->ty, sig.return_ty))
         return make_error(
@@ -2409,6 +2847,20 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                     struct_decl->span,
                     "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
 
+            auto lang_name = detail::resolve_lang_item_name(
+                struct_decl->attributes, struct_decl->span, "struct");
+            if (!lang_name)
+                return std::unexpected(std::move(lang_name.error()));
+            if (lang_name->has_value()) {
+                const auto [it, inserted] =
+                    env.lang_type_names.emplace(**lang_name, struct_decl->name);
+                if (!inserted) {
+                    return detail::make_error(
+                        struct_decl->span,
+                        "duplicate lang item '" + std::string((**lang_name).as_str()) + "'");
+                }
+            }
+
             const auto insert_result =
                 env.struct_fields.emplace(struct_decl->name, std::vector<tyir::TyFieldDecl>{});
             if (!insert_result.second)
@@ -2423,6 +2875,20 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     enum_decl->span,
                     "duplicate enum name '" + detail::display_decl_name(*enum_decl) + "'");
+
+            auto lang_name =
+                detail::resolve_lang_item_name(enum_decl->attributes, enum_decl->span, "enum");
+            if (!lang_name)
+                return std::unexpected(std::move(lang_name.error()));
+            if (lang_name->has_value()) {
+                const auto [it, inserted] =
+                    env.lang_type_names.emplace(**lang_name, enum_decl->name);
+                if (!inserted) {
+                    return detail::make_error(
+                        enum_decl->span,
+                        "duplicate lang item '" + std::string((**lang_name).as_str()) + "'");
+                }
+            }
 
             const auto insert_result =
                 env.enum_variants.emplace(enum_decl->name, std::vector<tyir::TyEnumVariant>{});
@@ -2442,6 +2908,20 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     extern_struct->span,
                     "duplicate type name '" + detail::display_decl_name(*extern_struct) + "'");
+
+            auto lang_name = detail::resolve_lang_item_name(
+                extern_struct->attributes, extern_struct->span, "struct", true, extern_struct->abi);
+            if (!lang_name)
+                return std::unexpected(std::move(lang_name.error()));
+            if (lang_name->has_value()) {
+                const auto [it, inserted] =
+                    env.lang_type_names.emplace(**lang_name, extern_struct->name);
+                if (!inserted) {
+                    return detail::make_error(
+                        extern_struct->span,
+                        "duplicate lang item '" + std::string((**lang_name).as_str()) + "'");
+                }
+            }
 
             env.extern_struct_names.insert(extern_struct->name);
             env.type_generic_arity.emplace(extern_struct->name, 0);
@@ -2501,6 +2981,18 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     ext_fn->span,
                     "duplicate function name '" + detail::display_decl_name(*ext_fn) + "'");
+            auto lang_name = detail::resolve_lang_item_name(
+                ext_fn->attributes, ext_fn->span, "fn", true, ext_fn->abi);
+            if (!lang_name)
+                return std::unexpected(std::move(lang_name.error()));
+            if (lang_name->has_value()) {
+                const auto [it, inserted] = env.lang_fn_names.emplace(**lang_name, ext_fn->name);
+                if (!inserted) {
+                    return detail::make_error(
+                        ext_fn->span,
+                        "duplicate lang item '" + std::string((**lang_name).as_str()) + "'");
+                }
+            }
         }
     }
 
@@ -2526,6 +3018,9 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
         if (const auto* s = std::get_if<ast::StructDecl>(&item)) {
             tyir::TyStructDecl ty_decl;
             ty_decl.name = s->name;
+            if (auto lang_name = detail::resolve_lang_item_name(s->attributes, s->span, "struct");
+                lang_name && lang_name->has_value())
+                ty_decl.lang_name = **lang_name;
             ty_decl.generic_params = s->generic_params;
             ty_decl.is_zst = s->is_zst;
             ty_decl.span = s->span;
@@ -2540,6 +3035,9 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
         } else if (const auto* e = std::get_if<ast::EnumDecl>(&item)) {
             tyir::TyEnumDecl ty_decl;
             ty_decl.name = e->name;
+            if (auto lang_name = detail::resolve_lang_item_name(e->attributes, e->span, "enum");
+                lang_name && lang_name->has_value())
+                ty_decl.lang_name = **lang_name;
             ty_decl.generic_params = e->generic_params;
             ty_decl.span = e->span;
             ty_decl.variants = env.enum_variants.at(e->name);
@@ -2580,6 +3078,10 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             tyir::TyExternStructDecl ty_decl;
             ty_decl.abi = ext_struct->abi;
             ty_decl.name = ext_struct->name;
+            if (auto lang_name = detail::resolve_lang_item_name(
+                    ext_struct->attributes, ext_struct->span, "struct", true, ext_struct->abi);
+                lang_name && lang_name->has_value())
+                ty_decl.lang_name = **lang_name;
             ty_decl.span = ext_struct->span;
             result.items.push_back(std::move(ty_decl));
         }

@@ -467,6 +467,9 @@ private:
                         lir::LirRvalue{lir::LirCall{node.fn_name, std::move(arg_ops)}},
                         expr->span});
                 return operand_for_local(tmp, expr->ty);
+            } else if constexpr (std::is_same_v<N, tyir::TyDeferredGenericCall>) {
+                assert(false && "unresolved deferred generic call reached LIR lowering");
+                return terminated_operand();
             }
 
             // ── Nested block ──────────────────────────────────────────────────
@@ -1155,6 +1158,38 @@ private:
                     for (const tyir::TyExprPtr& arg : node.args)
                         rewritten.args.push_back(rewrite_expr(arg, subst));
                     return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyDeferredGenericCall>) {
+                    tyir::TyDeferredGenericCall rewritten;
+                    rewritten.fn_name = node.fn_name;
+                    rewritten.generic_args.reserve(node.generic_args.size());
+                    bool fully_resolved = true;
+                    for (const std::optional<tyir::Ty>& arg : node.generic_args) {
+                        if (!arg.has_value()) {
+                            rewritten.generic_args.push_back(std::nullopt);
+                            fully_resolved = false;
+                            continue;
+                        }
+                        rewritten.generic_args.push_back(rewrite_type(*arg, subst));
+                    }
+                    rewritten.args.reserve(node.args.size());
+                    for (const tyir::TyExprPtr& arg : node.args)
+                        rewritten.args.push_back(rewrite_expr(arg, subst));
+                    if (!fully_resolved)
+                        return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+
+                    tyir::TyCall concrete;
+                    concrete.fn_name = rewritten.fn_name;
+                    concrete.generic_args.reserve(rewritten.generic_args.size());
+                    for (const std::optional<tyir::Ty>& arg : rewritten.generic_args) {
+                        assert(arg.has_value());
+                        concrete.generic_args.push_back(*arg);
+                    }
+                    concrete.args = std::move(rewritten.args);
+                    if (const auto it = generic_fns_.find(concrete.fn_name);
+                        it != generic_fns_.end())
+                        concrete.fn_name =
+                            ensure_fn_instantiation(*it->second, concrete.generic_args);
+                    return tyir::make_ty_expr(expr->span, concrete, rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyBlockPtr>) {
                     return tyir::make_ty_expr(expr->span, rewrite_block(node, subst), rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyIf>) {
