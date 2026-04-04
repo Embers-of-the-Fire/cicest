@@ -1199,7 +1199,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
     bool fully_resolved = true;
     for (const ast::GenericParam& param : sig.generic_params) {
         const auto found = substitution.find(param.name);
-        if (found == substitution.end()) {
+        if (found == substitution.end()
+            || type_depends_on_generic_params(found->second, generic_param_set)) {
             generic_args.push_back(std::nullopt);
             fully_resolved = false;
             continue;
@@ -1223,22 +1224,27 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         concrete_generic_args.push_back(*generic_arg);
     }
 
-    for (std::size_t index = 0; index < deferred->args.size(); ++index) {
+    std::vector<tyir::TyExprPtr> resolved_args = deferred->args;
+    for (std::size_t index = 0; index < resolved_args.size(); ++index) {
         const tyir::Ty expected_param_ty = annotate_type_semantics(
             apply_substitution(sig.param_types[index], substitution), ctx.env);
-        if (!compatible(deferred->args[index]->ty, expected_param_ty)) {
+        auto resolved_arg = resolve_expr_against_type(resolved_args[index], expected_param_ty, ctx);
+        if (!resolved_arg)
+            return std::unexpected(std::move(resolved_arg.error()));
+        resolved_args[index] = std::move(*resolved_arg);
+        if (!compatible(resolved_args[index]->ty, expected_param_ty)) {
             return make_error(
-                deferred->args[index]->span, "argument " + std::to_string(index + 1) + " of '"
-                                                 + std::string(deferred->fn_name.as_str())
-                                                 + "': expected '" + expected_param_ty.display()
-                                                 + "', found '"
-                                                 + deferred->args[index]->ty.display() + "'");
+                resolved_args[index]->span, "argument " + std::to_string(index + 1) + " of '"
+                                                + std::string(deferred->fn_name.as_str())
+                                                + "': expected '" + expected_param_ty.display()
+                                                + "', found '" + resolved_args[index]->ty.display()
+                                                + "'");
         }
     }
 
     return tyir::make_ty_expr(
         expr->span,
-        tyir::TyCall{deferred->fn_name, std::move(concrete_generic_args), deferred->args},
+        tyir::TyCall{deferred->fn_name, std::move(concrete_generic_args), std::move(resolved_args)},
         resolved_return_ty);
 }
 
@@ -2225,6 +2231,17 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                         + std::to_string(node.args.size()) + " provided");
 
                 for (std::size_t i = 0; i < node.args.size(); ++i) {
+                    const tyir::Ty expected_param_ty = annotate_type_semantics(
+                        apply_substitution(sig.param_types[i], substitution), ctx.env);
+                    auto resolved_arg =
+                        resolve_expr_against_type(lowered_args[i], expected_param_ty, ctx);
+                    if (!resolved_arg)
+                        return std::unexpected(std::move(resolved_arg.error()));
+                    lowered_args[i] = std::move(*resolved_arg);
+                    if (std::holds_alternative<tyir::TyDeferredGenericCall>(lowered_args[i]->node)
+                        && type_depends_on_generic_params(lowered_args[i]->ty, generic_param_set)) {
+                        continue;
+                    }
                     auto inferred = infer_substitution(
                         sig.param_types[i], lowered_args[i]->ty, generic_param_set, substitution,
                         node.args[i]->span, display_fn_name);
@@ -2258,13 +2275,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     }
 
                     for (std::size_t i = 0; i < node.args.size(); ++i) {
+                        const tyir::Ty expected_param_ty = annotate_type_semantics(
+                            apply_substitution(sig.param_types[i], substitution), ctx.env);
                         auto resolved_arg =
-                            resolve_expr_against_type(lowered_args[i], sig.param_types[i], ctx);
+                            resolve_expr_against_type(lowered_args[i], expected_param_ty, ctx);
                         if (!resolved_arg)
                             return std::unexpected(std::move(resolved_arg.error()));
                         lowered_args[i] = std::move(*resolved_arg);
-                        const tyir::Ty expected_param_ty = annotate_type_semantics(
-                            apply_substitution(sig.param_types[i], substitution), ctx.env);
                         if (!compatible(lowered_args[i]->ty, expected_param_ty))
                             return make_error(
                                 node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"

@@ -64,6 +64,19 @@ static const TyFnDecl& second_fn(const TyProgram& prog) {
     __builtin_unreachable();
 }
 
+static const TyFnDecl& nth_fn(const TyProgram& prog, std::size_t index) {
+    std::size_t seen = 0;
+    for (const auto& item : prog.items) {
+        if (const auto* fn = std::get_if<TyFnDecl>(&item)) {
+            if (seen == index)
+                return *fn;
+            ++seen;
+        }
+    }
+    assert(false && "requested function not found in program");
+    __builtin_unreachable();
+}
+
 // ─── Literals ─────────────────────────────────────────────────────────────────
 
 static void test_num_literal() {
@@ -873,6 +886,44 @@ static void test_return_type_resolves_deferred_call_through_if_branches() {
     assert(call.generic_args[0] == ty::num());
 }
 
+static void test_expected_type_resolves_nested_deferred_generic_argument() {
+    const auto prog = must_lower(
+        "fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn pair<T>(left: T, right: T) -> T { left }"
+        "fn f() -> num { pair(1, make_default(true)) }");
+    const auto& tail = *nth_fn(prog, 2).body->tail;
+    assert(tail->ty == ty::num());
+    const auto& call = std::get<TyCall>(tail->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+    assert(call.args.size() == 2);
+    const auto& nested = std::get<TyCall>(call.args[1]->node);
+    assert(call.args[1]->ty == ty::num());
+    assert(nested.generic_args.size() == 1);
+    assert(nested.generic_args[0] == ty::num());
+}
+
+static void test_deferred_resolution_uses_specialized_parameter_type() {
+    const auto prog = must_lower(
+        "fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn wrap<T>(value: T) -> T { value }"
+        "fn pair<T>(left: T, right: T) -> T { left }"
+        "fn f() -> num { pair(1, wrap(make_default(true))) }");
+    const auto& tail = *nth_fn(prog, 3).body->tail;
+    assert(tail->ty == ty::num());
+    const auto& outer = std::get<TyCall>(tail->node);
+    assert(outer.generic_args.size() == 1);
+    assert(outer.generic_args[0] == ty::num());
+    const auto& wrap = std::get<TyCall>(outer.args[1]->node);
+    assert(outer.args[1]->ty == ty::num());
+    assert(wrap.generic_args.size() == 1);
+    assert(wrap.generic_args[0] == ty::num());
+    const auto& nested = std::get<TyCall>(wrap.args[0]->node);
+    assert(wrap.args[0]->ty == ty::num());
+    assert(nested.generic_args.size() == 1);
+    assert(nested.generic_args[0] == ty::num());
+}
+
 static void test_path_expr_rejects_bare_generic_args() {
     const Symbol fn_name = Symbol::intern("f");
     const Symbol local_name = Symbol::intern("x");
@@ -1333,6 +1384,8 @@ int main() {
     test_call_infers_generic_args_from_arguments();
     test_let_annotation_resolves_deferred_call_in_block_tail();
     test_return_type_resolves_deferred_call_through_if_branches();
+    test_expected_type_resolves_nested_deferred_generic_argument();
+    test_deferred_resolution_uses_specialized_parameter_type();
     test_path_expr_rejects_bare_generic_args();
     test_path_expr_rejects_enum_variant_generic_args();
     test_enum_variant_ref();
