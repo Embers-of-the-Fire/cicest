@@ -179,7 +179,7 @@ static void test_generic_fn_calls_use_instantiated_identity() {
 
     assert(prog.fns.size() == 2);
     assert(prog.fns[0].name != Symbol::intern("id"));
-    assert(std::string(prog.fns[0].name.as_str()).find("id$inst$") == 0);
+    assert(std::string_view(prog.fns[0].name.as_str()).starts_with("id$inst$"));
     assert(prog.fns[0].return_ty == cstc::tyir::ty::num());
     assert(output_contains(prog, "Call(id$inst$N"));
 }
