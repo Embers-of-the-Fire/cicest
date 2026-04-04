@@ -1,10 +1,14 @@
 #include <cstc_lir_builder/builder.hpp>
 
 #include <cassert>
+#include <cctype>
 #include <cstdlib>
 #include <optional>
+#include <string>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <cstc_symbol/symbol.hpp>
@@ -866,52 +870,517 @@ private:
     return out;
 }
 
+using TypeSubstitution =
+    std::unordered_map<cstc::symbol::Symbol, tyir::Ty, cstc::symbol::SymbolHash>;
+
+[[nodiscard]] static tyir::Ty
+    apply_substitution(const tyir::Ty& ty, const TypeSubstitution& subst) {
+    if (ty.kind == tyir::TyKind::Ref) {
+        if (ty.pointee == nullptr)
+            return ty;
+        tyir::Ty rewritten = ty;
+        rewritten.pointee = std::make_shared<tyir::Ty>(apply_substitution(*ty.pointee, subst));
+        return rewritten;
+    }
+
+    if (ty.kind != tyir::TyKind::Named)
+        return ty;
+
+    if (ty.generic_args.empty()) {
+        const auto it = subst.find(ty.name);
+        if (it != subst.end()) {
+            tyir::Ty rewritten = it->second;
+            rewritten.is_runtime = rewritten.is_runtime || ty.is_runtime;
+            if (!rewritten.display_name.is_valid())
+                rewritten.display_name = ty.display_name;
+            return rewritten;
+        }
+    }
+
+    tyir::Ty rewritten = ty;
+    rewritten.generic_args.clear();
+    rewritten.generic_args.reserve(ty.generic_args.size());
+    for (const tyir::Ty& arg : ty.generic_args)
+        rewritten.generic_args.push_back(apply_substitution(arg, subst));
+    return rewritten;
+}
+
+[[nodiscard]] static std::string sanitize_symbol_fragment(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (const unsigned char ch : text) {
+        if (std::isalnum(ch) != 0 || ch == '_') {
+            out.push_back(static_cast<char>(ch));
+            continue;
+        }
+
+        const auto hex_digit = [](unsigned char value) {
+            return static_cast<char>(value < 10U ? ('0' + value) : ('a' + (value - 10U)));
+        };
+        out += "_x";
+        out.push_back(hex_digit(static_cast<unsigned char>((ch >> 4U) & 0x0FU)));
+        out.push_back(hex_digit(static_cast<unsigned char>(ch & 0x0FU)));
+    }
+    return out;
+}
+
+[[nodiscard]] static std::string encode_symbol(cstc::symbol::Symbol symbol) {
+    const std::string text = symbol.is_valid() ? std::string(symbol.as_str()) : "invalid";
+    return std::to_string(text.size()) + "_" + sanitize_symbol_fragment(text);
+}
+
+[[nodiscard]] static std::string encode_type(const tyir::Ty& ty) {
+    switch (ty.kind) {
+    case tyir::TyKind::Ref:
+        return ty.pointee != nullptr ? "R" + encode_type(*ty.pointee) : "Runknown";
+    case tyir::TyKind::Unit: return "U";
+    case tyir::TyKind::Num: return "N";
+    case tyir::TyKind::Str: return "S";
+    case tyir::TyKind::Bool: return "B";
+    case tyir::TyKind::Never: return "X";
+    case tyir::TyKind::Named: {
+        std::string out = "T" + encode_symbol(ty.name);
+        if (ty.is_runtime)
+            out += "_rt";
+        if (!ty.generic_args.empty()) {
+            out += "_g" + std::to_string(ty.generic_args.size());
+            for (const tyir::Ty& arg : ty.generic_args)
+                out += "_" + encode_type(arg);
+        }
+        return out;
+    }
+    }
+
+    std::unreachable();
+}
+
+[[nodiscard]] static std::string instantiation_cache_key(
+    cstc::symbol::Symbol base_name, const std::vector<tyir::Ty>& generic_args) {
+    std::string key = std::string(base_name.as_str()) + "<";
+    for (std::size_t index = 0; index < generic_args.size(); ++index) {
+        if (index > 0)
+            key += ",";
+        key += encode_type(generic_args[index]);
+    }
+    key += ">";
+    return key;
+}
+
+[[nodiscard]] static cstc::symbol::Symbol make_instantiated_name(
+    cstc::symbol::Symbol base_name, const std::vector<tyir::Ty>& generic_args) {
+    std::string mangled(base_name.as_str());
+    mangled += "$inst";
+    for (const tyir::Ty& arg : generic_args)
+        mangled += "$" + encode_type(arg);
+    return cstc::symbol::Symbol::intern(mangled);
+}
+
+class Monomorphizer {
+public:
+    explicit Monomorphizer(const tyir::TyProgram& program)
+        : program_(program) {}
+
+    [[nodiscard]] lir::LirProgram run() {
+        collect_generic_items();
+
+        for (const tyir::TyItem& item : program_.items) {
+            std::visit(
+                [&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<T, tyir::TyStructDecl>) {
+                        if (node.generic_params.empty())
+                            emit_struct_decl(node, {}, node.name);
+                    } else if constexpr (std::is_same_v<T, tyir::TyEnumDecl>) {
+                        if (node.generic_params.empty())
+                            emit_enum_decl(node, {}, node.name);
+                    } else if constexpr (std::is_same_v<T, tyir::TyFnDecl>) {
+                        if (node.generic_params.empty())
+                            emit_fn_decl(node, {}, node.name);
+                    } else if constexpr (std::is_same_v<T, tyir::TyExternFnDecl>) {
+                        emit_extern_fn_decl(node);
+                    } else if constexpr (std::is_same_v<T, tyir::TyExternStructDecl>) {
+                        out_.extern_structs.push_back(
+                            lir::LirExternStructDecl{node.abi, node.name, node.span});
+                    }
+                },
+                item);
+        }
+
+        return std::move(out_);
+    }
+
+private:
+    void collect_generic_items() {
+        for (const tyir::TyItem& item : program_.items) {
+            std::visit(
+                [&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<T, tyir::TyStructDecl>) {
+                        if (!node.generic_params.empty())
+                            generic_structs_.emplace(node.name, &node);
+                    } else if constexpr (std::is_same_v<T, tyir::TyEnumDecl>) {
+                        if (!node.generic_params.empty())
+                            generic_enums_.emplace(node.name, &node);
+                    } else if constexpr (std::is_same_v<T, tyir::TyFnDecl>) {
+                        if (!node.generic_params.empty())
+                            generic_fns_.emplace(node.name, &node);
+                    }
+                },
+                item);
+        }
+    }
+
+    [[nodiscard]] TypeSubstitution build_substitution(
+        const std::vector<cstc::ast::GenericParam>& generic_params,
+        const std::vector<tyir::Ty>& generic_args) const {
+        assert(generic_params.size() == generic_args.size());
+        TypeSubstitution subst;
+        subst.reserve(generic_params.size());
+        for (std::size_t index = 0; index < generic_params.size(); ++index)
+            subst.emplace(generic_params[index].name, generic_args[index]);
+        return subst;
+    }
+
+    [[nodiscard]] tyir::Ty rewrite_type(const tyir::Ty& ty, const TypeSubstitution& subst) {
+        tyir::Ty rewritten = apply_substitution(ty, subst);
+        if (rewritten.kind == tyir::TyKind::Ref) {
+            if (rewritten.pointee != nullptr)
+                rewritten.pointee =
+                    std::make_shared<tyir::Ty>(rewrite_type(*rewritten.pointee, subst));
+            return rewritten;
+        }
+
+        if (rewritten.kind != tyir::TyKind::Named)
+            return rewritten;
+
+        std::vector<tyir::Ty> concrete_args;
+        concrete_args.reserve(rewritten.generic_args.size());
+        for (const tyir::Ty& arg : rewritten.generic_args)
+            concrete_args.push_back(rewrite_type(arg, subst));
+
+        if (const auto it = generic_structs_.find(rewritten.name); it != generic_structs_.end()) {
+            const cstc::symbol::Symbol instantiated_name =
+                ensure_struct_instantiation(*it->second, concrete_args);
+            rewritten.name = instantiated_name;
+            rewritten.generic_args.clear();
+            return rewritten;
+        }
+
+        if (const auto it = generic_enums_.find(rewritten.name); it != generic_enums_.end()) {
+            const cstc::symbol::Symbol instantiated_name =
+                ensure_enum_instantiation(*it->second, concrete_args);
+            rewritten.name = instantiated_name;
+            rewritten.generic_args.clear();
+            return rewritten;
+        }
+
+        rewritten.generic_args = std::move(concrete_args);
+        return rewritten;
+    }
+
+    [[nodiscard]] tyir::TyExprPtr
+        rewrite_expr(const tyir::TyExprPtr& expr, const TypeSubstitution& subst) {
+        return std::visit(
+            [&](const auto& node) -> tyir::TyExprPtr {
+                using T = std::decay_t<decltype(node)>;
+                const tyir::Ty rewritten_ty = rewrite_type(expr->ty, subst);
+
+                if constexpr (
+                    std::is_same_v<T, tyir::TyLiteral> || std::is_same_v<T, tyir::LocalRef>
+                    || std::is_same_v<T, tyir::TyContinue>) {
+                    return tyir::make_ty_expr(expr->span, node, rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::EnumVariantRef>) {
+                    tyir::EnumVariantRef rewritten = node;
+                    if (const auto it = generic_enums_.find(node.enum_name);
+                        it != generic_enums_.end()) {
+                        std::vector<tyir::Ty> concrete_args;
+                        concrete_args.reserve(expr->ty.generic_args.size());
+                        for (const tyir::Ty& arg : expr->ty.generic_args)
+                            concrete_args.push_back(rewrite_type(arg, subst));
+                        rewritten.enum_name = ensure_enum_instantiation(*it->second, concrete_args);
+                    }
+                    return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyStructInit>) {
+                    tyir::TyStructInit rewritten;
+                    std::vector<tyir::Ty> concrete_args;
+                    concrete_args.reserve(node.generic_args.size());
+                    for (const tyir::Ty& arg : node.generic_args)
+                        concrete_args.push_back(rewrite_type(arg, subst));
+
+                    rewritten.type_name = node.type_name;
+                    if (const auto it = generic_structs_.find(node.type_name);
+                        it != generic_structs_.end())
+                        rewritten.type_name =
+                            ensure_struct_instantiation(*it->second, concrete_args);
+                    rewritten.fields.reserve(node.fields.size());
+                    for (const tyir::TyStructInitField& field : node.fields) {
+                        rewritten.fields.push_back(
+                            tyir::TyStructInitField{
+                                field.name,
+                                rewrite_expr(field.value, subst),
+                                field.span,
+                            });
+                    }
+                    return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyBorrow>) {
+                    return tyir::make_ty_expr(
+                        expr->span, tyir::TyBorrow{rewrite_expr(node.rhs, subst)}, rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyUnary>) {
+                    return tyir::make_ty_expr(
+                        expr->span, tyir::TyUnary{node.op, rewrite_expr(node.rhs, subst)},
+                        rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyBinary>) {
+                    return tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyBinary{
+                            node.op, rewrite_expr(node.lhs, subst), rewrite_expr(node.rhs, subst)},
+                        rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyFieldAccess>) {
+                    return tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyFieldAccess{
+                            rewrite_expr(node.base, subst), node.field, node.use_kind},
+                        rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyCall>) {
+                    tyir::TyCall rewritten;
+                    std::vector<tyir::Ty> concrete_args;
+                    concrete_args.reserve(node.generic_args.size());
+                    for (const tyir::Ty& arg : node.generic_args)
+                        concrete_args.push_back(rewrite_type(arg, subst));
+
+                    rewritten.fn_name = node.fn_name;
+                    if (const auto it = generic_fns_.find(node.fn_name); it != generic_fns_.end())
+                        rewritten.fn_name = ensure_fn_instantiation(*it->second, concrete_args);
+                    rewritten.args.reserve(node.args.size());
+                    for (const tyir::TyExprPtr& arg : node.args)
+                        rewritten.args.push_back(rewrite_expr(arg, subst));
+                    return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyBlockPtr>) {
+                    return tyir::make_ty_expr(expr->span, rewrite_block(node, subst), rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyIf>) {
+                    std::optional<tyir::TyExprPtr> else_branch;
+                    if (node.else_branch.has_value())
+                        else_branch = rewrite_expr(*node.else_branch, subst);
+                    return tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyIf{
+                            rewrite_expr(node.condition, subst),
+                            rewrite_block(node.then_block, subst), std::move(else_branch)},
+                        rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyLoop>) {
+                    return tyir::make_ty_expr(
+                        expr->span, tyir::TyLoop{rewrite_block(node.body, subst)}, rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyWhile>) {
+                    return tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyWhile{
+                            rewrite_expr(node.condition, subst), rewrite_block(node.body, subst)},
+                        rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyFor>) {
+                    tyir::TyFor rewritten;
+                    if (node.init.has_value()) {
+                        rewritten.init = tyir::TyForInit{
+                            node.init->discard,
+                            node.init->name,
+                            rewrite_type(node.init->ty, subst),
+                            rewrite_expr(node.init->init, subst),
+                            node.init->span,
+                        };
+                    }
+                    if (node.condition.has_value())
+                        rewritten.condition = rewrite_expr(*node.condition, subst);
+                    if (node.step.has_value())
+                        rewritten.step = rewrite_expr(*node.step, subst);
+                    rewritten.body = rewrite_block(node.body, subst);
+                    return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyBreak>) {
+                    std::optional<tyir::TyExprPtr> value;
+                    if (node.value.has_value())
+                        value = rewrite_expr(*node.value, subst);
+                    return tyir::make_ty_expr(
+                        expr->span, tyir::TyBreak{std::move(value)}, rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyReturn>) {
+                    std::optional<tyir::TyExprPtr> value;
+                    if (node.value.has_value())
+                        value = rewrite_expr(*node.value, subst);
+                    return tyir::make_ty_expr(
+                        expr->span, tyir::TyReturn{std::move(value)}, rewritten_ty);
+                }
+
+                assert(false && "unhandled TyExpr variant during monomorphization");
+                return tyir::make_ty_expr(expr->span, tyir::TyLiteral{}, rewritten_ty);
+            },
+            expr->node);
+    }
+
+    [[nodiscard]] tyir::TyBlockPtr
+        rewrite_block(const tyir::TyBlockPtr& block, const TypeSubstitution& subst) {
+        auto rewritten = std::make_shared<tyir::TyBlock>();
+        rewritten->stmts.reserve(block->stmts.size());
+        for (const tyir::TyStmt& stmt : block->stmts) {
+            rewritten->stmts.push_back(
+                std::visit(
+                    [&](const auto& node) -> tyir::TyStmt {
+                        using T = std::decay_t<decltype(node)>;
+                        if constexpr (std::is_same_v<T, tyir::TyLetStmt>) {
+                            return tyir::TyLetStmt{
+                                node.discard,
+                                node.name,
+                                rewrite_type(node.ty, subst),
+                                rewrite_expr(node.init, subst),
+                                node.span,
+                            };
+                        } else {
+                            return tyir::TyExprStmt{rewrite_expr(node.expr, subst), node.span};
+                        }
+                    },
+                    stmt));
+        }
+        if (block->tail.has_value())
+            rewritten->tail = rewrite_expr(*block->tail, subst);
+        rewritten->ty = rewrite_type(block->ty, subst);
+        rewritten->span = block->span;
+        return rewritten;
+    }
+
+    void emit_struct_decl(
+        const tyir::TyStructDecl& decl, const TypeSubstitution& subst,
+        cstc::symbol::Symbol emitted_name) {
+        const std::string emitted_key(emitted_name.as_str());
+        if (!emitted_structs_.insert(emitted_key).second)
+            return;
+
+        tyir::TyStructDecl concrete;
+        concrete.name = emitted_name;
+        concrete.is_zst = decl.is_zst;
+        concrete.span = decl.span;
+        concrete.fields.reserve(decl.fields.size());
+        for (const tyir::TyFieldDecl& field : decl.fields) {
+            concrete.fields.push_back(
+                tyir::TyFieldDecl{field.name, rewrite_type(field.ty, subst), field.span});
+        }
+        out_.structs.push_back(forward_struct(concrete));
+    }
+
+    void emit_enum_decl(
+        const tyir::TyEnumDecl& decl, const TypeSubstitution& subst,
+        cstc::symbol::Symbol emitted_name) {
+        const std::string emitted_key(emitted_name.as_str());
+        if (!emitted_enums_.insert(emitted_key).second)
+            return;
+
+        tyir::TyEnumDecl concrete;
+        concrete.name = emitted_name;
+        concrete.span = decl.span;
+        concrete.variants = decl.variants;
+        concrete.lowered_where_clause.clear();
+        concrete.where_clause.clear();
+        (void)subst;
+        out_.enums.push_back(forward_enum(concrete));
+    }
+
+    void emit_fn_decl(
+        const tyir::TyFnDecl& decl, const TypeSubstitution& subst,
+        cstc::symbol::Symbol emitted_name) {
+        const std::string emitted_key(emitted_name.as_str());
+        if (!emitted_fns_.insert(emitted_key).second)
+            return;
+
+        tyir::TyFnDecl concrete;
+        concrete.name = emitted_name;
+        concrete.return_ty = rewrite_type(decl.return_ty, subst);
+        concrete.body = rewrite_block(decl.body, subst);
+        concrete.span = decl.span;
+        concrete.is_runtime = decl.is_runtime;
+        concrete.params.reserve(decl.params.size());
+        for (const tyir::TyParam& param : decl.params) {
+            concrete.params.push_back(
+                tyir::TyParam{param.name, rewrite_type(param.ty, subst), param.span});
+        }
+        out_.fns.push_back(lower_fn(concrete));
+    }
+
+    void emit_extern_fn_decl(const tyir::TyExternFnDecl& node) {
+        lir::LirExternFnDecl ext;
+        ext.abi = node.abi;
+        ext.name = node.name;
+        ext.link_name = node.link_name;
+        ext.return_ty = rewrite_type(node.return_ty, {});
+        ext.span = node.span;
+        for (std::size_t i = 0; i < node.params.size(); ++i) {
+            ext.params.push_back(
+                lir::LirParam{
+                    .local = static_cast<lir::LirLocalId>(i),
+                    .name = node.params[i].name,
+                    .ty = rewrite_type(node.params[i].ty, {}),
+                    .span = node.params[i].span,
+                });
+        }
+        out_.extern_fns.push_back(std::move(ext));
+    }
+
+    [[nodiscard]] cstc::symbol::Symbol ensure_struct_instantiation(
+        const tyir::TyStructDecl& decl, const std::vector<tyir::Ty>& generic_args) {
+        const std::string key = instantiation_cache_key(decl.name, generic_args);
+        if (const auto it = instantiated_structs_.find(key); it != instantiated_structs_.end())
+            return it->second;
+
+        const cstc::symbol::Symbol emitted_name = make_instantiated_name(decl.name, generic_args);
+        instantiated_structs_.emplace(key, emitted_name);
+        emit_struct_decl(decl, build_substitution(decl.generic_params, generic_args), emitted_name);
+        return emitted_name;
+    }
+
+    [[nodiscard]] cstc::symbol::Symbol ensure_enum_instantiation(
+        const tyir::TyEnumDecl& decl, const std::vector<tyir::Ty>& generic_args) {
+        const std::string key = instantiation_cache_key(decl.name, generic_args);
+        if (const auto it = instantiated_enums_.find(key); it != instantiated_enums_.end())
+            return it->second;
+
+        const cstc::symbol::Symbol emitted_name = make_instantiated_name(decl.name, generic_args);
+        instantiated_enums_.emplace(key, emitted_name);
+        emit_enum_decl(decl, build_substitution(decl.generic_params, generic_args), emitted_name);
+        return emitted_name;
+    }
+
+    [[nodiscard]] cstc::symbol::Symbol ensure_fn_instantiation(
+        const tyir::TyFnDecl& decl, const std::vector<tyir::Ty>& generic_args) {
+        const std::string key = instantiation_cache_key(decl.name, generic_args);
+        if (const auto it = instantiated_fns_.find(key); it != instantiated_fns_.end())
+            return it->second;
+
+        const cstc::symbol::Symbol emitted_name = make_instantiated_name(decl.name, generic_args);
+        instantiated_fns_.emplace(key, emitted_name);
+        emit_fn_decl(decl, build_substitution(decl.generic_params, generic_args), emitted_name);
+        return emitted_name;
+    }
+
+    const tyir::TyProgram& program_;
+    lir::LirProgram out_;
+
+    std::unordered_map<cstc::symbol::Symbol, const tyir::TyStructDecl*, cstc::symbol::SymbolHash>
+        generic_structs_;
+    std::unordered_map<cstc::symbol::Symbol, const tyir::TyEnumDecl*, cstc::symbol::SymbolHash>
+        generic_enums_;
+    std::unordered_map<cstc::symbol::Symbol, const tyir::TyFnDecl*, cstc::symbol::SymbolHash>
+        generic_fns_;
+
+    std::unordered_map<std::string, cstc::symbol::Symbol> instantiated_structs_;
+    std::unordered_map<std::string, cstc::symbol::Symbol> instantiated_enums_;
+    std::unordered_map<std::string, cstc::symbol::Symbol> instantiated_fns_;
+
+    std::unordered_set<std::string> emitted_structs_;
+    std::unordered_set<std::string> emitted_enums_;
+    std::unordered_set<std::string> emitted_fns_;
+};
+
 } // namespace detail
 
 // ─── Public entry point ───────────────────────────────────────────────────────
 
 lir::LirProgram lower_program(const tyir::TyProgram& program) {
-    lir::LirProgram out;
-
-    for (const tyir::TyItem& item : program.items) {
-        std::visit(
-            [&](const auto& node) {
-                using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, tyir::TyStructDecl>) {
-                    out.structs.push_back(detail::forward_struct(node));
-                } else if constexpr (std::is_same_v<T, tyir::TyEnumDecl>) {
-                    out.enums.push_back(detail::forward_enum(node));
-                } else if constexpr (std::is_same_v<T, tyir::TyExternFnDecl>) {
-                    lir::LirExternFnDecl ext;
-                    ext.abi = node.abi;
-                    ext.name = node.name;
-                    ext.link_name = node.link_name;
-                    ext.return_ty = node.return_ty;
-                    ext.span = node.span;
-                    for (std::size_t i = 0; i < node.params.size(); ++i) {
-                        ext.params.push_back(
-                            lir::LirParam{
-                                .local = static_cast<lir::LirLocalId>(i),
-                                .name = node.params[i].name,
-                                .ty = node.params[i].ty,
-                                .span = node.params[i].span,
-                            });
-                    }
-                    out.extern_fns.push_back(std::move(ext));
-                } else if constexpr (std::is_same_v<T, tyir::TyExternStructDecl>) {
-                    lir::LirExternStructDecl ext_s;
-                    ext_s.abi = node.abi;
-                    ext_s.name = node.name;
-                    ext_s.span = node.span;
-                    out.extern_structs.push_back(std::move(ext_s));
-                } else {
-                    out.fns.push_back(detail::lower_fn(node));
-                }
-            },
-            item);
-    }
-
-    return out;
+    detail::Monomorphizer monomorphizer(program);
+    return monomorphizer.run();
 }
 
 } // namespace cstc::lir_builder

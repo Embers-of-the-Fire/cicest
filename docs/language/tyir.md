@@ -7,7 +7,7 @@ code-generation phases.
 ## Position in the pipeline
 
 ```
-Source → Lexer → Tokens → Parser → AST → [Lower] → TyIR → (future: MIR / codegen)
+Source → Lexer → Tokens → Parser → AST → [Lower] → TyIR → [Monomorphizing LIR Lowering] → LIR → Codegen
 ```
 
 ## Relationship to the AST
@@ -17,6 +17,7 @@ Source → Lexer → Tokens → Parser → AST → [Lower] → TyIR → (future:
 | Type annotations | Optional (from source) | Required on every expression |
 | Name resolution | Raw `PathExpr` | `LocalRef`, `EnumVariantRef`, `fn_name` in `TyCall` |
 | Type checking | None | Fully checked during lowering |
+| Generics | Surface syntax only | Preserved with resolved/inferred generic arguments |
 | Operator validity | Syntactic only | Operand types verified |
 | ZST structs | Represented | Represented |
 | Fieldless enums | Represented | Represented |
@@ -50,6 +51,21 @@ TyIR keeps the tag on `Ty` itself. Surface sugar such as `runtime fn` is
 normalized during lowering into a runtime-tagged return type, and TyIR also
 preserves the original declaration-level runtime marker on function items for
 later passes such as const-eval.
+
+## Generics and constraints
+
+TyIR is the last IR that may still contain generic declarations.
+
+- Generic `fn`, `struct`, and `enum` items keep their declared parameter lists.
+- Concrete uses record resolved generic arguments on `Ty`, `TyCall`, and
+  `TyStructInit` nodes.
+- Calls without turbofish first attempt inference; when inference succeeds, TyIR
+  records the concrete argument list directly.
+- `where` constraints are lowered into typed expressions so const-eval can
+  validate them after substitution.
+
+By the time TyIR is handed to LIR lowering, all generic arguments used by the
+backend must be concrete and all constraints must already have passed.
 
 ## Expression nodes
 
@@ -146,5 +162,5 @@ TyProgram
 
 - Break values are not propagated to loop types; all loops have type `Unit`.
 - No support for recursive types beyond single-level named references.
-- No generics (none in Cicest source language).
+- Generic declarations may still exist here; they must not survive into LIR.
 - Functions are always top-level; no closures or first-class function values.

@@ -255,6 +255,9 @@ Notes:
 - `foo.bar` field access is valid.
 - `foo::<T>(value)` is the explicit generic application form for expressions.
 - Type positions accept explicit generic arguments such as `Box<num>`.
+- Expression-position generic application is intentionally narrower: only direct
+  function calls accept turbofish. Enum value expressions stay in the
+  `EnumName::Variant` form and rely on surrounding type information.
 - `EnumName::Variant` is the canonical enum value expression.
 - Tuple/grouping ambiguity is avoided: `(expr)` is grouping; `()` is the unit literal.
 - No tuple literals or tuple types are defined.
@@ -319,6 +322,12 @@ Mandatory constraints for frontend validation:
 - `return` allowed only inside function bodies.
 - Enum variant usage must be fully scoped (`E::V`), not bare `V`.
 - Only named struct declarations are permitted; unnamed structs are invalid.
+- Generic inference is attempted before explicit failure for omitted turbofish.
+  If inference succeeds, later lowering stages only see concrete instantiations.
+- `where` clauses are checked after generic substitution and must remain
+  const-evaluable in the substituted environment.
+- Backend-facing IR is past the generic boundary: generic declarations are
+  monomorphized before LIR/codegen use.
 
 ### 5.1 Loop and Break Typing Rules
 

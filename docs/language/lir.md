@@ -20,6 +20,7 @@ Source → Lexer → Tokens → Parser → AST → [TyIR Builder] → TyIR → [
 | Temporaries | Implicit (sub-expressions) | Explicit `LirLocalDecl` entries |
 | Expressions | Arbitrarily nested | One assignment per statement |
 | Types | Owns the `Ty` system | Re-uses `Ty` from TyIR (no new type layer) |
+| Generics | Generic declarations and substitutions still exist | Only concrete, monomorphized items remain |
 | Fallibility | `lower_program` returns `expected<TyProgram, Error>` | `lower_program` returns `LirProgram` directly (infallible given valid TyIR) |
 
 ## Type system
@@ -36,6 +37,17 @@ full description.  The seven type kinds available:
 | `bool` | built-in | Boolean type |
 | `TypeName` | user-defined | Struct or enum name |
 | `!` | internal | Never / bottom type (diverging expressions) |
+
+## Generic boundary
+
+LIR is intentionally past the language's generic boundary.
+
+- Generic declarations are monomorphized during TyIR -> LIR lowering.
+- Deferred and explicit instantiations are solidified through substitution
+  before any `LirFnDef`, `LirStructDecl`, or `LirEnumDecl` is emitted.
+- Instantiated items receive deterministic internal names so duplicate requests
+  reuse the same lowered item and codegen symbol.
+- Codegen therefore never needs to reason about unresolved type parameters.
 
 ## Core concepts
 
@@ -152,6 +164,8 @@ The entry block of every function is always `bb0` (block ID `0`).  The invariant
 A function definition contains:
 
 - **name** — top-level function name
+- **name** may be a stable internal instantiation identity for monomorphized
+  generic items
 - **params** — parameter metadata (in declaration order)
 - **return_ty** — declared return type
 - **locals** — dense array of local declarations, indexed by `LirLocalId`
@@ -161,6 +175,9 @@ A function definition contains:
 
 LIR keeps its own copies of struct and enum declarations so the program is
 self-contained — code generation does not need to reach back into TyIR.
+
+When a declaration originated from a generic item, the stored name is the
+stable instantiated identity used internally by later stages.
 
 ### Structs
 
@@ -371,5 +388,4 @@ LIR is designed for straightforward translation to LLVM IR:
 - Moves from projected places are not yet supported; only whole-local moves are
   lowered.
 - No first-class functions or closures — all calls are direct.
-- No generics (none in Cicest source language).
 - Enum variants are fieldless (no data-carrying variants).
