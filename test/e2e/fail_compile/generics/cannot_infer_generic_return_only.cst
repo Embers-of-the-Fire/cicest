@@ -1,0 +1,12 @@
+enum Flag<T> {
+    On,
+    Off,
+}
+
+fn on<T>() -> Flag<T> {
+    Flag::On
+}
+
+fn main() {
+    on();
+}

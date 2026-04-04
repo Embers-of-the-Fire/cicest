@@ -29,6 +29,16 @@ static bool ir_contains(const std::string& ir, const std::string& needle) {
     return ir.find(needle) != std::string::npos;
 }
 
+static std::size_t count_occurrences(const std::string& ir, const std::string& needle) {
+    std::size_t count = 0;
+    std::size_t pos = 0;
+    while ((pos = ir.find(needle, pos)) != std::string::npos) {
+        ++count;
+        pos += needle.size();
+    }
+    return count;
+}
+
 // ─── Struct type declaration ──────────────────────────────────────────────────
 
 static void test_struct_type() {
@@ -117,6 +127,25 @@ static void test_struct_return() {
     assert(ir_contains(ir, "ret %Pair"));
 }
 
+static void test_generic_struct_codegen_uses_monomorphized_type() {
+    const std::string ir = must_codegen(
+        "struct Box<T> { value: T }"
+        "fn make<T>(value: T) -> Box<T> { Box<T> { value: value } }"
+        "fn main() -> num { let boxed: Box<num> = make(1); boxed.value }");
+
+    assert(ir_contains(ir, "Box$inst$N"));
+    assert(ir_contains(ir, "make$inst$N"));
+}
+
+static void test_generic_fn_codegen_reuses_single_instantiation() {
+    const std::string ir = must_codegen(
+        "fn id<T>(value: T) -> T { value }"
+        "fn main() -> num { let first = id(1); id::<num>(first) }");
+
+    assert(count_occurrences(ir, "id$inst$N") >= 2);
+    assert(count_occurrences(ir, "define") >= 2);
+}
+
 int main() {
     SymbolSession session;
 
@@ -129,6 +158,8 @@ int main() {
     test_struct_param();
     test_enum_variant_ref();
     test_struct_return();
+    test_generic_struct_codegen_uses_monomorphized_type();
+    test_generic_fn_codegen_reuses_single_instantiation();
 
     return 0;
 }

@@ -3,6 +3,7 @@
 ///        and simple function bodies.
 
 #include <cassert>
+#include <string>
 #include <variant>
 
 #include <cstc_lir/lir.hpp>
@@ -56,6 +57,24 @@ static void test_zst_struct_forwarded() {
     assert(prog.structs.size() == 1);
     assert(prog.structs[0].is_zst);
     assert(prog.structs[0].fields.empty());
+}
+
+static void test_generic_struct_is_instantiated_before_lir() {
+    const LirProgram prog = must_lower(
+        "struct Box<T> { value: T }"
+        "fn wrap() -> Box<num> { Box<num> { value: 1 } }");
+
+    assert(prog.structs.size() == 1);
+    assert(prog.structs[0].name != Symbol::intern("Box"));
+    assert(std::string(prog.structs[0].name.as_str()).find("Box$inst$") == 0);
+    assert(prog.structs[0].fields.size() == 1);
+    assert(prog.structs[0].fields[0].ty == cstc::tyir::ty::num());
+
+    assert(prog.fns.size() == 1);
+    assert(prog.fns[0].name == Symbol::intern("wrap"));
+    assert(prog.fns[0].return_ty.is_named());
+    assert(prog.fns[0].return_ty.name == prog.structs[0].name);
+    assert(prog.fns[0].return_ty.generic_args.empty());
 }
 
 // ─── Enum forwarding ──────────────────────────────────────────────────────────
@@ -186,6 +205,7 @@ int main() {
     test_empty_program();
     test_struct_forwarded();
     test_zst_struct_forwarded();
+    test_generic_struct_is_instantiated_before_lir();
     test_enum_forwarded();
     test_fn_noop();
     test_fn_add_params();

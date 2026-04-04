@@ -1,0 +1,12 @@
+struct Box<T> {
+    value: T,
+}
+
+fn wrap<T>(value: T) -> Box<T> {
+    Box<T> { value: value }
+}
+
+fn main() -> num {
+    let boxed: Box<num> = wrap(0);
+    boxed.value
+}

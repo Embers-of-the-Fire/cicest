@@ -1,0 +1,8 @@
+fn id<T>(value: T) -> T {
+    value
+}
+
+fn main() -> num {
+    let first = id(0);
+    id::<num>(first)
+}

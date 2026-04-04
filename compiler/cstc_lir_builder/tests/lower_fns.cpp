@@ -172,6 +172,33 @@ static void test_mutually_calling_fns() {
     assert(output_contains(prog, "Call(double"));
 }
 
+static void test_generic_fn_calls_use_instantiated_identity() {
+    const LirProgram prog = must_lower(
+        "fn id<T>(value: T) -> T { value }"
+        "fn main() -> num { id(1) }");
+
+    assert(prog.fns.size() == 2);
+    assert(prog.fns[0].name != Symbol::intern("id"));
+    assert(std::string(prog.fns[0].name.as_str()).find("id$inst$") == 0);
+    assert(prog.fns[0].return_ty == cstc::tyir::ty::num());
+    assert(output_contains(prog, "Call(id$inst$N"));
+}
+
+static void test_generic_fn_instantiation_cache_reuses_same_instance() {
+    const LirProgram prog = must_lower(
+        "fn id<T>(value: T) -> T { value }"
+        "fn main() -> num { let a = id(1); id::<num>(a) }");
+
+    assert(prog.fns.size() == 2);
+
+    std::size_t instantiated_id_count = 0;
+    for (const LirFnDef& fn : prog.fns) {
+        if (std::string_view(fn.name.as_str()).starts_with("id$inst$"))
+            ++instantiated_id_count;
+    }
+    assert(instantiated_id_count == 1);
+}
+
 // ─── Struct-typed parameter ───────────────────────────────────────────────────
 
 static void test_struct_param() {
@@ -240,6 +267,8 @@ int main() {
 
     test_two_functions();
     test_mutually_calling_fns();
+    test_generic_fn_calls_use_instantiated_identity();
+    test_generic_fn_instantiation_cache_reuses_same_instance();
 
     test_struct_param();
     test_struct_return_ty();
