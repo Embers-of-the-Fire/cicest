@@ -200,6 +200,23 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                     out << "Arg\n";
                     print_ty_expr(out, arg, level + 2);
                 }
+            } else if constexpr (std::is_same_v<N, TyDeferredGenericCall>) {
+                indent(out, level);
+                out << "TyDeferredGenericCall(" << node.fn_name.as_str()
+                    << "): " << expr->ty.display() << "\n";
+                if (!node.generic_args.empty()) {
+                    indent(out, level + 1);
+                    out << "GenericArgs\n";
+                    for (const std::optional<Ty>& arg : node.generic_args) {
+                        indent(out, level + 2);
+                        out << (arg.has_value() ? arg->display() : "_") << "\n";
+                    }
+                }
+                for (const TyExprPtr& arg : node.args) {
+                    indent(out, level + 1);
+                    out << "Arg\n";
+                    print_ty_expr(out, arg, level + 2);
+                }
             } else if constexpr (std::is_same_v<N, TyBlockPtr>) {
                 print_ty_block(out, node, level);
             } else if constexpr (std::is_same_v<N, TyIf>) {

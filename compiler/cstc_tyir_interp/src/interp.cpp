@@ -326,6 +326,18 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
                         return true;
                 }
                 return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                for (const std::optional<tyir::Ty>& generic_arg : node.generic_args) {
+                    if (generic_arg.has_value()
+                        && type_depends_on_generic_params(*generic_arg, generic_params)) {
+                        return true;
+                    }
+                }
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (expr_depends_on_generic_params(arg, generic_params))
+                        return true;
+                }
+                return false;
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 return block_depends_on_generic_params(node, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
@@ -464,6 +476,36 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
                 for (tyir::TyExprPtr& arg : rewritten.args)
                     arg = apply_substitution(arg, subst);
                 return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                tyir::TyDeferredGenericCall rewritten = node;
+                rewritten.generic_args.clear();
+                rewritten.generic_args.reserve(node.generic_args.size());
+                bool fully_resolved = true;
+                for (const std::optional<tyir::Ty>& generic_arg : node.generic_args) {
+                    if (!generic_arg.has_value()) {
+                        rewritten.generic_args.push_back(std::nullopt);
+                        fully_resolved = false;
+                        continue;
+                    }
+                    rewritten.generic_args.push_back(apply_substitution(*generic_arg, subst));
+                }
+                for (tyir::TyExprPtr& arg : rewritten.args)
+                    arg = apply_substitution(arg, subst);
+                if (!fully_resolved)
+                    return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
+
+                std::vector<tyir::Ty> concrete_generic_args;
+                concrete_generic_args.reserve(rewritten.generic_args.size());
+                for (const std::optional<tyir::Ty>& generic_arg : rewritten.generic_args) {
+                    assert(generic_arg.has_value());
+                    concrete_generic_args.push_back(*generic_arg);
+                }
+                return tyir::make_ty_expr(
+                    expr->span,
+                    tyir::TyCall{
+                        rewritten.fn_name, std::move(concrete_generic_args),
+                        std::move(rewritten.args)},
+                    rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 return tyir::make_ty_expr(
                     expr->span, apply_substitution(node, subst), rewritten_ty);
@@ -1126,6 +1168,10 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                 return EvalState::from_value(*value);
             }
 
+            if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                return EvalState::blocked();
+            }
+
             if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 return eval_block(node, env, ctx);
             }
@@ -1551,7 +1597,9 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 return expr_can_fallthrough(*node.lhs) && expr_can_fallthrough(*node.rhs);
             } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
                 return expr_can_fallthrough(*node.base);
-            } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyCall>
+                || std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                 for (const tyir::TyExprPtr& arg : node.args) {
                     if (!expr_can_fallthrough(*arg))
                         return false;
@@ -1783,6 +1831,21 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         expr->span, tyir::TyCall{node.fn_name, node.generic_args, std::move(args)},
                         expr->ty),
                     program, env, generic_params);
+            }
+
+            if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                std::vector<tyir::TyExprPtr> args;
+                args.reserve(node.args.size());
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    auto folded_arg = fold_expr(arg, env, program, generic_params);
+                    if (!folded_arg)
+                        return std::unexpected(std::move(folded_arg.error()));
+                    args.push_back(*folded_arg);
+                }
+                return tyir::make_ty_expr(
+                    expr->span,
+                    tyir::TyDeferredGenericCall{node.fn_name, node.generic_args, std::move(args)},
+                    expr->ty);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
@@ -2057,6 +2120,13 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     if (!status)
                         return status;
                 }
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    auto nested = validate_constraints_in_expr(arg, program, generic_params);
+                    if (!nested)
+                        return nested;
+                }
+                return {};
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                 for (const tyir::TyExprPtr& arg : node.args) {
                     auto nested = validate_constraints_in_expr(arg, program, generic_params);
                     if (!nested)

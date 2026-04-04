@@ -284,6 +284,35 @@ static void test_print_call_and_struct_init_generic_args() {
     assert(contains(out, "Box<num>"));
 }
 
+static void test_print_deferred_generic_call() {
+    TyFnDecl fn;
+    fn.name = Symbol::intern("main");
+    fn.return_ty = ty::unit();
+    fn.body = std::make_shared<TyBlock>();
+    fn.body->ty = ty::unit();
+
+    auto deferred = make_ty_expr(
+        {},
+        TyDeferredGenericCall{
+            Symbol::intern("on"),
+            {std::nullopt},
+            {},
+        },
+        ty::named(
+            Symbol::intern("Flag"), kInvalidSymbol, ValueSemantics::Copy, false,
+            {ty::named(Symbol::intern("T"))}));
+    fn.body->stmts = {
+        TyExprStmt{deferred, {}}
+    };
+
+    TyProgram prog;
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyDeferredGenericCall(on): Flag<T>"));
+    assert(contains(out, "_"));
+}
+
 // ─── Literal expressions ─────────────────────────────────────────────────────
 
 static void test_print_literals() {
@@ -673,6 +702,7 @@ int main() {
     test_print_runtime_items();
     test_print_generic_fn_metadata();
     test_print_call_and_struct_init_generic_args();
+    test_print_deferred_generic_call();
     test_print_literals();
     test_print_local_ref();
     test_print_enum_variant_ref();

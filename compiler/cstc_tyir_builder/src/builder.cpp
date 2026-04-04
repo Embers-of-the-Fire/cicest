@@ -244,6 +244,21 @@ using TypeSubstitution =
     return {};
 }
 
+[[nodiscard]] static bool
+    type_depends_on_generic_params(const tyir::Ty& ty, const GenericParamSet& generic_params) {
+    if (ty.kind == tyir::TyKind::Ref)
+        return ty.pointee != nullptr && type_depends_on_generic_params(*ty.pointee, generic_params);
+    if (ty.kind != tyir::TyKind::Named)
+        return false;
+    if (ty.generic_args.empty() && generic_params.contains(ty.name))
+        return true;
+    for (const tyir::Ty& arg : ty.generic_args) {
+        if (type_depends_on_generic_params(arg, generic_params))
+            return true;
+    }
+    return false;
+}
+
 // ─── Scope (local variable environment) ─────────────────────────────────────
 
 /// Scoped stack of local variable type bindings.
@@ -739,6 +754,9 @@ struct LoweredPlace {
 [[nodiscard]] static std::expected<tyir::TyBlock, LowerError>
     lower_block(const ast::BlockExpr& block, LowerCtx& ctx);
 
+[[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
+    const tyir::TyExprPtr& expr, const tyir::Ty& expected_ty, LowerCtx& ctx);
+
 // ─── Function signature resolution ──────────────────────────────────────────
 
 [[nodiscard]] static std::expected<FnSignature, LowerError> resolve_fn_signature(
@@ -1084,6 +1102,81 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         expr->node);
 }
 
+[[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
+    const tyir::TyExprPtr& expr, const tyir::Ty& expected_ty, LowerCtx& ctx) {
+    if (expr == nullptr)
+        return expr;
+
+    const auto* deferred = std::get_if<tyir::TyDeferredGenericCall>(&expr->node);
+    if (deferred == nullptr)
+        return expr;
+
+    const auto sig_it = ctx.env.fn_signatures.find(deferred->fn_name);
+    assert(sig_it != ctx.env.fn_signatures.end());
+    const FnSignature& sig = sig_it->second;
+    const GenericParamSet generic_param_set = make_generic_param_set(sig.generic_params);
+    TypeSubstitution substitution;
+    substitution.reserve(sig.generic_params.size());
+    for (std::size_t index = 0;
+         index < deferred->generic_args.size() && index < sig.generic_params.size(); ++index) {
+        if (deferred->generic_args[index].has_value())
+            substitution.emplace(sig.generic_params[index].name, *deferred->generic_args[index]);
+    }
+
+    auto inferred = infer_substitution(
+        sig.return_ty, expected_ty, generic_param_set, substitution, expr->span,
+        std::string_view{deferred->fn_name.as_str()});
+    if (!inferred)
+        return std::unexpected(std::move(inferred.error()));
+
+    std::vector<std::optional<tyir::Ty>> generic_args;
+    generic_args.reserve(sig.generic_params.size());
+    bool fully_resolved = true;
+    for (const ast::GenericParam& param : sig.generic_params) {
+        const auto found = substitution.find(param.name);
+        if (found == substitution.end()) {
+            generic_args.push_back(std::nullopt);
+            fully_resolved = false;
+            continue;
+        }
+        generic_args.push_back(found->second);
+    }
+
+    const tyir::Ty resolved_return_ty =
+        annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env);
+    if (!fully_resolved) {
+        return tyir::make_ty_expr(
+            expr->span,
+            tyir::TyDeferredGenericCall{deferred->fn_name, std::move(generic_args), deferred->args},
+            resolved_return_ty);
+    }
+
+    std::vector<tyir::Ty> concrete_generic_args;
+    concrete_generic_args.reserve(generic_args.size());
+    for (const std::optional<tyir::Ty>& generic_arg : generic_args) {
+        assert(generic_arg.has_value());
+        concrete_generic_args.push_back(*generic_arg);
+    }
+
+    for (std::size_t index = 0; index < deferred->args.size(); ++index) {
+        const tyir::Ty expected_param_ty = annotate_type_semantics(
+            apply_substitution(sig.param_types[index], substitution), ctx.env);
+        if (!compatible(deferred->args[index]->ty, expected_param_ty)) {
+            return make_error(
+                deferred->args[index]->span, "argument " + std::to_string(index + 1) + " of '"
+                                                 + std::string(deferred->fn_name.as_str())
+                                                 + "': expected '" + expected_param_ty.display()
+                                                 + "', found '"
+                                                 + deferred->args[index]->ty.display() + "'");
+        }
+    }
+
+    return tyir::make_ty_expr(
+        expr->span,
+        tyir::TyCall{deferred->fn_name, std::move(concrete_generic_args), deferred->args},
+        resolved_return_ty);
+}
+
 [[nodiscard]] static std::expected<std::vector<tyir::TyGenericConstraint>, LowerError>
     lower_where_clause(
         const std::vector<cstc::ast::GenericConstraint>& constraints, const TypeEnv& env,
@@ -1152,6 +1245,10 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                     auto ann = lower_type(*s.type_annotation, ctx.env, s.span, ctx.generic_params);
                     if (!ann)
                         return std::unexpected(std::move(ann.error()));
+                    auto resolved_init = resolve_expr_against_type(init->expr, *ann, ctx);
+                    if (!resolved_init)
+                        return std::unexpected(std::move(resolved_init.error()));
+                    init->expr = std::move(*resolved_init);
                     if (!compatible(init->expr->ty, *ann))
                         return make_error(
                             s.span, "type mismatch in let binding: expected '" + ann->display()
@@ -1236,7 +1333,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                 return expr_can_fallthrough(*node.lhs) && expr_can_fallthrough(*node.rhs);
             } else if constexpr (std::is_same_v<N, tyir::TyFieldAccess>) {
                 return expr_can_fallthrough(*node.base);
-            } else if constexpr (std::is_same_v<N, tyir::TyCall>) {
+            } else if constexpr (
+                std::is_same_v<N, tyir::TyCall> || std::is_same_v<N, tyir::TyDeferredGenericCall>) {
                 for (const tyir::TyExprPtr& arg : node.args) {
                     if (!expr_can_fallthrough(*arg))
                         return false;
@@ -1593,6 +1691,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     auto val = lower_expr(field.value, ctx);
                     if (!val)
                         return std::unexpected(std::move(val.error()));
+                    auto resolved_val = resolve_expr_against_type(val->expr, *expected_ty, ctx);
+                    if (!resolved_val)
+                        return std::unexpected(std::move(resolved_val.error()));
+                    val->expr = std::move(*resolved_val);
 
                     if (!compatible(val->expr->ty, *expected_ty))
                         return make_error(
@@ -1906,39 +2008,69 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(inferred.error()));
                 }
 
-                std::vector<tyir::Ty> resolved_generic_args;
+                std::vector<std::optional<tyir::Ty>> resolved_generic_args;
                 resolved_generic_args.reserve(sig.generic_params.size());
+                bool fully_resolved = true;
                 for (const ast::GenericParam& generic_param : sig.generic_params) {
                     const auto found = substitution.find(generic_param.name);
                     if (found == substitution.end()) {
-                        return make_error(
-                            expr->span, "cannot infer generic argument '"
-                                            + std::string(generic_param.name.as_str())
-                                            + "' for function '" + display_fn_name + "'");
+                        fully_resolved = false;
+                        resolved_generic_args.push_back(std::nullopt);
+                        continue;
                     }
                     resolved_generic_args.push_back(found->second);
-                }
-
-                for (std::size_t i = 0; i < node.args.size(); ++i) {
-                    const tyir::Ty expected_param_ty = annotate_type_semantics(
-                        apply_substitution(sig.param_types[i], substitution), ctx.env);
-                    if (!compatible(lowered_args[i]->ty, expected_param_ty))
-                        return make_error(
-                            node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
-                                                    + display_fn_name + "': expected '"
-                                                    + expected_param_ty.display() + "', found '"
-                                                    + lowered_args[i]->ty.display() + "'");
                 }
 
                 const tyir::Ty resolved_return_ty = annotate_type_semantics(
                     apply_substitution(sig.return_ty, substitution), ctx.env);
 
-                auto lowered = LoweredExpr{
-                    tyir::make_ty_expr(
+                tyir::TyExprPtr lowered_expr;
+                if (fully_resolved) {
+                    std::vector<tyir::Ty> concrete_generic_args;
+                    concrete_generic_args.reserve(resolved_generic_args.size());
+                    for (const std::optional<tyir::Ty>& generic_arg : resolved_generic_args) {
+                        assert(generic_arg.has_value());
+                        concrete_generic_args.push_back(*generic_arg);
+                    }
+
+                    for (std::size_t i = 0; i < node.args.size(); ++i) {
+                        auto resolved_arg =
+                            resolve_expr_against_type(lowered_args[i], sig.param_types[i], ctx);
+                        if (!resolved_arg)
+                            return std::unexpected(std::move(resolved_arg.error()));
+                        lowered_args[i] = std::move(*resolved_arg);
+                        const tyir::Ty expected_param_ty = annotate_type_semantics(
+                            apply_substitution(sig.param_types[i], substitution), ctx.env);
+                        if (!compatible(lowered_args[i]->ty, expected_param_ty))
+                            return make_error(
+                                node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
+                                                        + display_fn_name + "': expected '"
+                                                        + expected_param_ty.display() + "', found '"
+                                                        + lowered_args[i]->ty.display() + "'");
+                    }
+
+                    lowered_expr = tyir::make_ty_expr(
                         expr->span,
                         tyir::TyCall{
+                            fn_name, std::move(concrete_generic_args), std::move(lowered_args)},
+                        resolved_return_ty);
+                } else {
+                    lowered_expr = tyir::make_ty_expr(
+                        expr->span,
+                        tyir::TyDeferredGenericCall{
                             fn_name, std::move(resolved_generic_args), std::move(lowered_args)},
-                        resolved_return_ty),
+                        resolved_return_ty);
+                }
+
+                if (std::holds_alternative<tyir::TyDeferredGenericCall>(lowered_expr->node)
+                    && !type_depends_on_generic_params(lowered_expr->ty, ctx.generic_params)) {
+                    return make_error(
+                        expr->span,
+                        "cannot infer generic argument(s) for function '" + display_fn_name + "'");
+                }
+
+                auto lowered = LoweredExpr{
+                    std::move(lowered_expr),
                     {},
                     std::nullopt,
                 };
@@ -2315,6 +2447,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     auto val = lower_expr(*node.value, ctx);
                     if (!val)
                         return std::unexpected(std::move(val.error()));
+                    auto resolved_val =
+                        resolve_expr_against_type(val->expr, ctx.current_return_ty, ctx);
+                    if (!resolved_val)
+                        return std::unexpected(std::move(resolved_val.error()));
+                    val->expr = std::move(*resolved_val);
                     if (!compatible(val->expr->ty, ctx.current_return_ty))
                         return make_error(
                             expr->span, "return type mismatch: expected '"
@@ -2369,6 +2506,14 @@ static std::expected<void, LowerError> merge_loop_break_types(
     ctx.scope.pop();
     if (!body)
         return std::unexpected(std::move(body.error()));
+
+    if (body->tail.has_value()) {
+        auto resolved_tail = resolve_expr_against_type(*body->tail, sig.return_ty, ctx);
+        if (!resolved_tail)
+            return std::unexpected(std::move(resolved_tail.error()));
+        body->tail = std::move(*resolved_tail);
+        body->ty = block_can_fallthrough(*body) ? (*body->tail)->ty : tyir::ty::never();
+    }
 
     // Check that body type matches declared return type (when a tail is present)
     if (body->tail.has_value() && !compatible(body->ty, sig.return_ty))
