@@ -54,15 +54,23 @@ prelude automatically. The process is:
 
 ## Extern declaration syntax
 
-All standard library functions use the `extern` declaration syntax:
+Std lang items use `[[lang = "..."]]` on the declaration they expose in the prelude:
 
 ```cicest
+[[lang = "cstc_constraint"]]
+pub enum Constraint {
+    Valid,
+    Invalid,
+}
+
 [[lang = "cstc_std_print"]]
 pub runtime extern "lang" fn print(value: &str);
 [[lang = "cstc_std_println"]]
 pub runtime extern "lang" fn println(value: &str);
 pub extern "lang" struct Handle;
 ```
+
+Extern runtime functions still use the `extern` declaration syntax:
 
 | Component          | Description                                                                  |
 | ------------------ | ---------------------------------------------------------------------------- |
@@ -71,7 +79,7 @@ pub extern "lang" struct Handle;
 | `"lang"`           | ABI string literal — `"lang"` denotes the cicest language runtime            |
 | `fn` / `struct`    | Declares a function signature or opaque struct type                          |
 | `;`                | Terminator — extern declarations have no body                                |
-| `[[lang = "..."]]` | Optional attribute setting the extern function's `link_name` used by codegen |
+| `[[lang = "..."]]` | Lang-item marker used for runtime symbols and compiler-recognized items such as `Constraint` |
 
 The ABI string is stored as a `Symbol` and carried through the full pipeline
 (AST → TyIR → LIR). The codegen layer currently ignores the ABI value and
@@ -157,6 +165,7 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 | `fn str_free(value: str)`              | `declare void @cstc_std_str_free(ptr byval(%cstc.str) align 8)` | `void cstc_std_str_free(const cstc_rt_str*)`      |
 | `fn assert(condition: bool)`           | `declare void @cstc_std_assert(i1)`                | `void cstc_std_assert(int)`                           |
 | `fn assert_eq(a: num, b: num)`         | `declare void @cstc_std_assert_eq(double, double)` | `void cstc_std_assert_eq(double, double)`             |
+| `fn constraint(value: bool) -> Constraint` | `declare { i32 } @cstc_std_constraint(i1)`     | `cstc_rt_constraint cstc_std_constraint(int)`         |
 
 > **Note:** `str` is now an owned, move-only string value. The compiler inserts
 > automatic drop at scope exit, and `str_free(value: str)` is a low-level
@@ -172,6 +181,28 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 ## Available functions
 
 The prelude currently provides the following functions:
+
+## Available lang items
+
+### Constraint
+
+```cicest
+[[lang = "cstc_constraint"]]
+pub enum Constraint {
+    Valid,
+    Invalid,
+}
+```
+
+`Constraint` is the only valid result type for generic `where` clauses.
+Surface `bool` expressions still work in `where` clauses because TyIR lowering
+implicitly inserts the lang intrinsic below.
+
+### Constraint conversion
+
+| Function | Signature | Description |
+| -------- | --------- | ----------- |
+| `constraint` | `fn constraint(value: bool) -> Constraint` | Lang intrinsic that maps `true` to `Constraint::Valid` and `false` to `Constraint::Invalid`. The compiler inserts this implicitly for boolean `where` clauses. |
 
 ### I/O
 
@@ -271,6 +302,7 @@ Example output (prelude items appear first):
 
 ```text
 TyProgram
+  TyEnumDecl Constraint [[lang = "cstc_constraint"]]
   TyExternFnDecl "lang" print(value: &str) -> Unit
   TyExternFnDecl "lang" println(value: &str) -> Unit
   TyExternFnDecl "lang" to_str(value: num) -> str
@@ -306,6 +338,7 @@ To add a new function to the standard library:
 1. Add a `pub extern "lang" fn` declaration to `libraries/std/prelude.cst`.
    If the runtime symbol differs from the Cicest function name, add
    `[[lang = "..."]]` so the declaration gets the correct `link_name`.
+   Compiler-recognized types should also use a `[[lang = "..."]]` marker.
 1. Implement the function in the language runtime (linked at build time).
 1. Update the function tables in this document.
 1. Add tests in `compiler/cstc_codegen/tests/codegen_integration.cpp` that
