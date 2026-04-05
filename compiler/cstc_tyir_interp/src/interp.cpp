@@ -248,6 +248,28 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
     return false;
 }
 
+[[nodiscard]] static bool same_type_shape(const tyir::Ty& lhs, const tyir::Ty& rhs) {
+    return lhs.same_shape_as(rhs);
+}
+
+[[nodiscard]] static bool compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
+    if (actual.is_never())
+        return true;
+    if (!same_type_shape(actual, expected))
+        return false;
+    if (actual.is_runtime && !expected.is_runtime)
+        return false;
+    if (actual.kind != tyir::TyKind::Ref)
+        return true;
+    if (actual.pointee == nullptr || expected.pointee == nullptr)
+        return actual.pointee == expected.pointee;
+    return compatible(*actual.pointee, *expected.pointee);
+}
+
+[[nodiscard]] static bool matches_type_shape(const tyir::Ty& actual, const tyir::Ty& expected) {
+    return actual.is_never() || same_type_shape(actual, expected);
+}
+
 [[nodiscard]] static bool generic_args_depend_on_generic_params(
     const std::vector<tyir::Ty>& generic_args, const GenericParamSet& generic_params) {
     for (const tyir::Ty& generic_arg : generic_args) {
@@ -846,10 +868,10 @@ ConstraintEvalResult evaluate_constraint(
                         }
                         if (!generic_args_depend_on_generic_params(
                                 node.generic_args, generic_params)) {
+                            const auto substitution = build_substitution(
+                                decl_it->second->generic_params, node.generic_args);
                             auto status = enforce_constraints(
-                                program, decl_it->second->lowered_where_clause,
-                                build_substitution(
-                                    decl_it->second->generic_params, node.generic_args),
+                                program, decl_it->second->lowered_where_clause, substitution,
                                 "type", decl_it->second->name, node.generic_args,
                                 decl_it->second->span, expr->span, constraint_state);
                             if (!status) {
@@ -866,6 +888,24 @@ ConstraintEvalResult evaluate_constraint(
                                     status.error().instantiation_limit,
                                 };
                             }
+
+                            for (const tyir::TyStructInitField& field : node.fields) {
+                                const auto field_it = std::find_if(
+                                    decl_it->second->fields.begin(), decl_it->second->fields.end(),
+                                    [&](const tyir::TyFieldDecl& decl_field) {
+                                        return decl_field.name == field.name;
+                                    });
+                                if (field_it == decl_it->second->fields.end()
+                                    || !compatible(
+                                        field.value->ty,
+                                        apply_substitution(field_it->ty, substitution))) {
+                                    return {
+                                        ConstraintEvalKind::Unsatisfied,
+                                        "probed expression is not type-valid",
+                                        std::nullopt,
+                                    };
+                                }
+                            }
                         }
                     }
                     for (const tyir::TyStructInitField& field : node.fields) {
@@ -876,8 +916,68 @@ ConstraintEvalResult evaluate_constraint(
                     return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                 } else if constexpr (
                     std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                    if constexpr (std::is_same_v<Node, tyir::TyUnary>) {
+                        if (node.op == ast::UnaryOp::Negate
+                            && !matches_type_shape(node.rhs->ty, tyir::ty::num())) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
+                        if (node.op == ast::UnaryOp::Not
+                            && !matches_type_shape(node.rhs->ty, tyir::ty::bool_())) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
+                    }
                     return self(self, node.rhs);
                 } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                    const auto require_lhs_rhs =
+                        [&](const tyir::Ty& expected) -> std::optional<ConstraintEvalResult> {
+                        if (!matches_type_shape(node.lhs->ty, expected)
+                            || !matches_type_shape(node.rhs->ty, expected)) {
+                            return ConstraintEvalResult{
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
+                        return std::nullopt;
+                    };
+                    switch (node.op) {
+                    case ast::BinaryOp::Add:
+                    case ast::BinaryOp::Sub:
+                    case ast::BinaryOp::Mul:
+                    case ast::BinaryOp::Div:
+                    case ast::BinaryOp::Mod:
+                    case ast::BinaryOp::Lt:
+                    case ast::BinaryOp::Le:
+                    case ast::BinaryOp::Gt:
+                    case ast::BinaryOp::Ge:
+                        if (auto invalid = require_lhs_rhs(tyir::ty::num()); invalid.has_value())
+                            return *invalid;
+                        break;
+                    case ast::BinaryOp::And:
+                    case ast::BinaryOp::Or:
+                        if (auto invalid = require_lhs_rhs(tyir::ty::bool_()); invalid.has_value())
+                            return *invalid;
+                        break;
+                    case ast::BinaryOp::Eq:
+                    case ast::BinaryOp::Ne:
+                        if (!compatible(node.lhs->ty, node.rhs->ty)
+                            && !compatible(node.rhs->ty, node.lhs->ty)) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
+                        break;
+                    }
                     auto lhs = self(self, node.lhs);
                     if (lhs.kind != ConstraintEvalKind::Satisfied)
                         return lhs;
@@ -905,11 +1005,23 @@ ConstraintEvalResult evaluate_constraint(
                         }
                         if (!generic_args_depend_on_generic_params(
                                 node.generic_args, generic_params)) {
+                            const auto substitution =
+                                build_substitution(fn.generic_params, node.generic_args);
+                            assert(node.args.size() == fn.params.size());
+                            for (std::size_t index = 0; index < node.args.size(); ++index) {
+                                if (!compatible(
+                                        node.args[index]->ty,
+                                        apply_substitution(fn.params[index].ty, substitution))) {
+                                    return {
+                                        ConstraintEvalKind::Unsatisfied,
+                                        "probed expression is not type-valid",
+                                        std::nullopt,
+                                    };
+                                }
+                            }
                             auto status = enforce_constraints(
-                                program, fn.lowered_where_clause,
-                                build_substitution(fn.generic_params, node.generic_args),
-                                "function", fn.name, node.generic_args, fn.span, expr->span,
-                                constraint_state);
+                                program, fn.lowered_where_clause, substitution, "function", fn.name,
+                                node.generic_args, fn.span, expr->span, constraint_state);
                             if (!status) {
                                 if (status.error().instantiation_limit.has_value()) {
                                     return {
@@ -977,6 +1089,13 @@ ConstraintEvalResult evaluate_constraint(
                         return self(self, *node->tail);
                     return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                 } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                    if (!matches_type_shape(node.condition->ty, tyir::ty::bool_())) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
                     auto condition = self(self, node.condition);
                     if (condition.kind != ConstraintEvalKind::Satisfied)
                         return condition;
@@ -990,6 +1109,13 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
                     return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
                 } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                    if (!matches_type_shape(node.condition->ty, tyir::ty::bool_())) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
                     auto condition = self(self, node.condition);
                     if (condition.kind != ConstraintEvalKind::Satisfied)
                         return condition;
@@ -1001,6 +1127,13 @@ ConstraintEvalResult evaluate_constraint(
                             return init;
                     }
                     if (node.condition.has_value()) {
+                        if (!matches_type_shape((*node.condition)->ty, tyir::ty::bool_())) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
                         auto condition = self(self, *node.condition);
                         if (condition.kind != ConstraintEvalKind::Satisfied)
                             return condition;

@@ -1273,6 +1273,37 @@ fn main() -> num {
     assert(error.instantiation_limit->stack.back().item_name == Symbol::intern("expand"));
 }
 
+static void test_decl_generic_parameter_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe<T>(a: T) -> T where decl(a + a) {
+    a
+}
+
+fn main() -> num {
+    probe::<num>(3)
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"3"});
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn probe<T>(a: T) -> T where decl(a + a) {
+    a
+}
+
+fn main() -> num {
+    probe::<bool>(true);
+    0
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'probe'") != std::string::npos);
+}
+
 static void test_generic_where_false_reports_constraint_failure() {
     SymbolSession session;
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
@@ -1564,6 +1595,7 @@ int main() {
     test_decl_generic_call_probe_is_deferred_inside_generic_body();
     test_decl_generic_struct_probe_is_deferred_inside_generic_body();
     test_decl_recursive_constraint_probe_reports_instantiation_limit();
+    test_decl_generic_parameter_probe_rechecks_after_substitution();
     test_generic_where_false_reports_constraint_failure();
     test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();

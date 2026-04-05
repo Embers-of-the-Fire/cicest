@@ -497,6 +497,7 @@ struct LowerCtx {
     const TypeEnv& env;
     Scope scope;
     GenericParamSet generic_params;
+    bool defer_generic_probe_validation = false;
     /// Return type of the function currently being lowered.
     tyir::Ty current_return_ty;
 
@@ -521,6 +522,18 @@ struct LowerCtx {
         loop_stack.pop_back();
     }
 };
+
+[[nodiscard]] static bool
+    should_defer_generic_probe_failure(const tyir::Ty& ty, const LowerCtx& ctx) {
+    return ctx.defer_generic_probe_validation
+        && type_depends_on_generic_params(ty, ctx.generic_params);
+}
+
+[[nodiscard]] static bool should_defer_generic_probe_failure(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const LowerCtx& ctx) {
+    return should_defer_generic_probe_failure(lhs, ctx)
+        || should_defer_generic_probe_failure(rhs, ctx);
+}
 
 // ─── Type compatibility ──────────────────────────────────────────────────────
 
@@ -1542,6 +1555,7 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
     }
 
     LowerCtx probe_ctx = ctx;
+    probe_ctx.defer_generic_probe_validation = true;
     auto lowered = lower_expr(expr, probe_ctx);
     if (!lowered) {
         return tyir::make_ty_expr(
@@ -1582,7 +1596,7 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         const std::vector<cstc::ast::GenericParam>& generic_params = {},
         const std::vector<tyir::TyParam>* params = nullptr,
         const tyir::Ty& current_return_ty = tyir::ty::unit()) {
-    LowerCtx ctx{env, {}, make_generic_param_set(generic_params), current_return_ty, {}};
+    LowerCtx ctx{env, {}, make_generic_param_set(generic_params), false, current_return_ty, {}};
     ctx.scope.push();
     for (const cstc::ast::GenericConstraint& constraint : constraints) {
         auto invalid_return = find_return_in_where_expr(constraint.expr);
@@ -2247,7 +2261,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(resolved_val.error()));
                     val->expr = std::move(*resolved_val);
 
-                    if (!compatible(val->expr->ty, *expected_ty))
+                    if (!compatible(val->expr->ty, *expected_ty)
+                        && !should_defer_generic_probe_failure(val->expr->ty, *expected_ty, ctx))
                         return make_error(
                             field.span, "field '" + std::string(field.name.as_str())
                                             + "': expected '" + expected_ty->display()
@@ -2341,13 +2356,15 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                     tyir::Ty result_ty;
                     if (node.op == ast::UnaryOp::Negate) {
-                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
+                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::num())
+                            && !should_defer_generic_probe_failure(rhs->expr->ty, ctx))
                             return make_error(
                                 expr->span, "unary '-' requires 'num', found '"
                                                 + rhs->expr->ty.display() + "'");
                         result_ty = unary_result_type(rhs->expr->ty, tyir::ty::num());
                     } else {
-                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_()))
+                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_())
+                            && !should_defer_generic_probe_failure(rhs->expr->ty, ctx))
                             return make_error(
                                 expr->span, "unary '!' requires 'bool', found '"
                                                 + rhs->expr->ty.display() + "'");
@@ -2383,11 +2400,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 case Op::Mul:
                 case Op::Div:
                 case Op::Mod:
-                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num())
+                        && !should_defer_generic_probe_failure(lhs->expr->ty, ctx))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num())
+                        && !should_defer_generic_probe_failure(rhs->expr->ty, ctx))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on right, found '"
                                             + rhs->expr->ty.display() + "'");
@@ -2398,11 +2417,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 case Op::Le:
                 case Op::Gt:
                 case Op::Ge:
-                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num())
+                        && !should_defer_generic_probe_failure(lhs->expr->ty, ctx))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num())
+                        && !should_defer_generic_probe_failure(rhs->expr->ty, ctx))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on right, found '"
                                             + rhs->expr->ty.display() + "'");
@@ -2413,7 +2434,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 case Op::Ne: {
                     const tyir::Ty& lty = lhs->expr->ty;
                     const tyir::Ty& rty = rhs->expr->ty;
-                    if (!common_type(lty, rty).has_value())
+                    if (!common_type(lty, rty).has_value()
+                        && !should_defer_generic_probe_failure(lty, rty, ctx))
                         return make_error(
                             expr->span,
                             "equality operator requires same types on both sides, found '"
@@ -2424,11 +2446,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 case Op::And:
                 case Op::Or:
-                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::bool_()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::bool_())
+                        && !should_defer_generic_probe_failure(lhs->expr->ty, ctx))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_())
+                        && !should_defer_generic_probe_failure(rhs->expr->ty, ctx))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on right, found '"
                                             + rhs->expr->ty.display() + "'");
@@ -2603,7 +2627,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         if (!resolved_arg)
                             return std::unexpected(std::move(resolved_arg.error()));
                         lowered_args[i] = std::move(*resolved_arg);
-                        if (!compatible(lowered_args[i]->ty, expected_param_ty))
+                        if (!compatible(lowered_args[i]->ty, expected_param_ty)
+                            && !should_defer_generic_probe_failure(
+                                lowered_args[i]->ty, expected_param_ty, ctx))
                             return make_error(
                                 node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
                                                         + display_fn_name + "': expected '"
@@ -2660,7 +2686,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 auto cond = lower_expr(node.condition, ctx);
                 if (!cond)
                     return std::unexpected(std::move(cond.error()));
-                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_()))
+                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())
+                    && !should_defer_generic_probe_failure(cond->expr->ty, ctx))
                     return make_error(
                         node.condition->span, "'if' condition must have type 'bool', found '"
                                                   + cond->expr->ty.display() + "'");
@@ -2781,7 +2808,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 if (!cond) {
                     return std::unexpected(std::move(cond.error()));
                 }
-                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
+                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())
+                    && !should_defer_generic_probe_failure(cond->expr->ty, ctx)) {
                     return make_error(
                         node.condition->span, "'while' condition must have type 'bool', found '"
                                                   + cond->expr->ty.display() + "'");
@@ -2881,7 +2909,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         ctx.scope.pop();
                         return std::unexpected(std::move(cond.error()));
                     }
-                    if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
+                    if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())
+                        && !should_defer_generic_probe_failure(cond->expr->ty, ctx)) {
                         ctx.scope.pop();
                         return make_error(
                             (*node.condition)->span,
@@ -3071,7 +3100,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
             tyir::TyParam{fn.params[i].name, sig.param_types[i], fn.params[i].span});
 
     // Set up lowering context with params in scope
-    LowerCtx ctx{env, {}, make_generic_param_set(fn.generic_params), sig.return_ty, {}};
+    LowerCtx ctx{env, {}, make_generic_param_set(fn.generic_params), false, sig.return_ty, {}};
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params) {
         if (!ctx.scope.insert(p.name, p.ty))
