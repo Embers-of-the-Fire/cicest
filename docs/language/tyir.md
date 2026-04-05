@@ -69,6 +69,9 @@ TyIR is the last IR that may still contain generic declarations.
   `Constraint::Valid` / `Constraint::Invalid` through the constraint intrinsic.
 - Source `decl(expr)` probes lower into a dedicated TyIR node that validates the
   inner expression without evaluating it for runtime value production.
+- When lowering function `where` clauses, parameters stay unavailable to normal
+  constraint expressions, but they are placed in scope for nested `decl(expr)`
+  probes so the compiler can validate parameter-dependent expressions.
 
 By the time TyIR is handed to LIR lowering, all generic arguments used by the
 backend must be concrete and all constraints must already have passed.
@@ -89,6 +92,8 @@ TyFieldAccess    — expr.field
 TyCall           — fn_name(args…)   (always direct; no first-class fns)
 TyDeferredGenericCall — generic call awaiting later inference/substitution
 TyDeclProbe      — decl(expr) validity probe producing `Constraint`
+                   while preserving nested parameter references for where-clause
+                   validation
 TyBlockPtr       — { stmts… [tail] }
 TyIf             — if (cond) { … } [else { … }]
 TyLoop           — loop { … }
