@@ -235,6 +235,7 @@ CallSuffix         = "(" , [ ArgList ] , ")" ;
 ArgList            = Expr , { "," , Expr } , [ "," ] ;
 
 PrimaryExpr        = LiteralExpr
+                   | DeclExpr
                    | PathExpr
                    | StructInitExpr
                    | BlockExpr
@@ -248,6 +249,7 @@ PrimaryExpr        = LiteralExpr
                    | "(" , Expr , ")" ;
 
 LiteralExpr        = NUM_LIT | STR_LIT | BOOL_LIT | UNIT_LIT ;
+DeclExpr           = "decl" , "(" , Expr , ")" ;
 PathExpr           = IDENT | IDENT , "::" , IDENT ;
 StructInitExpr     = IDENT , [ TypeArgList ] , "{" , [ FieldInitList ] , "}" ;
 FieldInitList      = FieldInit , { "," , FieldInit } , [ "," ] ;
