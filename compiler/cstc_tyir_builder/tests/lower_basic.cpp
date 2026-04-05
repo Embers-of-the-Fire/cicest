@@ -384,6 +384,21 @@ static void test_fn_where_clause_rejects_parameter_references() {
         "function where clauses cannot reference parameter 'value'");
 }
 
+static void test_fn_decl_where_clause_allows_parameter_references() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn add(a: num) -> num where decl(a + a) { a + a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    assert(fn.lowered_where_clause.size() == 1);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& binary = std::get<TyBinary>((*probe.expr)->node);
+    const auto& lhs = std::get<LocalRef>(binary.lhs->node);
+    const auto& rhs = std::get<LocalRef>(binary.rhs->node);
+    assert(lhs.name == Symbol::intern("a"));
+    assert(rhs.name == Symbol::intern("a"));
+}
+
 static void test_struct_where_clause_rejects_return() {
     must_fail_with_message(
         "struct Box<T> where if true { return true; } else { true } { value: T }",
@@ -697,6 +712,7 @@ int main() {
     test_runtime_fn_return_uses_runtime_sugar();
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();
+    test_fn_decl_where_clause_allows_parameter_references();
     test_struct_where_clause_rejects_return();
     test_fn_where_clause_rejects_return();
     test_fn_where_clause_lowers_generic_type_args();

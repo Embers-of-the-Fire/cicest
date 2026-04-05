@@ -1087,6 +1087,23 @@ fn probe() -> Constraint {
         == Symbol::intern("Invalid"));
 }
 
+static void test_decl_where_clause_accepts_parameter_references() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn add(a: num) -> num where decl(a + a) {
+    a + a
+}
+
+fn main() -> num {
+    add(3)
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"6"});
+}
+
 static void test_decl_probe_defers_nested_function_constraint_failures() {
     SymbolSession session;
     const auto program = must_fold_with_constraint_prelude(R"(
@@ -1541,6 +1558,7 @@ int main() {
     test_decl_valid_probe_folds_to_constraint_valid();
     test_decl_invalid_probe_folds_to_constraint_invalid();
     test_decl_runtime_probe_folds_to_constraint_invalid();
+    test_decl_where_clause_accepts_parameter_references();
     test_decl_probe_defers_nested_function_constraint_failures();
     test_decl_probe_defers_nested_struct_constraint_failures();
     test_decl_generic_call_probe_is_deferred_inside_generic_body();

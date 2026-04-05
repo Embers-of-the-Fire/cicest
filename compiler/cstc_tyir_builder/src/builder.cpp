@@ -1162,7 +1162,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         [&](const auto& node) -> std::optional<LowerError> {
             using Node = std::decay_t<decltype(node)>;
             if constexpr (
-                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::ContinueExpr>) {
+                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::ContinueExpr>
+                || std::is_same_v<Node, ast::DeclExpr>) {
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, ast::PathExpr>) {
                 if (!allow_call_position_path && !node.tail.has_value()
@@ -1203,8 +1204,6 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                         return result;
                 }
                 return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
-                return find_param_reference_in_expr(node.expr, param_names, scopes);
             } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
                 return find_param_reference_in_block(node, param_names, scopes);
             } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
@@ -1605,6 +1604,14 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
             if (param_ref.has_value()) {
                 ctx.scope.pop();
                 return std::unexpected(std::move(*param_ref));
+            }
+        }
+
+        for (const tyir::TyParam& param : *params) {
+            if (!ctx.scope.insert(param.name, param.ty)) {
+                ctx.scope.pop();
+                return make_error(
+                    param.span, "duplicate parameter '" + std::string(param.name.as_str()) + "'");
             }
         }
     }

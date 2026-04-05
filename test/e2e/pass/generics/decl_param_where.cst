@@ -1,0 +1,8 @@
+fn add(a: num) -> num where decl(a + a) {
+    a + a
+}
+
+fn main() -> num {
+    add(3);
+    0
+}
