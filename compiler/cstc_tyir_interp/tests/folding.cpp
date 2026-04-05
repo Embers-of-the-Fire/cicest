@@ -1304,6 +1304,160 @@ fn main() -> num {
     assert(error.message.find("function 'probe'") != std::string::npos);
 }
 
+static void test_decl_generic_call_argument_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn id<T>(value: T) -> T {
+    value
+}
+
+fn probe<T>() -> Constraint {
+    decl(id::<T>(0))
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn id<T>(value: T) -> T {
+    value
+}
+
+fn probe<T>() -> Constraint {
+    decl(id::<T>(0))
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<bool>()
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_generic_struct_field_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+struct Box<T> {
+    value: T
+}
+
+fn probe<T>() -> Constraint {
+    decl(Box<T> { value: 0 })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+struct Box<T> {
+    value: T
+}
+
+fn probe<T>() -> Constraint {
+    decl(Box<T> { value: 0 })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<bool>()
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_generic_unary_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe<T>(value: T) -> T where decl(-value) {
+    value
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn probe<T>(value: T) -> T where decl(-value) {
+    value
+}
+
+fn main() -> num {
+    probe::<bool>(true);
+    0
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'probe'") != std::string::npos);
+}
+
+static void test_decl_generic_if_condition_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe<T>(value: T) -> T where decl(if value { 0 } else { 1 }) {
+    value
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn probe<T>(value: T) -> T where decl(if value { 0 } else { 1 }) {
+    value
+}
+
+fn main() -> num {
+    probe::<num>(1);
+    0
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'probe'") != std::string::npos);
+}
+
 static void test_generic_where_false_reports_constraint_failure() {
     SymbolSession session;
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
@@ -1596,6 +1750,10 @@ int main() {
     test_decl_generic_struct_probe_is_deferred_inside_generic_body();
     test_decl_recursive_constraint_probe_reports_instantiation_limit();
     test_decl_generic_parameter_probe_rechecks_after_substitution();
+    test_decl_generic_call_argument_probe_rechecks_after_substitution();
+    test_decl_generic_struct_field_probe_rechecks_after_substitution();
+    test_decl_generic_unary_probe_rechecks_after_substitution();
+    test_decl_generic_if_condition_probe_rechecks_after_substitution();
     test_generic_where_false_reports_constraint_failure();
     test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();
