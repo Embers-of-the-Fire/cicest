@@ -1373,9 +1373,23 @@ private:
                 if (!close.has_value())
                     return std::unexpected(close.error());
 
-                *expr = ast::make_expr(
-                    merge_spans((*expr)->span, close->span),
-                    ast::CallExpr{.callee = *expr, .args = std::move(args)});
+                if (const auto* callee_path = std::get_if<ast::PathExpr>(&(*expr)->node);
+                    callee_path != nullptr && !callee_path->tail.has_value()
+                    && callee_path->head == cstc::symbol::Symbol::intern("decl")
+                    && callee_path->generic_args.empty()) {
+                    if (args.size() != 1) {
+                        return std::unexpected(
+                            make_error_token(*close, "`decl` expects exactly 1 argument"));
+                    }
+
+                    *expr = ast::make_expr(
+                        merge_spans((*expr)->span, close->span),
+                        ast::DeclExpr{.expr = std::move(args.front())});
+                } else {
+                    *expr = ast::make_expr(
+                        merge_spans((*expr)->span, close->span),
+                        ast::CallExpr{.callee = *expr, .args = std::move(args)});
+                }
                 continue;
             }
 

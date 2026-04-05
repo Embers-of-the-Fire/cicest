@@ -331,6 +331,10 @@ inline void print_expr(std::ostringstream& output, const ExprPtr& expr, std::siz
                     output << "Arg\n";
                     print_expr(output, arg, level + 2);
                 }
+            } else if constexpr (std::is_same_v<ExprType, DeclExpr>) {
+                indent(output, level);
+                output << "Decl\n";
+                print_expr(output, node.expr, level + 1);
             } else if constexpr (std::is_same_v<ExprType, BlockPtr>) {
                 print_block(output, node, level);
             } else if constexpr (std::is_same_v<ExprType, IfExpr>) {

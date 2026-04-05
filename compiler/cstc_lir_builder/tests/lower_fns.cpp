@@ -226,6 +226,69 @@ static void test_recursive_generic_fn_instantiation_hits_depth_limit() {
     assert(!error.instantiation_limit->stack.empty());
 }
 
+static void test_generic_decl_probe_folds_during_monomorphization() {
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const cstc::tyir::Ty constraint_ty =
+        cstc::tyir::ty::named(constraint_name, kInvalidSymbol, cstc::tyir::ValueSemantics::Copy);
+
+    cstc::tyir::TyEnumDecl constraint_decl;
+    constraint_decl.name = constraint_name;
+    constraint_decl.variants = {
+        cstc::tyir::TyEnumVariant{  Symbol::intern("Valid"), std::nullopt, {}},
+        cstc::tyir::TyEnumVariant{Symbol::intern("Invalid"), std::nullopt, {}},
+    };
+
+    const Symbol generic_name = Symbol::intern("T");
+    const cstc::tyir::Ty unresolved_generic =
+        cstc::tyir::ty::named(generic_name, kInvalidSymbol, cstc::tyir::ValueSemantics::Copy);
+    auto deferred_expr = cstc::tyir::make_ty_expr(
+        {}, cstc::tyir::TyDeferredGenericCall{Symbol::intern("deferred"), {std::nullopt}, {}},
+        unresolved_generic);
+    auto probe_tail = cstc::tyir::make_ty_expr(
+        {}, cstc::tyir::TyDeclProbe{deferred_expr, false, std::nullopt}, constraint_ty);
+
+    auto probe_body = std::make_shared<cstc::tyir::TyBlock>();
+    probe_body->ty = constraint_ty;
+    probe_body->tail = probe_tail;
+
+    cstc::tyir::TyFnDecl probe_decl;
+    probe_decl.name = Symbol::intern("probe");
+    probe_decl.generic_params = {
+        {generic_name, {}}
+    };
+    probe_decl.return_ty = constraint_ty;
+    probe_decl.body = probe_body;
+
+    auto main_call = cstc::tyir::make_ty_expr(
+        {}, cstc::tyir::TyCall{probe_decl.name, {cstc::tyir::ty::num()}, {}}, constraint_ty);
+    auto main_body = std::make_shared<cstc::tyir::TyBlock>();
+    main_body->ty = cstc::tyir::ty::unit();
+    main_body->stmts.push_back(
+        cstc::tyir::TyLetStmt{
+            false,
+            Symbol::intern("value"),
+            constraint_ty,
+            main_call,
+            {},
+        });
+
+    cstc::tyir::TyFnDecl main_decl;
+    main_decl.name = Symbol::intern("main");
+    main_decl.return_ty = cstc::tyir::ty::unit();
+    main_decl.body = main_body;
+
+    cstc::tyir::TyProgram program;
+    program.items = {constraint_decl, probe_decl, main_decl};
+
+    const auto lir = lower_program(program);
+    assert(lir.has_value());
+
+    const LirProgram& prog = *lir;
+
+    assert(prog.fns.size() == 2);
+    assert(output_contains(prog, "EnumVariant(Constraint::Valid)"));
+}
+
 // ─── Struct-typed parameter ───────────────────────────────────────────────────
 
 static void test_struct_param() {
@@ -297,6 +360,7 @@ int main() {
     test_generic_fn_calls_use_instantiated_identity();
     test_generic_fn_instantiation_cache_reuses_same_instance();
     test_recursive_generic_fn_instantiation_hits_depth_limit();
+    test_generic_decl_probe_folds_during_monomorphization();
 
     test_struct_param();
     test_struct_return_ty();

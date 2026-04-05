@@ -217,6 +217,14 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                     out << "Arg\n";
                     print_ty_expr(out, arg, level + 2);
                 }
+            } else if constexpr (std::is_same_v<N, TyDeclProbe>) {
+                indent(out, level);
+                out << "TyDeclProbe: " << expr->ty.display();
+                if (node.is_invalid)
+                    out << " [invalid]";
+                out << "\n";
+                if (node.expr.has_value())
+                    print_ty_expr(out, *node.expr, level + 1);
             } else if constexpr (std::is_same_v<N, TyBlockPtr>) {
                 print_ty_block(out, node, level);
             } else if constexpr (std::is_same_v<N, TyIf>) {

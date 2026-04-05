@@ -1007,6 +1007,9 @@ struct LoweredPlace {
 [[nodiscard]] static std::expected<LoweredExpr, LowerError>
     lower_expr(const ast::ExprPtr& expr, LowerCtx& ctx);
 
+[[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError>
+    lower_decl_probe_expr(const ast::ExprPtr& expr, LowerCtx& ctx);
+
 [[nodiscard]] static std::expected<LoweredPlace, LowerError>
     lower_place_expr(const ast::ExprPtr& expr, LowerCtx& ctx);
 
@@ -1200,6 +1203,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                         return result;
                 }
                 return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
+                return find_param_reference_in_expr(node.expr, param_names, scopes);
             } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
                 return find_param_reference_in_block(node, param_names, scopes);
             } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
@@ -1311,6 +1316,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                         return result;
                 }
                 return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
+                return find_return_in_where_expr(node.expr);
             } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
                 return find_return_in_where_block(node);
             } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
@@ -1371,6 +1378,16 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
     const tyir::TyExprPtr& expr, const tyir::Ty& expected_ty, LowerCtx& ctx) {
     if (expr == nullptr)
         return expr;
+
+    if (const auto* decl_probe = std::get_if<tyir::TyDeclProbe>(&expr->node);
+        decl_probe != nullptr) {
+        if (expected_ty.is_runtime) {
+            return make_error(
+                expr->span, "decl(expr) is compile-time only and cannot be used where runtime "
+                            "behavior is required");
+        }
+        return expr;
+    }
 
     if (auto* block = std::get_if<tyir::TyBlockPtr>(&expr->node); block != nullptr) {
         if (*block != nullptr && (*block)->tail.has_value()) {
@@ -1519,6 +1536,26 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
 }
 
 [[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError>
+    lower_decl_probe_expr(const ast::ExprPtr& expr, LowerCtx& ctx) {
+    const auto constraint_ty = constraint_type(ctx.env);
+    if (!constraint_ty) {
+        return make_error(expr->span, "missing lang enum 'cstc_constraint' for decl(expr)");
+    }
+
+    LowerCtx probe_ctx = ctx;
+    auto lowered = lower_expr(expr, probe_ctx);
+    if (!lowered) {
+        return tyir::make_ty_expr(
+            expr->span, tyir::TyDeclProbe{std::nullopt, true, lowered.error().message},
+            *constraint_ty);
+    }
+
+    return tyir::make_ty_expr(
+        expr->span, tyir::TyDeclProbe{std::move(lowered->expr), false, std::nullopt},
+        *constraint_ty);
+}
+
+[[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError>
     normalize_constraint_expr(const tyir::TyExprPtr& expr, const TypeEnv& env) {
     const auto constraint_ty = constraint_type(env);
     if (!constraint_ty) {
@@ -1604,7 +1641,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
             if constexpr (
                 std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
                 || std::is_same_v<Node, tyir::EnumVariantRef>
-                || std::is_same_v<Node, tyir::TyContinue>) {
+                || std::is_same_v<Node, tyir::TyContinue>
+                || std::is_same_v<Node, tyir::TyDeclProbe>) {
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                 for (const tyir::TyStructInitField& field : node.fields) {
@@ -2586,6 +2624,14 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 };
                 release_temp_borrows(ctx, temp_borrows);
                 return lowered;
+            }
+
+            // ── decl(expr) probe ───────────────────────────────────────────
+            else if constexpr (std::is_same_v<N, ast::DeclExpr>) {
+                auto lowered_probe = lower_decl_probe_expr(node.expr, ctx);
+                if (!lowered_probe)
+                    return std::unexpected(std::move(lowered_probe.error()));
+                return LoweredExpr{std::move(*lowered_probe), {}, std::nullopt};
             }
 
             // ── Block expression ──────────────────────────────────────────

@@ -390,6 +390,13 @@ void test_generic_struct_initializer_expression() {
     assert(init.generic_args[0].symbol.as_str() == "num");
 }
 
+void test_decl_expression() {
+    cstc::symbol::SymbolSession session;
+    const auto& expr = tail_of("decl(add(1, 2))");
+    const auto& decl = std::get<cstc::ast::DeclExpr>(expr.node);
+    assert(std::holds_alternative<cstc::ast::CallExpr>(decl.expr->node));
+}
+
 } // namespace
 
 int main() {
@@ -434,5 +441,6 @@ int main() {
     test_return_with_value();
     test_turbofish_call_expression();
     test_generic_struct_initializer_expression();
+    test_decl_expression();
     return 0;
 }

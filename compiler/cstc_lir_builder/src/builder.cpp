@@ -470,6 +470,9 @@ private:
             } else if constexpr (std::is_same_v<N, tyir::TyDeferredGenericCall>) {
                 assert(false && "unresolved deferred generic call reached LIR lowering");
                 return terminated_operand();
+            } else if constexpr (std::is_same_v<N, tyir::TyDeclProbe>) {
+                assert(false && "unconsumed decl(expr) probe reached LIR lowering");
+                return terminated_operand();
             }
 
             // ── Nested block ──────────────────────────────────────────────────
@@ -1278,6 +1281,15 @@ private:
                         concrete.fn_name = *fn_name;
                     }
                     return tyir::make_ty_expr(expr->span, concrete, *rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyDeclProbe>) {
+                    tyir::TyDeclProbe rewritten = node;
+                    if (rewritten.expr.has_value()) {
+                        auto rewritten_expr = rewrite_expr(*rewritten.expr, subst);
+                        if (!rewritten_expr)
+                            return std::unexpected(std::move(rewritten_expr.error()));
+                        rewritten.expr = *rewritten_expr;
+                    }
+                    return fold_decl_probe(expr->span, std::move(rewritten), *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyBlockPtr>) {
                     auto block = rewrite_block(node, subst);
                     if (!block)
@@ -1371,6 +1383,20 @@ private:
                 return tyir::make_ty_expr(expr->span, tyir::TyLiteral{}, *rewritten_ty);
             },
             expr->node);
+    }
+
+    [[nodiscard]] tyir::TyExprPtr fold_decl_probe(
+        cstc::span::SourceSpan span, const tyir::TyDeclProbe& probe, const tyir::Ty& ty) const {
+        assert(ty.is_named() && ty.name.is_valid());
+
+        const bool is_valid = !probe.is_invalid && probe.expr.has_value();
+        return tyir::make_ty_expr(
+            span,
+            tyir::EnumVariantRef{
+                ty.name,
+                cstc::symbol::Symbol::intern(is_valid ? "Valid" : "Invalid"),
+            },
+            ty);
     }
 
     [[nodiscard]] std::expected<tyir::TyBlockPtr, LirLowerError>

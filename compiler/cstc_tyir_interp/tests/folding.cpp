@@ -136,6 +136,11 @@ static const TyStructInit& require_struct_init(const TyExprPtr& expr) {
     return std::get<TyStructInit>(expr->node);
 }
 
+static const EnumVariantRef& require_constraint_variant(const TyExprPtr& expr) {
+    assert(std::holds_alternative<EnumVariantRef>(expr->node));
+    return std::get<EnumVariantRef>(expr->node);
+}
+
 static void test_const_function_call_folds_to_literal() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -505,6 +510,29 @@ fn main() -> num {
     const auto& dead_stmt = std::get<TyExprStmt>(main_fn.body->stmts[1]);
     const TyCall& dead_call = require_call(dead_stmt.expr);
     assert(dead_call.fn_name == Symbol::intern("assert"));
+}
+
+static void test_decl_probe_does_not_stop_reachable_stmt_folding() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn assert(condition: bool);
+
+fn main() {
+    decl(return 1);
+    assert(true);
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    assert(main_fn.body != nullptr);
+    assert(main_fn.body->stmts.size() == 2);
+
+    const auto& probe_stmt = std::get<TyExprStmt>(main_fn.body->stmts[0]);
+    assert(std::holds_alternative<EnumVariantRef>(probe_stmt.expr->node));
+
+    const auto& assert_stmt = std::get<TyExprStmt>(main_fn.body->stmts[1]);
+    const TyLiteral& folded_assert = require_literal(assert_stmt.expr);
+    assert(folded_assert.kind == TyLiteral::Kind::Unit);
 }
 
 static void test_dead_tail_after_break_is_not_folded() {
@@ -1016,6 +1044,218 @@ fn main() -> num {
     assert(literal.symbol.as_str() == std::string_view{"1"});
 }
 
+static void test_decl_valid_probe_folds_to_constraint_valid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe() -> Constraint {
+    decl(1 + 2)
+}
+)");
+
+    const auto& variant = require_constraint_variant(require_tail(find_fn(program, "probe")));
+    assert(variant.enum_name == Symbol::intern("Constraint"));
+    assert(variant.variant_name == Symbol::intern("Valid"));
+}
+
+static void test_decl_invalid_probe_folds_to_constraint_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe() -> Constraint {
+    decl(1 + true)
+}
+)");
+
+    const auto& variant = require_constraint_variant(require_tail(find_fn(program, "probe")));
+    assert(variant.enum_name == Symbol::intern("Constraint"));
+    assert(variant.variant_name == Symbol::intern("Invalid"));
+}
+
+static void test_decl_runtime_probe_folds_to_constraint_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+runtime fn runtime_true() -> bool {
+    true
+}
+
+fn probe() -> Constraint {
+    decl(runtime_true())
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_probe_defers_nested_function_constraint_failures() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+fn constrained<T>() -> num where always_false::<T>() {
+    1
+}
+
+fn probe() -> Constraint {
+    decl(constrained::<num>())
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_probe_defers_nested_struct_constraint_failures() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+struct Box<T> where always_false::<T>() {
+    value: num
+}
+
+fn probe() -> Constraint {
+    decl(Box<num> { value: 0 })
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_generic_call_probe_is_deferred_inside_generic_body() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+fn constrained<T>() -> num where always_false::<T>() {
+    1
+}
+
+fn probe<T>() -> Constraint {
+    decl(constrained::<T>())
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+fn constrained<T>() -> num where always_false::<T>() {
+    1
+}
+
+fn probe<T>() -> Constraint {
+    decl(constrained::<T>())
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<num>()
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_generic_struct_probe_is_deferred_inside_generic_body() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+struct Box<T> where always_false::<T>() {
+    value: num
+}
+
+fn probe<T>() -> Constraint {
+    decl(Box<T> { value: 0 })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+struct Box<T> where always_false::<T>() {
+    value: num
+}
+
+fn probe<T>() -> Constraint {
+    decl(Box<T> { value: 0 })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<num>()
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_recursive_constraint_probe_reports_instantiation_limit() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn expand<T>() -> Constraint where decl(expand::<T>()) {
+    Constraint::Valid
+}
+
+fn main() -> num {
+    expand::<num>();
+    0
+}
+)");
+
+    assert(error.message.find("could not be const-evaluated") != std::string::npos);
+    assert(error.instantiation_limit.has_value());
+    assert(!error.instantiation_limit->stack.empty());
+    assert(error.instantiation_limit->stack.back().item_name == Symbol::intern("expand"));
+}
+
 static void test_generic_where_false_reports_constraint_failure() {
     SymbolSession session;
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
@@ -1274,6 +1514,7 @@ int main() {
     test_dead_for_body_and_step_are_not_folded();
     test_dead_for_still_folds_reachable_init();
     test_dead_stmt_after_return_is_not_folded();
+    test_decl_probe_does_not_stop_reachable_stmt_folding();
     test_dead_tail_after_break_is_not_folded();
     test_dead_tail_after_continue_is_not_folded();
     test_reached_assertion_failure_reports_error();
@@ -1297,6 +1538,14 @@ int main() {
     test_comparison_requires_numeric_operands();
     test_numeric_equality_treats_nan_as_not_equal();
     test_generic_where_true_allows_instantiation();
+    test_decl_valid_probe_folds_to_constraint_valid();
+    test_decl_invalid_probe_folds_to_constraint_invalid();
+    test_decl_runtime_probe_folds_to_constraint_invalid();
+    test_decl_probe_defers_nested_function_constraint_failures();
+    test_decl_probe_defers_nested_struct_constraint_failures();
+    test_decl_generic_call_probe_is_deferred_inside_generic_body();
+    test_decl_generic_struct_probe_is_deferred_inside_generic_body();
+    test_decl_recursive_constraint_probe_reports_instantiation_limit();
     test_generic_where_false_reports_constraint_failure();
     test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();

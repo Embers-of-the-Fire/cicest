@@ -685,6 +685,8 @@ private:
                         rewrite_expr(node.callee);
                         for (const cstc::ast::ExprPtr& arg : node.args)
                             rewrite_expr(arg);
+                    } else if constexpr (std::is_same_v<Node, cstc::ast::DeclExpr>) {
+                        rewrite_expr(node.expr);
                     } else if constexpr (std::is_same_v<Node, cstc::ast::BlockPtr>) {
                         rewrite_block(node);
                     } else if constexpr (std::is_same_v<Node, cstc::ast::IfExpr>) {
