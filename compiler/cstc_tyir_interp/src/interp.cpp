@@ -653,7 +653,9 @@ bool values_equal(const ValuePtr& lhs, const ValuePtr& rhs) {
 
 [[nodiscard]] static ConstraintEvalResult validate_decl_probe(
     const tyir::TyDeclProbe& probe, const ProgramView& program,
-    const GenericParamSet& generic_params);
+    const GenericParamSet& generic_params,
+    const std::shared_ptr<ConstraintEvalState>& constraint_state =
+        std::make_shared<ConstraintEvalState>());
 
 [[nodiscard]] static std::expected<EvalState, EvalError>
     eval_expr(const tyir::TyExprPtr& expr, ConstEnv& env, EvalContext& ctx);
@@ -792,7 +794,8 @@ ConstraintEvalResult evaluate_constraint(
 
 [[nodiscard]] static ConstraintEvalResult validate_decl_probe(
     const tyir::TyDeclProbe& probe, const ProgramView& program,
-    const GenericParamSet& generic_params) {
+    const GenericParamSet& generic_params,
+    const std::shared_ptr<ConstraintEvalState>& constraint_state) {
     if (probe.is_invalid) {
         return {
             ConstraintEvalKind::Unsatisfied,
@@ -832,20 +835,37 @@ ConstraintEvalResult evaluate_constraint(
                     return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                 } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                     const auto decl_it = program.structs.find(node.type_name);
-                    if (decl_it != program.structs.end()
-                        && !generic_args_depend_on_generic_params(
-                            node.generic_args, generic_params)) {
-                        auto status = enforce_constraints(
-                            program, decl_it->second->lowered_where_clause,
-                            build_substitution(decl_it->second->generic_params, node.generic_args),
-                            "type", decl_it->second->name, node.generic_args, decl_it->second->span,
-                            expr->span, std::make_shared<ConstraintEvalState>());
-                        if (!status) {
+                    if (decl_it != program.structs.end()) {
+                        if (generic_args_depend_on_generic_params(node.generic_args, generic_params)
+                            && !decl_it->second->lowered_where_clause.empty()) {
                             return {
-                                ConstraintEvalKind::Unsatisfied,
-                                status.error().message,
-                                status.error().instantiation_limit,
+                                ConstraintEvalKind::NotConstEvaluable,
+                                "probed expression still depends on generic substitution",
+                                std::nullopt,
                             };
+                        }
+                        if (!generic_args_depend_on_generic_params(
+                                node.generic_args, generic_params)) {
+                            auto status = enforce_constraints(
+                                program, decl_it->second->lowered_where_clause,
+                                build_substitution(
+                                    decl_it->second->generic_params, node.generic_args),
+                                "type", decl_it->second->name, node.generic_args,
+                                decl_it->second->span, expr->span, constraint_state);
+                            if (!status) {
+                                if (status.error().instantiation_limit.has_value()) {
+                                    return {
+                                        ConstraintEvalKind::NotConstEvaluable,
+                                        status.error().message,
+                                        status.error().instantiation_limit,
+                                    };
+                                }
+                                return {
+                                    ConstraintEvalKind::Unsatisfied,
+                                    status.error().message,
+                                    status.error().instantiation_limit,
+                                };
+                            }
                         }
                     }
                     for (const tyir::TyStructInitField& field : node.fields) {
@@ -875,14 +895,29 @@ ConstraintEvalResult evaluate_constraint(
                                 std::nullopt,
                             };
                         }
+                        if (generic_args_depend_on_generic_params(node.generic_args, generic_params)
+                            && !fn.lowered_where_clause.empty()) {
+                            return {
+                                ConstraintEvalKind::NotConstEvaluable,
+                                "probed expression still depends on generic substitution",
+                                std::nullopt,
+                            };
+                        }
                         if (!generic_args_depend_on_generic_params(
                                 node.generic_args, generic_params)) {
                             auto status = enforce_constraints(
                                 program, fn.lowered_where_clause,
                                 build_substitution(fn.generic_params, node.generic_args),
                                 "function", fn.name, node.generic_args, fn.span, expr->span,
-                                std::make_shared<ConstraintEvalState>());
+                                constraint_state);
                             if (!status) {
+                                if (status.error().instantiation_limit.has_value()) {
+                                    return {
+                                        ConstraintEvalKind::NotConstEvaluable,
+                                        status.error().message,
+                                        status.error().instantiation_limit,
+                                    };
+                                }
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     status.error().message,
@@ -908,7 +943,7 @@ ConstraintEvalResult evaluate_constraint(
                     }
                     return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                 } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
-                    return validate_decl_probe(node, program, generic_params);
+                    return validate_decl_probe(node, program, generic_params, constraint_state);
                 } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                     if (expr_depends_on_generic_params(expr, generic_params)) {
                         return {
@@ -1278,7 +1313,21 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
-                const auto result = validate_decl_probe(node, ctx.program, ctx.generic_params);
+                const auto result = validate_decl_probe(
+                    node, ctx.program, ctx.generic_params,
+                    ctx.constraint_state != nullptr ? ctx.constraint_state
+                                                    : std::make_shared<ConstraintEvalState>());
+                if (result.kind == ConstraintEvalKind::NotConstEvaluable
+                    && result.instantiation_limit.has_value()) {
+                    return std::unexpected(
+                        EvalError{
+                            expr->span,
+                            result.detail.empty() ? "constraint could not be const-evaluated"
+                                                  : result.detail,
+                            ctx.stack,
+                            result.instantiation_limit,
+                        });
+                }
                 if (result.kind == ConstraintEvalKind::NotConstEvaluable)
                     return EvalState::blocked(EvalState::BlockedReason::UnknownValue);
                 return EvalState::from_value(make_enum(
