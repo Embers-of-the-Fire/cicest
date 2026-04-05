@@ -512,6 +512,29 @@ fn main() -> num {
     assert(dead_call.fn_name == Symbol::intern("assert"));
 }
 
+static void test_decl_probe_does_not_stop_reachable_stmt_folding() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn assert(condition: bool);
+
+fn main() {
+    decl(return 1);
+    assert(true);
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    assert(main_fn.body != nullptr);
+    assert(main_fn.body->stmts.size() == 2);
+
+    const auto& probe_stmt = std::get<TyExprStmt>(main_fn.body->stmts[0]);
+    assert(std::holds_alternative<EnumVariantRef>(probe_stmt.expr->node));
+
+    const auto& assert_stmt = std::get<TyExprStmt>(main_fn.body->stmts[1]);
+    const TyLiteral& folded_assert = require_literal(assert_stmt.expr);
+    assert(folded_assert.kind == TyLiteral::Kind::Unit);
+}
+
 static void test_dead_tail_after_break_is_not_folded() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -1449,6 +1472,7 @@ int main() {
     test_dead_for_body_and_step_are_not_folded();
     test_dead_for_still_folds_reachable_init();
     test_dead_stmt_after_return_is_not_folded();
+    test_decl_probe_does_not_stop_reachable_stmt_folding();
     test_dead_tail_after_break_is_not_folded();
     test_dead_tail_after_continue_is_not_folded();
     test_reached_assertion_failure_reports_error();
