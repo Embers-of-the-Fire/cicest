@@ -75,6 +75,20 @@ static cstc::tyir_builder::LowerError
     return must_fail_to_lower(full_source.c_str());
 }
 
+static TyProgram must_lower_with_constraint_prelude(const char* source) {
+    const std::string full_source =
+        std::string(
+            "[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }"
+            "[[lang = \"cstc_std_constraint\"]] extern \"lang\" fn "
+            "constraint(value: bool) -> Constraint;")
+        + source;
+    const auto ast = cstc::parser::parse_source(full_source);
+    assert(ast.has_value());
+    const auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+    return *tyir;
+}
+
 static const TyFnDecl& find_fn(const TyProgram& program, std::string_view name) {
     const Symbol fn_name = Symbol::intern(name);
     for (const TyItem& item : program.items) {
@@ -85,6 +99,19 @@ static const TyFnDecl& find_fn(const TyProgram& program, std::string_view name) 
     }
 
     assert(false && "function not found");
+    std::abort();
+}
+
+static const TyStructDecl& find_struct(const TyProgram& program, std::string_view name) {
+    const Symbol struct_name = Symbol::intern(name);
+    for (const TyItem& item : program.items) {
+        if (const auto* decl = std::get_if<TyStructDecl>(&item)) {
+            if (decl->name == struct_name)
+                return *decl;
+        }
+    }
+
+    assert(false && "struct not found");
     std::abort();
 }
 
@@ -696,7 +723,7 @@ fn recur() -> num {
 
 static void test_recursive_generic_constraint_reports_instantiation_limit() {
     SymbolSession session;
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+    constexpr const char* source = R"(
 struct Wrap<T> { value: T }
 
 fn expand<T>() -> bool where expand::<Wrap<T>>() {
@@ -706,7 +733,9 @@ fn expand<T>() -> bool where expand::<Wrap<T>>() {
 fn main() {
     expand::<num>();
 }
-)");
+)";
+    const auto program = must_lower_with_constraint_prelude(source);
+    const auto error = must_fail_to_fold_with_constraint_prelude(source);
 
     assert(
         error.message.find("const-eval recursion limit reached while checking generic constraints")
@@ -714,11 +743,16 @@ fn main() {
     assert(error.instantiation_limit.has_value());
     assert(error.instantiation_limit->phase == cstc::tyir::InstantiationPhase::ConstEval);
     assert(!error.instantiation_limit->stack.empty());
+    assert(error.instantiation_limit->stack.back().item_name == Symbol::intern("expand"));
+    assert(
+        error.instantiation_limit->stack.back().span.start
+        == find_fn(program, "expand").span.start);
+    assert(error.instantiation_limit->stack.back().span.end == find_fn(program, "expand").span.end);
 }
 
 static void test_declaration_time_struct_constraint_preserves_instantiation_limit() {
     SymbolSession session;
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+    constexpr const char* source = R"(
 struct Wrap<T> { value: T }
 
 fn expand<T>() -> Constraint where expand::<Wrap<T>>() {
@@ -730,19 +764,27 @@ struct Checked where expand::<num>() {
 }
 
 fn main() {}
-)");
+)";
+    const auto program = must_lower_with_constraint_prelude(source);
+    const auto error = must_fail_to_fold_with_constraint_prelude(source);
 
-    assert(
-        error.message.find("generic constraint for type 'Checked' could not be const-evaluated")
-        != std::string::npos);
+    assert(error.message.find("Checked") != std::string::npos);
+    assert(error.message.find("could not be const-evaluated") != std::string::npos);
     assert(error.instantiation_limit.has_value());
     assert(error.instantiation_limit->phase == cstc::tyir::InstantiationPhase::ConstEval);
     assert(!error.instantiation_limit->stack.empty());
+    assert(error.instantiation_limit->stack.back().item_name == Symbol::intern("expand"));
+    assert(error.span.start == find_struct(program, "Checked").span.start);
+    assert(error.span.end == find_struct(program, "Checked").span.end);
+    assert(
+        error.instantiation_limit->stack.back().span.start
+        == find_fn(program, "expand").span.start);
+    assert(error.instantiation_limit->stack.back().span.end == find_fn(program, "expand").span.end);
 }
 
 static void test_declaration_time_function_constraint_preserves_instantiation_limit() {
     SymbolSession session;
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+    constexpr const char* source = R"(
 struct Wrap<T> { value: T }
 
 fn expand<T>() -> Constraint where expand::<Wrap<T>>() {
@@ -754,14 +796,22 @@ fn checked() -> bool where expand::<num>() {
 }
 
 fn main() {}
-)");
+)";
+    const auto program = must_lower_with_constraint_prelude(source);
+    const auto error = must_fail_to_fold_with_constraint_prelude(source);
 
-    assert(
-        error.message.find("generic constraint for function 'checked' could not be const-evaluated")
-        != std::string::npos);
+    assert(error.message.find("checked") != std::string::npos);
+    assert(error.message.find("could not be const-evaluated") != std::string::npos);
     assert(error.instantiation_limit.has_value());
     assert(error.instantiation_limit->phase == cstc::tyir::InstantiationPhase::ConstEval);
     assert(!error.instantiation_limit->stack.empty());
+    assert(error.instantiation_limit->stack.back().item_name == Symbol::intern("expand"));
+    assert(error.span.start == find_fn(program, "checked").span.start);
+    assert(error.span.end == find_fn(program, "checked").span.end);
+    assert(
+        error.instantiation_limit->stack.back().span.start
+        == find_fn(program, "expand").span.start);
+    assert(error.instantiation_limit->stack.back().span.end == find_fn(program, "expand").span.end);
 }
 
 static void test_constraint_key_encoding_distinguishes_runtime_named_types() {
