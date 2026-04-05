@@ -1077,7 +1077,13 @@ ConstraintEvalResult evaluate_constraint(
                             node.generic_args, generic_params);
                         const auto substitution =
                             build_substitution(fn.generic_params, node.generic_args);
-                        assert(node.args.size() == fn.params.size());
+                        if (node.args.size() != fn.params.size()) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
                         for (std::size_t index = 0; index < node.args.size(); ++index) {
                             const tyir::Ty expected_ty =
                                 apply_substitution(fn.params[index].ty, substitution);
@@ -1127,6 +1133,33 @@ ConstraintEvalResult evaluate_constraint(
                                 "probed expression uses runtime-only behavior",
                                 std::nullopt,
                             };
+                        }
+                        if (node.args.size() != decl.params.size()) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
+                        for (std::size_t index = 0; index < node.args.size(); ++index) {
+                            const tyir::Ty& expected_ty = decl.params[index].ty;
+                            if (auto unresolved =
+                                    unresolved_type_check(node.args[index]->ty, generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
+                            }
+                            if (auto unresolved =
+                                    unresolved_type_check(expected_ty, generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
+                            }
+                            if (!compatible(node.args[index]->ty, expected_ty)) {
+                                return {
+                                    ConstraintEvalKind::Unsatisfied,
+                                    "probed expression is not type-valid",
+                                    std::nullopt,
+                                };
+                            }
                         }
                     }
                     for (const tyir::TyExprPtr& arg : node.args) {
