@@ -34,6 +34,9 @@ struct TypeEnv {
         cstc::symbol::Symbol, std::vector<tyir::TyFieldDecl>, cstc::symbol::SymbolHash>
         struct_fields;
 
+    /// Struct names in source declaration order.
+    std::vector<cstc::symbol::Symbol> struct_declaration_order;
+
     /// Maps each enum name → its variant list.
     std::unordered_map<
         cstc::symbol::Symbol, std::vector<tyir::TyEnumVariant>, cstc::symbol::SymbolHash>
@@ -975,7 +978,7 @@ struct TypeValidationState {
 [[nodiscard]] static std::expected<void, LowerError>
     validate_declared_type_cycles(const TypeEnv& env) {
     TypeValidationState state;
-    for (const auto& [struct_name, _] : env.struct_fields) {
+    for (const cstc::symbol::Symbol struct_name : env.struct_declaration_order) {
         const auto generic_params_it = env.type_generic_params.find(struct_name);
         const std::vector<tyir::Ty> generic_args =
             generic_params_it != env.type_generic_params.end()
@@ -3109,6 +3112,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     struct_decl->span,
                     "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
+            env.struct_declaration_order.push_back(struct_decl->name);
             env.type_generic_arity.emplace(struct_decl->name, struct_decl->generic_params.size());
             env.type_generic_params.emplace(struct_decl->name, struct_decl->generic_params);
             env.type_spans.emplace(struct_decl->name, struct_decl->span);

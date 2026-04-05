@@ -165,6 +165,17 @@ static void test_struct_mutual_recursive_field_error() {
         "non-productive recursive type declaration detected");
 }
 
+static void test_struct_cycle_validation_follows_declaration_order() {
+    const auto ast = cstc::parser::parse_source(
+        "struct Second { next: Second }"
+        "struct First { next: First }");
+    assert(ast.has_value());
+
+    const auto tyir = lower_program(*ast);
+    assert(!tyir.has_value());
+    assert(tyir.error().message.find("expanding 'Second<>'") != std::string::npos);
+}
+
 static void test_generic_struct_expanding_recursive_field_error() {
     must_fail_with_message(
         "struct Nest<T> { next: Nest<Nest<T>> }",
@@ -590,6 +601,7 @@ int main() {
     test_struct_ref_field_error();
     test_struct_direct_recursive_field_error();
     test_struct_mutual_recursive_field_error();
+    test_struct_cycle_validation_follows_declaration_order();
     test_generic_struct_expanding_recursive_field_error();
     test_named_struct_chain_does_not_consume_generic_instantiation_budget();
     test_duplicate_struct_name_error();
