@@ -51,6 +51,7 @@ enum class ConstraintEvalKind {
 struct ConstraintEvalResult {
     ConstraintEvalKind kind = ConstraintEvalKind::NotConstEvaluable;
     std::string detail;
+    std::optional<cstc::tyir::InstantiationLimitDiagnostic> instantiation_limit;
 };
 
 [[nodiscard]] std::expected<tyir::TyProgram, EvalError>

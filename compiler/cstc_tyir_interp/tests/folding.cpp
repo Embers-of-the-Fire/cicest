@@ -1,6 +1,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <variant>
@@ -277,6 +278,7 @@ static void test_borrowed_str_free_intrinsic_is_noop() {
         cstc::tyir_interp::detail::kDefaultEvalStepBudget,
         cstc::tyir_interp::detail::kDefaultEvalCallDepth,
         {},
+        std::make_shared<cstc::tyir_interp::detail::ConstraintEvalState>(),
     };
     TyExternFnDecl decl;
     decl.name = Symbol::intern("str_free");
@@ -301,6 +303,7 @@ static void test_constraint_intrinsic_returns_constraint_enum() {
         cstc::tyir_interp::detail::kDefaultEvalStepBudget,
         cstc::tyir_interp::detail::kDefaultEvalCallDepth,
         {},
+        std::make_shared<cstc::tyir_interp::detail::ConstraintEvalState>(),
     };
     TyExternFnDecl decl;
     decl.name = Symbol::intern("constraint");
@@ -661,6 +664,7 @@ static void test_intrinsic_decl_arity_mismatch_reports_error() {
         cstc::tyir_interp::detail::kDefaultEvalStepBudget,
         cstc::tyir_interp::detail::kDefaultEvalCallDepth,
         {},
+        std::make_shared<cstc::tyir_interp::detail::ConstraintEvalState>(),
     };
     TyExternFnDecl decl;
     decl.name = Symbol::intern("assert_eq");
@@ -688,6 +692,28 @@ fn recur() -> num {
     assert(error.message.find("recur") != std::string::npos);
     assert(!error.stack.empty());
     assert(error.stack.back().fn_name == Symbol::intern("recur"));
+}
+
+static void test_recursive_generic_constraint_reports_instantiation_limit() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+struct Wrap<T> { value: T }
+
+fn expand<T>() -> bool where expand::<Wrap<T>>() {
+    true
+}
+
+fn main() {
+    expand::<num>();
+}
+)");
+
+    assert(
+        error.message.find("const-eval recursion limit reached while checking generic constraints")
+        != std::string::npos);
+    assert(error.instantiation_limit.has_value());
+    assert(error.instantiation_limit->phase == cstc::tyir::InstantiationPhase::ConstEval);
+    assert(!error.instantiation_limit->stack.empty());
 }
 
 static void test_infinite_loop_reports_step_budget_error() {
@@ -1148,6 +1174,7 @@ int main() {
     test_malformed_lang_call_reports_arity_error();
     test_intrinsic_decl_arity_mismatch_reports_error();
     test_recursive_const_eval_reports_call_depth_error();
+    test_recursive_generic_constraint_reports_instantiation_limit();
     test_infinite_loop_reports_step_budget_error();
     test_infinite_while_reports_step_budget_error();
     test_infinite_for_reports_step_budget_error();
