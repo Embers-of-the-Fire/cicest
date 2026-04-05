@@ -2301,13 +2301,6 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 
             if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
                 tyir::TyDeclProbe rewritten = node;
-                if (rewritten.expr.has_value()) {
-                    auto folded_inner = fold_expr(*rewritten.expr, env, program, generic_params);
-                    if (!folded_inner)
-                        return std::unexpected(std::move(folded_inner.error()));
-                    rewritten.expr = *folded_inner;
-                }
-
                 const auto status = validate_decl_probe(rewritten, program, generic_params);
                 if (status.kind == ConstraintEvalKind::NotConstEvaluable)
                     return tyir::make_ty_expr(expr->span, std::move(rewritten), expr->ty);
@@ -2574,7 +2567,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             using Node = std::decay_t<decltype(node)>;
             if constexpr (
                 std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
-                || std::is_same_v<Node, tyir::EnumVariantRef>) {
+                || std::is_same_v<Node, tyir::EnumVariantRef>
+                || std::is_same_v<Node, tyir::TyDeclProbe>) {
                 return {};
             } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                 const auto decl_it = program.structs.find(node.type_name);
@@ -2622,10 +2616,6 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     if (!nested)
                         return nested;
                 }
-                return {};
-            } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
-                if (node.expr.has_value())
-                    return validate_constraints_in_expr(*node.expr, program, generic_params);
                 return {};
             } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                 for (const tyir::TyExprPtr& arg : node.args) {
