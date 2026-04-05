@@ -525,6 +525,21 @@ static void test_decl_probe_defers_generic_if_branch_join_validation() {
     assert(std::holds_alternative<TyIf>((*probe.expr)->node));
 }
 
+static void test_decl_probe_defers_generic_if_join_during_expected_type_resolution() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn id_num(value: num) -> num { value }"
+        "fn probe<T>(flag: bool, a: T) -> T where decl(id_num(if flag { a } else { 0 })) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& call = std::get<TyCall>((*probe.expr)->node);
+    assert(call.fn_name == Symbol::intern("id_num"));
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty == ty::num());
+    assert(std::holds_alternative<TyIf>(call.args[0]->node));
+}
+
 static void test_decl_probe_contains_unresolved_generic_inference_in_let() {
     const auto prog = must_lower_with_constraint_prelude(
         "fn make<T>() -> T { loop {} }"
@@ -760,6 +775,7 @@ int main() {
     test_decl_probe_defers_generic_parameter_validation();
     test_decl_probe_defers_generic_let_annotation_validation();
     test_decl_probe_defers_generic_if_branch_join_validation();
+    test_decl_probe_defers_generic_if_join_during_expected_type_resolution();
     test_decl_probe_contains_unresolved_generic_inference_in_let();
     test_decl_probe_does_not_drive_if_branch_join_inference();
     test_decl_runtime_use_is_rejected();

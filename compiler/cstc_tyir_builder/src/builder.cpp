@@ -535,6 +535,9 @@ struct LowerCtx {
         || should_defer_generic_probe_failure(rhs, ctx);
 }
 
+[[nodiscard]] static std::optional<cstc::symbol::Symbol> find_unresolved_deferred_generic_call(
+    const tyir::TyExprPtr& expr, const TypeEnv& env, const GenericParamSet& generic_params);
+
 [[nodiscard]] static std::optional<tyir::Ty> deferred_generic_probe_join_type(
     const tyir::Ty& lhs, const tyir::Ty& rhs, const LowerCtx& ctx) {
     if (!ctx.defer_generic_probe_validation)
@@ -614,6 +617,29 @@ struct LowerCtx {
     }
 
     return joined;
+}
+
+[[nodiscard]] static std::expected<tyir::Ty, LowerError> join_branch_types(
+    const tyir::Ty& then_ty, const tyir::Ty& else_ty, const tyir::TyExprPtr& then_expr,
+    const tyir::TyExprPtr& else_expr, cstc::span::SourceSpan span, const LowerCtx& ctx) {
+    if (const auto joined_ty = common_type(then_ty, else_ty); joined_ty.has_value())
+        return *joined_ty;
+
+    if (auto deferred_ty = deferred_generic_probe_join_type(then_ty, else_ty, ctx);
+        deferred_ty.has_value()) {
+        return *deferred_ty;
+    }
+
+    const bool then_needs_context =
+        find_unresolved_deferred_generic_call(then_expr, ctx.env, ctx.generic_params).has_value();
+    const bool else_needs_context =
+        find_unresolved_deferred_generic_call(else_expr, ctx.env, ctx.generic_params).has_value();
+    if (then_needs_context != else_needs_context)
+        return then_needs_context ? else_ty : then_ty;
+
+    return make_error(
+        span, "'if' then-branch has type '" + then_ty.display() + "' but else-branch has type '"
+                  + else_ty.display() + "'");
 }
 
 [[nodiscard]] static tyir::Ty unary_result_type(const tyir::Ty& operand, tyir::Ty result_shape) {
@@ -1544,12 +1570,11 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
 
         if (if_expr->else_branch.has_value()) {
             const tyir::Ty else_ty = (*if_expr->else_branch)->ty;
-            const auto joined_ty = common_type(if_expr->then_block->ty, else_ty);
-            if (!joined_ty.has_value()) {
-                return make_error(
-                    expr->span, "'if' then-branch has type '" + if_expr->then_block->ty.display()
-                                    + "' but else-branch has type '" + else_ty.display() + "'");
-            }
+            auto joined_ty = join_branch_types(
+                if_expr->then_block->ty, else_ty, if_expr->then_block->tail.value_or(nullptr),
+                *if_expr->else_branch, expr->span, ctx);
+            if (!joined_ty)
+                return std::unexpected(std::move(joined_ty.error()));
             expr->ty = *joined_ty;
         }
         return expr;
@@ -2821,32 +2846,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(else_val.error()));
 
                     const tyir::Ty& else_ty = else_val->expr->ty;
-                    const auto joined_ty = common_type(then_ptr->ty, else_ty);
-                    if (!joined_ty.has_value()) {
-                        if (auto deferred_ty =
-                                deferred_generic_probe_join_type(then_ptr->ty, else_ty, ctx);
-                            deferred_ty.has_value()) {
-                            result_ty = *deferred_ty;
-                        } else {
-                            const bool then_needs_context =
-                                find_unresolved_deferred_generic_call(
-                                    then_ptr->tail.value_or(nullptr), ctx.env, ctx.generic_params)
-                                    .has_value();
-                            const bool else_needs_context =
-                                find_unresolved_deferred_generic_call(
-                                    else_val->expr, ctx.env, ctx.generic_params)
-                                    .has_value();
-                            if (then_needs_context != else_needs_context)
-                                result_ty = then_needs_context ? else_ty : then_ptr->ty;
-                            else
-                                return make_error(
-                                    expr->span,
-                                    "'if' then-branch has type '" + then_ptr->ty.display()
-                                        + "' but else-branch has type '" + else_ty.display() + "'");
-                        }
-                    } else {
-                        result_ty = *joined_ty;
-                    }
+                    auto joined_ty = join_branch_types(
+                        then_ptr->ty, else_ty, then_ptr->tail.value_or(nullptr), else_val->expr,
+                        expr->span, ctx);
+                    if (!joined_ty)
+                        return std::unexpected(std::move(joined_ty.error()));
+                    result_ty = *joined_ty;
 
                     if (auto merged =
                             merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
