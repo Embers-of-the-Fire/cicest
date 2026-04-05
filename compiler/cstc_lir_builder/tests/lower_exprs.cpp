@@ -24,7 +24,9 @@ static LirProgram must_lower(const char* source) {
     assert(ast.has_value());
     const auto tyir = cstc::tyir_builder::lower_program(*ast);
     assert(tyir.has_value());
-    return lower_program(*tyir);
+    const auto lir = lower_program(*tyir);
+    assert(lir.has_value());
+    return *lir;
 }
 
 static const LirFnDef& first_fn(const LirProgram& prog) {

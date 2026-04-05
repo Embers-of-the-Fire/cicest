@@ -1,0 +1,11 @@
+struct Wrap<T> {
+    value: T,
+}
+
+fn expand<T>() -> bool where expand::<Wrap<T>>() {
+    true
+}
+
+fn main() {
+    expand::<num>();
+}

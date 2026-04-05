@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -32,6 +34,9 @@ struct TypeEnv {
         cstc::symbol::Symbol, std::vector<tyir::TyFieldDecl>, cstc::symbol::SymbolHash>
         struct_fields;
 
+    /// Struct names in source declaration order.
+    std::vector<cstc::symbol::Symbol> struct_declaration_order;
+
     /// Maps each enum name → its variant list.
     std::unordered_map<
         cstc::symbol::Symbol, std::vector<tyir::TyEnumVariant>, cstc::symbol::SymbolHash>
@@ -48,6 +53,14 @@ struct TypeEnv {
     std::unordered_map<
         cstc::symbol::Symbol, std::vector<cstc::ast::GenericParam>, cstc::symbol::SymbolHash>
         type_generic_params;
+
+    /// Declaration span for each named type.
+    std::unordered_map<cstc::symbol::Symbol, cstc::span::SourceSpan, cstc::symbol::SymbolHash>
+        type_spans;
+
+    /// Human-facing declaration name for each named type.
+    std::unordered_map<cstc::symbol::Symbol, cstc::symbol::Symbol, cstc::symbol::SymbolHash>
+        type_display_names;
 
     /// Names of extern (opaque) struct types. These are valid as type
     /// annotations but cannot be constructed via struct-init expressions.
@@ -187,6 +200,108 @@ using TypeSubstitution =
     }
     }
     return "<unknown>";
+}
+
+[[nodiscard]] static std::string sanitize_symbol_fragment(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (const unsigned char ch : text) {
+        if (std::isalnum(ch) != 0 || ch == '_') {
+            out.push_back(static_cast<char>(ch));
+            continue;
+        }
+
+        const auto hex_digit = [](unsigned char value) {
+            return static_cast<char>(value < 10U ? ('0' + value) : ('a' + (value - 10U)));
+        };
+        out += "_x";
+        out.push_back(hex_digit(static_cast<unsigned char>((ch >> 4U) & 0x0FU)));
+        out.push_back(hex_digit(static_cast<unsigned char>(ch & 0x0FU)));
+    }
+    return out;
+}
+
+[[nodiscard]] static std::string encode_symbol(cstc::symbol::Symbol symbol) {
+    const std::string text = symbol.is_valid() ? std::string(symbol.as_str()) : "invalid";
+    return std::to_string(text.size()) + "_" + sanitize_symbol_fragment(text);
+}
+
+[[nodiscard]] static std::string encode_type(const tyir::Ty& ty) {
+    switch (ty.kind) {
+    case tyir::TyKind::Ref: return ty.pointee != nullptr ? "R" + encode_type(*ty.pointee) : "R?";
+    case tyir::TyKind::Unit: return "U";
+    case tyir::TyKind::Num: return "N";
+    case tyir::TyKind::Str: return "S";
+    case tyir::TyKind::Bool: return "B";
+    case tyir::TyKind::Never: return "X";
+    case tyir::TyKind::Named: {
+        std::string out = "T" + encode_symbol(ty.name);
+        if (ty.is_runtime)
+            out += "_rt";
+        if (!ty.generic_args.empty()) {
+            out += "_g" + std::to_string(ty.generic_args.size());
+            for (const tyir::Ty& arg : ty.generic_args)
+                out += "_" + encode_type(arg);
+        }
+        return out;
+    }
+    }
+    return "?";
+}
+
+[[nodiscard]] static std::string instantiation_cache_key(
+    cstc::symbol::Symbol item_name, const std::vector<tyir::Ty>& generic_args) {
+    std::string key = std::string(item_name.as_str()) + "<";
+    for (std::size_t index = 0; index < generic_args.size(); ++index) {
+        if (index > 0)
+            key += ",";
+        key += encode_type(generic_args[index]);
+    }
+    key += ">";
+    return key;
+}
+
+[[nodiscard]] static cstc::tyir::InstantiationFrame make_instantiation_frame(
+    cstc::symbol::Symbol item_name, const TypeEnv& env, const std::vector<tyir::Ty>& generic_args) {
+    cstc::tyir::InstantiationFrame frame;
+    frame.item_name = item_name;
+    if (const auto it = env.type_display_names.find(item_name); it != env.type_display_names.end())
+        frame.display_name = it->second;
+    if (const auto it = env.type_spans.find(item_name); it != env.type_spans.end())
+        frame.span = it->second;
+    frame.generic_args = generic_args;
+    return frame;
+}
+
+[[nodiscard]] static std::string
+    format_instantiation_frame(const cstc::tyir::InstantiationFrame& frame) {
+    std::string display = "<unknown>";
+    if (frame.display_name.is_valid())
+        display = std::string(frame.display_name.as_str());
+    else if (frame.item_name.is_valid())
+        display = std::string(frame.item_name.as_str());
+    std::string rendered = display + "<";
+    for (std::size_t index = 0; index < frame.generic_args.size(); ++index) {
+        if (index > 0)
+            rendered += ", ";
+        rendered += frame.generic_args[index].display();
+    }
+    rendered += ">";
+    return rendered;
+}
+
+[[nodiscard]] static std::unexpected<LowerError> make_instantiation_limit_error(
+    cstc::span::SourceSpan span, std::string msg, cstc::tyir::InstantiationPhase phase,
+    std::vector<cstc::tyir::InstantiationFrame> stack) {
+    return std::unexpected(
+        LowerError{
+            span,
+            std::move(msg),
+            cstc::tyir::InstantiationLimitDiagnostic{
+                                                     phase, cstc::tyir::kMaxGenericInstantiationDepth,
+                                                     std::move(stack),
+                                                     },
+    });
 }
 
 [[nodiscard]] static tyir::Ty annotate_type_semantics(tyir::Ty ty, const TypeEnv& env);
@@ -498,7 +613,7 @@ struct LowerCtx {
 
 [[nodiscard]] static std::unexpected<LowerError>
     make_error(cstc::span::SourceSpan span, std::string msg) {
-    return std::unexpected(LowerError{span, std::move(msg)});
+    return std::unexpected(LowerError{span, std::move(msg), std::nullopt});
 }
 
 [[nodiscard]] static std::string
@@ -642,17 +757,23 @@ template <typename Decl>
                     attr.span,
                     "attribute `lang` is only supported on `extern \"lang\" "
                         + std::string(item_kind) + "` declarations",
+                    std::nullopt,
                 });
         }
         if (!attr.value.has_value())
             return std::unexpected(
-                LowerError{attr.span, "attribute `lang` requires a string value"});
+                LowerError{attr.span, "attribute `lang` requires a string value", std::nullopt});
         if (attr.value->as_str().empty()) {
             return std::unexpected(
-                LowerError{attr.span, "attribute `lang` requires a non-empty string value"});
+                LowerError{
+                    attr.span,
+                    "attribute `lang` requires a non-empty string value",
+                    std::nullopt,
+                });
         }
         if (lang_name.has_value())
-            return std::unexpected(LowerError{attr.span, "duplicate `lang` attribute"});
+            return std::unexpected(
+                LowerError{attr.span, "duplicate `lang` attribute", std::nullopt});
 
         lang_name = *attr.value;
     }
@@ -746,6 +867,128 @@ static void finalize_env_type_semantics(TypeEnv& env) {
         for (tyir::TyFieldDecl& field : fields)
             field.ty = annotate_type_semantics(field.ty, env);
     }
+}
+
+struct TypeValidationState {
+    std::unordered_set<std::string> visited;
+    std::unordered_set<std::string> active;
+    std::vector<cstc::tyir::InstantiationFrame> stack;
+};
+
+[[nodiscard]] static std::size_t
+    active_generic_instantiation_depth(const std::vector<cstc::tyir::InstantiationFrame>& stack) {
+    return static_cast<std::size_t>(
+        std::count_if(stack.begin(), stack.end(), [](const cstc::tyir::InstantiationFrame& frame) {
+            return !frame.generic_args.empty();
+        }));
+}
+
+[[nodiscard]] static std::vector<tyir::Ty>
+    make_generic_param_types(const std::vector<cstc::ast::GenericParam>& generic_params) {
+    std::vector<tyir::Ty> generic_args;
+    generic_args.reserve(generic_params.size());
+    for (const cstc::ast::GenericParam& param : generic_params)
+        generic_args.push_back(tyir::ty::named(param.name));
+    return generic_args;
+}
+
+[[nodiscard]] static std::expected<void, LowerError> validate_struct_instantiation(
+    cstc::symbol::Symbol struct_name, const std::vector<tyir::Ty>& generic_args, const TypeEnv& env,
+    TypeValidationState& state);
+
+[[nodiscard]] static std::expected<void, LowerError>
+    validate_type_recursion(const tyir::Ty& ty, const TypeEnv& env, TypeValidationState& state) {
+    if (ty.kind == tyir::TyKind::Ref) {
+        if (ty.pointee != nullptr)
+            return validate_type_recursion(*ty.pointee, env, state);
+        return {};
+    }
+
+    if (ty.kind != tyir::TyKind::Named || !env.is_struct(ty.name))
+        return {};
+
+    return validate_struct_instantiation(ty.name, ty.generic_args, env, state);
+}
+
+[[nodiscard]] static std::expected<void, LowerError> validate_struct_instantiation(
+    cstc::symbol::Symbol struct_name, const std::vector<tyir::Ty>& generic_args, const TypeEnv& env,
+    TypeValidationState& state) {
+    const std::string key = instantiation_cache_key(struct_name, generic_args);
+    if (state.visited.contains(key))
+        return {};
+
+    std::vector<cstc::tyir::InstantiationFrame> stack = state.stack;
+    stack.push_back(make_instantiation_frame(struct_name, env, generic_args));
+    const cstc::span::SourceSpan span =
+        !stack.empty() ? stack.back().span : cstc::span::SourceSpan{};
+
+    if (state.active.contains(key)) {
+        const std::string instantiation = format_instantiation_frame(stack.back());
+        return make_instantiation_limit_error(
+            span,
+            "non-productive recursive type declaration detected while expanding '" + instantiation
+                + "'; recursive named fields must remain finite under the compiler recursion limit",
+            cstc::tyir::InstantiationPhase::TypeChecking, std::move(stack));
+    }
+
+    if (active_generic_instantiation_depth(state.stack)
+        >= cstc::tyir::kMaxGenericInstantiationDepth) {
+        const std::string instantiation = format_instantiation_frame(stack.back());
+        return make_instantiation_limit_error(
+            span,
+            "generic instantiation depth limit reached during type checking while expanding '"
+                + instantiation + "'; active limit is "
+                + std::to_string(cstc::tyir::kMaxGenericInstantiationDepth)
+                + " and the program may contain non-productive recursion",
+            cstc::tyir::InstantiationPhase::TypeChecking, std::move(stack));
+    }
+
+    state.active.insert(key);
+    state.stack.push_back(make_instantiation_frame(struct_name, env, generic_args));
+
+    const auto fields_it = env.struct_fields.find(struct_name);
+    if (fields_it != env.struct_fields.end()) {
+        TypeSubstitution substitution;
+        const auto params_it = env.type_generic_params.find(struct_name);
+        if (params_it != env.type_generic_params.end()) {
+            const auto& generic_params = params_it->second;
+            substitution.reserve(generic_params.size());
+            for (std::size_t index = 0;
+                 index < generic_params.size() && index < generic_args.size(); ++index) {
+                substitution.emplace(generic_params[index].name, generic_args[index]);
+            }
+        }
+
+        for (const tyir::TyFieldDecl& field : fields_it->second) {
+            tyir::Ty field_ty = field.ty;
+            if (!substitution.empty())
+                field_ty = apply_substitution(field_ty, substitution);
+            auto result = validate_type_recursion(field_ty, env, state);
+            if (!result)
+                return result;
+        }
+    }
+
+    state.stack.pop_back();
+    state.active.erase(key);
+    state.visited.insert(key);
+    return {};
+}
+
+[[nodiscard]] static std::expected<void, LowerError>
+    validate_declared_type_cycles(const TypeEnv& env) {
+    TypeValidationState state;
+    for (const cstc::symbol::Symbol struct_name : env.struct_declaration_order) {
+        const auto generic_params_it = env.type_generic_params.find(struct_name);
+        const std::vector<tyir::Ty> generic_args =
+            generic_params_it != env.type_generic_params.end()
+                ? make_generic_param_types(generic_params_it->second)
+                : std::vector<tyir::Ty>{};
+        auto result = validate_struct_instantiation(struct_name, generic_args, env, state);
+        if (!result)
+            return result;
+    }
+    return {};
 }
 
 // ─── Forward declarations ────────────────────────────────────────────────────
@@ -925,6 +1168,7 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                         expr->span,
                         "function where clauses cannot reference parameter '"
                             + display_symbol(node.display_head, node.head) + "'",
+                        std::nullopt,
                     };
                 }
                 return std::nullopt;
@@ -1116,7 +1360,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                     return find_return_in_where_expr(*node.value);
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, ast::ReturnExpr>) {
-                return LowerError{expr->span, "where clauses cannot contain 'return'"};
+                return LowerError{
+                    expr->span, "where clauses cannot contain 'return'", std::nullopt};
             }
         },
         expr->node);
@@ -2867,8 +3112,13 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return detail::make_error(
                     struct_decl->span,
                     "duplicate struct name '" + detail::display_decl_name(*struct_decl) + "'");
+            env.struct_declaration_order.push_back(struct_decl->name);
             env.type_generic_arity.emplace(struct_decl->name, struct_decl->generic_params.size());
             env.type_generic_params.emplace(struct_decl->name, struct_decl->generic_params);
+            env.type_spans.emplace(struct_decl->name, struct_decl->span);
+            env.type_display_names.emplace(
+                struct_decl->name,
+                detail::source_symbol(struct_decl->display_name, struct_decl->name));
         } else if (const auto* enum_decl = std::get_if<ast::EnumDecl>(&item)) {
             if (env.struct_fields.count(enum_decl->name) > 0
                 || env.extern_struct_names.count(enum_decl->name) > 0)
@@ -2898,6 +3148,9 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                     "duplicate enum name '" + detail::display_decl_name(*enum_decl) + "'");
             env.type_generic_arity.emplace(enum_decl->name, enum_decl->generic_params.size());
             env.type_generic_params.emplace(enum_decl->name, enum_decl->generic_params);
+            env.type_spans.emplace(enum_decl->name, enum_decl->span);
+            env.type_display_names.emplace(
+                enum_decl->name, detail::source_symbol(enum_decl->display_name, enum_decl->name));
         } else if (const auto* extern_struct = std::get_if<ast::ExternStructDecl>(&item)) {
             // Validate the ABI string.
             if (auto err = detail::validate_abi(extern_struct->abi, extern_struct->span))
@@ -2926,6 +3179,10 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             env.extern_struct_names.insert(extern_struct->name);
             env.type_generic_arity.emplace(extern_struct->name, 0);
             env.type_generic_params.emplace(extern_struct->name, std::vector<ast::GenericParam>{});
+            env.type_spans.emplace(extern_struct->name, extern_struct->span);
+            env.type_display_names.emplace(
+                extern_struct->name,
+                detail::source_symbol(extern_struct->display_name, extern_struct->name));
         }
     }
 
@@ -2950,6 +3207,10 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 variants.push_back(tyir::TyEnumVariant{v.name, v.discriminant, v.span});
         }
     }
+
+    auto type_cycle_check = detail::validate_declared_type_cycles(env);
+    if (!type_cycle_check)
+        return std::unexpected(std::move(type_cycle_check.error()));
 
     detail::finalize_env_type_semantics(env);
 

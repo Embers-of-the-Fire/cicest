@@ -18,7 +18,9 @@ static LirProgram must_lower(const char* source) {
     assert(ast.has_value());
     const auto tyir = cstc::tyir_builder::lower_program(*ast);
     assert(tyir.has_value());
-    return cstc::lir_builder::lower_program(*tyir);
+    const auto lir = cstc::lir_builder::lower_program(*tyir);
+    assert(lir.has_value());
+    return *lir;
 }
 
 // ─── Extern fn forwarding ────────────────────────────────────────────────────

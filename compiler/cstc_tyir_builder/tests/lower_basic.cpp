@@ -153,6 +153,50 @@ static void test_struct_ref_field_error() {
     must_fail_with_message("struct Foo { value: &num }", "reference fields are not supported");
 }
 
+static void test_struct_direct_recursive_field_error() {
+    must_fail_with_message(
+        "struct Node { next: Node }", "non-productive recursive type declaration detected");
+}
+
+static void test_struct_mutual_recursive_field_error() {
+    must_fail_with_message(
+        "struct Left { right: Right }"
+        "struct Right { left: Left }",
+        "non-productive recursive type declaration detected");
+}
+
+static void test_struct_cycle_validation_follows_declaration_order() {
+    const auto ast = cstc::parser::parse_source(
+        "struct Second { next: Second }"
+        "struct First { next: First }");
+    assert(ast.has_value());
+
+    const auto tyir = lower_program(*ast);
+    assert(!tyir.has_value());
+    assert(tyir.error().message.find("expanding 'Second<>'") != std::string::npos);
+}
+
+static void test_generic_struct_expanding_recursive_field_error() {
+    must_fail_with_message(
+        "struct Nest<T> { next: Nest<Nest<T>> }",
+        "generic instantiation depth limit reached during type checking");
+}
+
+static void test_named_struct_chain_does_not_consume_generic_instantiation_budget() {
+    std::string source;
+    constexpr int depth = 40;
+    for (int index = 0; index < depth; ++index) {
+        source += "struct S" + std::to_string(index);
+        if (index + 1 < depth)
+            source += " { next: S" + std::to_string(index + 1) + " }";
+        else
+            source += ";";
+    }
+
+    const auto prog = must_lower(source.c_str());
+    assert(prog.items.size() == static_cast<std::size_t>(depth));
+}
+
 static void test_duplicate_struct_name_error() {
     must_fail_with_message(
         "struct Point { x: num }"
@@ -555,6 +599,11 @@ int main() {
     test_struct_with_named_field();
     test_struct_undefined_type_error();
     test_struct_ref_field_error();
+    test_struct_direct_recursive_field_error();
+    test_struct_mutual_recursive_field_error();
+    test_struct_cycle_validation_follows_declaration_order();
+    test_generic_struct_expanding_recursive_field_error();
+    test_named_struct_chain_does_not_consume_generic_instantiation_budget();
     test_duplicate_struct_name_error();
     test_enum_decl();
     test_duplicate_enum_name_error();

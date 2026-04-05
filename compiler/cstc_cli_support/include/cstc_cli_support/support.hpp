@@ -2,6 +2,7 @@
 
 #include <cstc_ansi_color/ansi_color.hpp>
 #include <cstc_error_report/report.hpp>
+#include <cstc_lir_builder/builder.hpp>
 #include <cstc_module/module.hpp>
 #include <cstc_parser/diagnostics.hpp>
 #include <cstc_resource_path/resource_path.hpp>
@@ -49,6 +50,68 @@ namespace detail {
         });
 }
 
+[[nodiscard]] inline std::string format_instantiation_phase(cstc::tyir::InstantiationPhase phase) {
+    switch (phase) {
+    case cstc::tyir::InstantiationPhase::TypeChecking: return "type checking";
+    case cstc::tyir::InstantiationPhase::ConstEval: return "const-eval";
+    case cstc::tyir::InstantiationPhase::Monomorphization: return "monomorphization";
+    }
+    return "unknown";
+}
+
+[[nodiscard]] inline std::string
+    format_instantiation_frame(const cstc::tyir::InstantiationFrame& frame) {
+    std::string rendered;
+    if (frame.display_name.is_valid())
+        rendered = std::string(frame.display_name.as_str());
+    else if (frame.item_name.is_valid())
+        rendered = std::string(frame.item_name.as_str());
+    else
+        rendered = "<unknown>";
+
+    rendered += "<";
+    for (std::size_t index = 0; index < frame.generic_args.size(); ++index) {
+        if (index > 0)
+            rendered += ", ";
+        rendered += frame.generic_args[index].display();
+    }
+    rendered += ">";
+    return rendered;
+}
+
+inline void append_instantiation_limit_children(
+    cstc::error_report::SourceDatabase& database, const cstc::span::SourceMap& source_map,
+    cstc::error_report::Diagnostic& diagnostic,
+    const std::optional<cstc::tyir::InstantiationLimitDiagnostic>& instantiation_limit) {
+    if (!instantiation_limit.has_value())
+        return;
+
+    cstc::error_report::Diagnostic limit_note;
+    limit_note.severity = cstc::error_report::Severity::Note;
+    limit_note.message = "active " + format_instantiation_phase(instantiation_limit->phase)
+                       + " recursion limit: " + std::to_string(instantiation_limit->active_limit);
+    diagnostic.children.push_back(std::move(limit_note));
+
+    for (auto it = instantiation_limit->stack.rbegin(); it != instantiation_limit->stack.rend();
+         ++it) {
+        cstc::error_report::Diagnostic child;
+        child.severity = cstc::error_report::Severity::Note;
+        child.message = "instantiated as `" + format_instantiation_frame(*it) + "`";
+
+        if (const auto report_span = detail::append_report_span(database, source_map, it->span);
+            report_span.has_value()) {
+            child.labels.push_back(
+                cstc::error_report::Label{
+                    .span = *report_span,
+                    .message = "instantiation entered here",
+                    .style = cstc::error_report::LabelStyle::Primary,
+                });
+        }
+
+        diagnostic.children.push_back(std::move(child));
+    }
+}
+
 } // namespace detail
 
 [[nodiscard]] inline std::string read_source_file(const std::filesystem::path& path) {
@@ -94,6 +157,9 @@ namespace detail {
             });
     }
 
+    detail::append_instantiation_limit_children(
+        database, source_map, diagnostic, error.instantiation_limit);
+
     return detail::render_report(database, diagnostic);
 }
 
@@ -134,6 +200,9 @@ namespace detail {
         diagnostic.children.push_back(std::move(child));
     }
 
+    detail::append_instantiation_limit_children(
+        database, source_map, diagnostic, error.instantiation_limit);
+
     return detail::render_report(database, diagnostic);
 }
 
@@ -148,6 +217,29 @@ namespace detail {
         return std::unexpected(format_eval_error(source_map, folded.error()));
 
     return *folded;
+}
+
+[[nodiscard]] inline std::string format_lir_error(
+    const cstc::span::SourceMap& source_map, const cstc::lir_builder::LirLowerError& error) {
+    cstc::error_report::SourceDatabase database;
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Error;
+    diagnostic.message = "monomorphization error: " + error.message;
+
+    if (const auto report_span = detail::append_report_span(database, source_map, error.span);
+        report_span.has_value()) {
+        diagnostic.labels.push_back(
+            cstc::error_report::Label{
+                .span = *report_span,
+                .message = error.message,
+                .style = cstc::error_report::LabelStyle::Primary,
+            });
+    }
+
+    detail::append_instantiation_limit_children(
+        database, source_map, diagnostic, error.instantiation_limit);
+
+    return detail::render_report(database, diagnostic);
 }
 
 [[nodiscard]] inline cstc::ast::Program load_module_program(

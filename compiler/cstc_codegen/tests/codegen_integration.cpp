@@ -18,7 +18,8 @@ static std::string must_codegen(const char* source) {
     const auto tyir = cstc::tyir_builder::lower_program(*ast);
     assert(tyir.has_value());
     const auto lir = cstc::lir_builder::lower_program(*tyir);
-    return cstc::codegen::emit_llvm_ir(lir);
+    assert(lir.has_value());
+    return cstc::codegen::emit_llvm_ir(*lir);
 }
 
 static std::string must_codegen_folded(const char* source) {
@@ -29,7 +30,8 @@ static std::string must_codegen_folded(const char* source) {
     const auto folded = cstc::tyir_interp::fold_program(*tyir);
     assert(folded.has_value());
     const auto lir = cstc::lir_builder::lower_program(*folded);
-    return cstc::codegen::emit_llvm_ir(lir);
+    assert(lir.has_value());
+    return cstc::codegen::emit_llvm_ir(*lir);
 }
 
 static bool ir_contains(const std::string& ir, const std::string& needle) {

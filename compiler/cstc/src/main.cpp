@@ -381,6 +381,8 @@ void compile_file(const Options& options) {
         throw std::runtime_error(tyir.error());
 
     const auto lir = cstc::lir_builder::lower_program(*tyir);
+    if (!lir.has_value())
+        throw std::runtime_error(cstc::cli_support::format_lir_error(source_map, lir.error()));
 
     const std::filesystem::path output_stem = resolve_output_stem(options);
     std::filesystem::path assembly_path = output_stem;
@@ -393,14 +395,14 @@ void compile_file(const Options& options) {
     const bool emit_exe = has_emit(options, EmitKind::Exe);
 
     if (emit_asm) {
-        cstc::codegen::emit_native_assembly(lir, assembly_path, options.module_name);
+        cstc::codegen::emit_native_assembly(*lir, assembly_path, options.module_name);
         std::cout << "emitted " << assembly_path.string() << '\n';
     }
 
     const bool needs_object_for_link = emit_exe;
     const bool produce_object = emit_obj || needs_object_for_link;
     if (produce_object) {
-        cstc::codegen::emit_native_object(lir, object_path, options.module_name);
+        cstc::codegen::emit_native_object(*lir, object_path, options.module_name);
         if (emit_obj)
             std::cout << "emitted " << object_path.string() << '\n';
     }

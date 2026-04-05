@@ -25,7 +25,19 @@ static LirProgram must_lower(const char* source) {
     assert(ast.has_value());
     const auto tyir = cstc::tyir_builder::lower_program(*ast);
     assert(tyir.has_value());
-    return lower_program(*tyir);
+    const auto lir = lower_program(*tyir);
+    assert(lir.has_value());
+    return *lir;
+}
+
+static cstc::lir_builder::LirLowerError must_fail_to_lower(const char* source) {
+    const auto ast = cstc::parser::parse_source(source);
+    assert(ast.has_value());
+    const auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+    const auto lir = lower_program(*tyir);
+    assert(!lir.has_value());
+    return lir.error();
 }
 
 static bool output_contains(const LirProgram& prog, const std::string& needle) {
@@ -199,6 +211,21 @@ static void test_generic_fn_instantiation_cache_reuses_same_instance() {
     assert(instantiated_id_count == 1);
 }
 
+static void test_recursive_generic_fn_instantiation_hits_depth_limit() {
+    const auto error = must_fail_to_lower(
+        "struct Wrap<T> { value: T }"
+        "fn expand<T>(value: T) -> num { expand(Wrap<T> { value: value }) }"
+        "fn main() -> num { expand(0) }");
+
+    assert(
+        error.message.find("generic instantiation depth limit reached during monomorphization")
+        != std::string::npos);
+    assert(error.instantiation_limit.has_value());
+    assert(error.instantiation_limit->phase == cstc::tyir::InstantiationPhase::Monomorphization);
+    assert(error.instantiation_limit->active_limit == cstc::tyir::kMaxGenericInstantiationDepth);
+    assert(!error.instantiation_limit->stack.empty());
+}
+
 // ─── Struct-typed parameter ───────────────────────────────────────────────────
 
 static void test_struct_param() {
@@ -269,6 +296,7 @@ int main() {
     test_mutually_calling_fns();
     test_generic_fn_calls_use_instantiated_identity();
     test_generic_fn_instantiation_cache_reuses_same_instance();
+    test_recursive_generic_fn_instantiation_hits_depth_limit();
 
     test_struct_param();
     test_struct_return_ty();

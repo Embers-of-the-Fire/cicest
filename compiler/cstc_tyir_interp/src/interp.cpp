@@ -133,7 +133,7 @@ struct EvalState {
 
 [[nodiscard]] static std::unexpected<EvalError>
     make_error(const EvalContext& ctx, SourceSpan span, std::string message) {
-    return std::unexpected(EvalError{span, std::move(message), ctx.stack});
+    return std::unexpected(EvalError{span, std::move(message), ctx.stack, std::nullopt});
 }
 
 [[nodiscard]] static std::expected<void, EvalError>
@@ -691,17 +691,50 @@ struct NumericOperands {
     return substitution;
 }
 
+[[nodiscard]] static std::string
+    constraint_instantiation_key(Symbol owner_name, const std::vector<tyir::Ty>& generic_args) {
+    std::string key = std::string(owner_name.as_str()) + "<";
+    for (std::size_t index = 0; index < generic_args.size(); ++index) {
+        if (index > 0)
+            key += ",";
+        key += encode_type_for_constraint_key(generic_args[index]);
+    }
+    key += ">";
+    return key;
+}
+
+[[nodiscard]] static cstc::tyir::InstantiationFrame make_instantiation_frame(
+    Symbol owner_name, SourceSpan span, const std::vector<tyir::Ty>& generic_args) {
+    cstc::tyir::InstantiationFrame frame;
+    frame.item_name = owner_name;
+    frame.span = span;
+    frame.generic_args = generic_args;
+    return frame;
+}
+
 ConstraintEvalResult evaluate_constraint(
     const tyir::TyExprPtr& expr, const TypeSubstitution& substitution, const ProgramView& program,
-    std::vector<EvalStackFrame> stack) {
+    std::vector<EvalStackFrame> stack,
+    const std::shared_ptr<ConstraintEvalState>& constraint_state) {
     const tyir::TyExprPtr substituted = apply_substitution(expr, substitution);
     ConstEnv env;
     env.push();
-    EvalContext ctx{program, std::move(stack), kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
+    EvalContext ctx{
+        program,
+        std::move(stack),
+        kDefaultEvalStepBudget,
+        kDefaultEvalCallDepth,
+        {},
+        std::move(constraint_state),
+    };
     auto value = eval_expr(substituted, env, ctx);
     env.pop();
     if (!value)
-        return {ConstraintEvalKind::NotConstEvaluable, value.error().message};
+        return {
+            ConstraintEvalKind::NotConstEvaluable,
+            value.error().message,
+            value.error().instantiation_limit,
+        };
     if (value->kind == EvalState::Kind::Blocked) {
         return {
             value->blocked_reason == EvalState::BlockedReason::RuntimeOnly
@@ -710,66 +743,156 @@ ConstraintEvalResult evaluate_constraint(
             value->blocked_reason == EvalState::BlockedReason::RuntimeOnly
                 ? "constraint uses runtime-only behavior"
                 : "constraint could not be const-evaluated",
+            std::nullopt,
         };
     }
     if (value->kind != EvalState::Kind::Value)
-        return {ConstraintEvalKind::NotConstEvaluable, "constraint did not produce a value"};
+        return {
+            ConstraintEvalKind::NotConstEvaluable,
+            "constraint did not produce a value",
+            std::nullopt,
+        };
     const Value* actual = deref_value(value->value);
     if (actual == nullptr || actual->kind != Value::Kind::Enum
         || actual->type_name != program.constraint_enum_name) {
         return {
             ConstraintEvalKind::InvalidType,
             "constraint expression must evaluate to 'Constraint'",
+            std::nullopt,
         };
     }
     if (actual->variant_name == Symbol::intern("Valid"))
-        return {ConstraintEvalKind::Satisfied, {}};
+        return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
     if (actual->variant_name == Symbol::intern("Invalid"))
-        return {ConstraintEvalKind::Unsatisfied, {}};
+        return {ConstraintEvalKind::Unsatisfied, {}, std::nullopt};
     return {
         ConstraintEvalKind::InvalidType,
         "constraint must be Constraint::Valid or Constraint::Invalid",
+        std::nullopt,
     };
 }
 
 [[nodiscard]] static std::expected<void, EvalError> enforce_constraints(
     const ProgramView& program, const std::vector<tyir::TyGenericConstraint>& constraints,
     const TypeSubstitution& substitution, std::string_view owner_kind, Symbol owner_name,
-    SourceSpan use_span) {
+    const std::vector<tyir::Ty>& owner_generic_args, SourceSpan owner_span, SourceSpan use_span,
+    const std::shared_ptr<ConstraintEvalState>& constraint_state =
+        std::make_shared<ConstraintEvalState>()) {
+    const std::string key = constraint_instantiation_key(owner_name, owner_generic_args);
+    if (constraint_state->satisfied_keys.contains(key))
+        return {};
+
+    if (constraint_state->active_keys.contains(key)
+        || constraint_state->instantiation_stack.size()
+               >= cstc::tyir::kMaxGenericInstantiationDepth) {
+        auto stack = constraint_state->instantiation_stack;
+        stack.push_back(make_instantiation_frame(owner_name, owner_span, owner_generic_args));
+        return std::unexpected(
+            EvalError{
+                use_span,
+                "const-eval recursion limit reached while checking generic constraints for "
+                    + describe_constraint_owner(owner_kind, owner_name, owner_span)
+                    + "; active limit is "
+                    + std::to_string(cstc::tyir::kMaxGenericInstantiationDepth)
+                    + " and the program may contain non-productive recursion",
+                {},
+                cstc::tyir::InstantiationLimitDiagnostic{
+                                                                          cstc::tyir::InstantiationPhase::ConstEval,
+                                                                          cstc::tyir::kMaxGenericInstantiationDepth,
+                                                                          std::move(stack),
+                                                                          },
+        });
+    }
+
+    constraint_state->active_keys.insert(key);
+    constraint_state->instantiation_stack.push_back(
+        make_instantiation_frame(owner_name, owner_span, owner_generic_args));
+
     for (const tyir::TyGenericConstraint& constraint : constraints) {
         const ConstraintEvalResult result =
-            evaluate_constraint(constraint.expr, substitution, program, {});
+            evaluate_constraint(constraint.expr, substitution, program, {}, constraint_state);
         switch (result.kind) {
         case ConstraintEvalKind::Satisfied: break;
         case ConstraintEvalKind::Unsatisfied:
+            constraint_state->instantiation_stack.pop_back();
+            constraint_state->active_keys.erase(key);
             return make_error(
-                EvalContext{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                EvalContext{
+                    program,
+                    {},
+                    kDefaultEvalStepBudget,
+                    kDefaultEvalCallDepth,
+                    {},
+                    constraint_state,
+                },
                 use_span,
                 "generic constraint failed for "
-                    + describe_constraint_owner(owner_kind, owner_name, constraint.span));
+                    + describe_constraint_owner(owner_kind, owner_name, owner_span));
         case ConstraintEvalKind::RuntimeOnly:
+            constraint_state->instantiation_stack.pop_back();
+            constraint_state->active_keys.erase(key);
             return make_error(
-                EvalContext{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                EvalContext{
+                    program,
+                    {},
+                    kDefaultEvalStepBudget,
+                    kDefaultEvalCallDepth,
+                    {},
+                    constraint_state,
+                },
                 use_span,
                 "generic constraint for "
-                    + describe_constraint_owner(owner_kind, owner_name, constraint.span)
+                    + describe_constraint_owner(owner_kind, owner_name, owner_span)
                     + " used runtime-only behavior");
         case ConstraintEvalKind::NotConstEvaluable:
+            constraint_state->instantiation_stack.pop_back();
+            constraint_state->active_keys.erase(key);
+            if (result.instantiation_limit.has_value()) {
+                return std::unexpected(
+                    EvalError{
+                        use_span,
+                        "generic constraint for "
+                            + describe_constraint_owner(owner_kind, owner_name, owner_span)
+                            + " could not be const-evaluated: " + result.detail,
+                        {},
+                        result.instantiation_limit,
+                    });
+            }
             return make_error(
-                EvalContext{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                EvalContext{
+                    program,
+                    {},
+                    kDefaultEvalStepBudget,
+                    kDefaultEvalCallDepth,
+                    {},
+                    constraint_state,
+                },
                 use_span,
                 "generic constraint for "
-                    + describe_constraint_owner(owner_kind, owner_name, constraint.span)
+                    + describe_constraint_owner(owner_kind, owner_name, owner_span)
                     + " could not be const-evaluated: " + result.detail);
         case ConstraintEvalKind::InvalidType:
+            constraint_state->instantiation_stack.pop_back();
+            constraint_state->active_keys.erase(key);
             return make_error(
-                EvalContext{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                EvalContext{
+                    program,
+                    {},
+                    kDefaultEvalStepBudget,
+                    kDefaultEvalCallDepth,
+                    {},
+                    constraint_state,
+                },
                 use_span,
                 "generic constraint for "
-                    + describe_constraint_owner(owner_kind, owner_name, constraint.span)
+                    + describe_constraint_owner(owner_kind, owner_name, owner_span)
                     + " is invalid: " + result.detail);
         }
     }
+
+    constraint_state->instantiation_stack.pop_back();
+    constraint_state->active_keys.erase(key);
+    constraint_state->satisfied_keys.insert(key);
     return {};
 }
 
@@ -890,6 +1013,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                 "impure lang intrinsic '" + std::string(name)
                     + "' is not const-evaluable; mark it `runtime`",
                 ctx.stack,
+                std::nullopt,
             });
     }
 
@@ -943,7 +1067,10 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                     const auto constraint_status = enforce_constraints(
                         ctx.program, decl_it->second->lowered_where_clause,
                         build_substitution(decl_it->second->generic_params, node.generic_args),
-                        "type", decl_it->second->name, expr->span);
+                        "type", decl_it->second->name, node.generic_args, decl_it->second->span,
+                        expr->span,
+                        ctx.constraint_state != nullptr ? ctx.constraint_state
+                                                        : std::make_shared<ConstraintEvalState>());
                     if (!constraint_status)
                         return std::unexpected(std::move(constraint_status.error()));
                 }
@@ -1105,7 +1232,10 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                         const auto constraint_status = enforce_constraints(
                             ctx.program, fn.lowered_where_clause,
                             build_substitution(fn.generic_params, node.generic_args), "function",
-                            fn.name, expr->span);
+                            fn.name, node.generic_args, fn.span, expr->span,
+                            ctx.constraint_state != nullptr
+                                ? ctx.constraint_state
+                                : std::make_shared<ConstraintEvalState>());
                         if (!constraint_status)
                             return std::unexpected(std::move(constraint_status.error()));
                     }
@@ -1429,7 +1559,14 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
     const tyir::TyExprPtr& expr, const ConstEnv& env, const ProgramView& program,
     std::vector<EvalStackFrame> stack, const GenericParamSet& generic_params) {
     ConstEnv eval_env = env;
-    EvalContext ctx{program, std::move(stack), kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
+    EvalContext ctx{
+        program,
+        std::move(stack),
+        kDefaultEvalStepBudget,
+        kDefaultEvalCallDepth,
+        {},
+        std::make_shared<ConstraintEvalState>(),
+    };
     ctx.generic_params = generic_params;
     const auto value = eval_expr(expr, eval_env, ctx);
     if (!value || value->kind != EvalState::Kind::Value)
@@ -1442,7 +1579,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
 [[nodiscard]] static std::unexpected<EvalError>
     materialization_error(SourceSpan span, std::string message) {
-    return std::unexpected(EvalError{span, std::move(message), {}});
+    return std::unexpected(EvalError{span, std::move(message), {}, std::nullopt});
 }
 
 [[nodiscard]] static bool can_fold_reference_expr(const tyir::Ty& ty, const ValuePtr& value) {
@@ -1534,6 +1671,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     "missing struct declaration while materializing compile-time constant '"
                         + std::string(actual->type_name.as_str()) + "'",
                     {},
+                    std::nullopt,
                 });
 
         TypeSubstitution substitution;
@@ -1555,6 +1693,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         "missing struct field '" + std::string(field_decl.name.as_str())
                             + "' while materializing compile-time constant",
                         {},
+                        std::nullopt,
                     });
             }
             tyir::Ty field_ty = field_decl.ty;
@@ -1570,9 +1709,20 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     }
     case Value::Kind::Ref:
         return std::unexpected(
-            EvalError{span, "unexpected reference value during materialization", {}});
+            EvalError{
+                span,
+                "unexpected reference value during materialization",
+                {},
+                std::nullopt,
+            });
     }
-    return std::unexpected(EvalError{span, "unsupported compile-time value materialization", {}});
+    return std::unexpected(
+        EvalError{
+            span,
+            "unsupported compile-time value materialization",
+            {},
+            std::nullopt,
+        });
 }
 
 [[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError> fold_expr(
@@ -1687,7 +1837,14 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         return std::unexpected(std::move(init.error()));
 
                     ConstEnv eval_env = env;
-                    EvalContext ctx{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
+                    EvalContext ctx{
+                        program,
+                        {},
+                        kDefaultEvalStepBudget,
+                        kDefaultEvalCallDepth,
+                        {},
+                        std::make_shared<ConstraintEvalState>(),
+                    };
                     ctx.generic_params = generic_params;
                     const auto value = eval_expr(*init, eval_env, ctx);
                     if (value && value->kind == EvalState::Kind::Value) {
@@ -1740,7 +1897,14 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     const tyir::TyExprPtr& expr, const ProgramView& program, const ConstEnv& env,
     const GenericParamSet& generic_params) {
     ConstEnv eval_env = env;
-    EvalContext ctx{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
+    EvalContext ctx{
+        program,
+        {},
+        kDefaultEvalStepBudget,
+        kDefaultEvalCallDepth,
+        {},
+        std::make_shared<ConstraintEvalState>(),
+    };
     ctx.generic_params = generic_params;
     auto value = eval_expr(expr, eval_env, ctx);
     if (!value)
@@ -1979,7 +2143,14 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         node.init->span};
 
                     ConstEnv eval_env = loop_env;
-                    EvalContext ctx{program, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}};
+                    EvalContext ctx{
+                        program,
+                        {},
+                        kDefaultEvalStepBudget,
+                        kDefaultEvalCallDepth,
+                        {},
+                        std::make_shared<ConstraintEvalState>(),
+                    };
                     ctx.generic_params = generic_params;
                     const auto init_value = eval_expr(*init_expr, eval_env, ctx);
                     if (init_value && init_value->kind == EvalState::Kind::Value) {
@@ -2111,7 +2282,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     auto status = enforce_constraints(
                         program, decl_it->second->lowered_where_clause,
                         build_substitution(decl_it->second->generic_params, node.generic_args),
-                        "type", decl_it->second->name, expr->span);
+                        "type", decl_it->second->name, node.generic_args, decl_it->second->span,
+                        expr->span);
                     if (!status)
                         return status;
                 }
@@ -2139,7 +2311,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     auto status = enforce_constraints(
                         program, fn_it->second->lowered_where_clause,
                         build_substitution(fn_it->second->generic_params, node.generic_args),
-                        "function", fn_it->second->name, expr->span);
+                        "function", fn_it->second->name, node.generic_args, fn_it->second->span,
+                        expr->span);
                     if (!status)
                         return status;
                 }
@@ -2222,13 +2395,20 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     for (const tyir::TyGenericConstraint& constraint : node.lowered_where_clause) {
                         if (expr_depends_on_generic_params(constraint.expr, generic_params))
                             continue;
-                        auto status = evaluate_constraint(constraint.expr, {}, view, {});
+                        auto status = evaluate_constraint(
+                            constraint.expr, {}, view, {}, std::make_shared<ConstraintEvalState>());
                         if (status.kind == ConstraintEvalKind::Satisfied)
                             continue;
                         if (status.kind == ConstraintEvalKind::Unsatisfied) {
                             return make_error(
                                 EvalContext{
-                                    view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                                    view,
+                                    {},
+                                    kDefaultEvalStepBudget,
+                                    kDefaultEvalCallDepth,
+                                    {},
+                                    std::make_shared<ConstraintEvalState>(),
+                                },
                                 node.span,
                                 "generic constraint failed for "
                                     + describe_constraint_owner(
@@ -2238,7 +2418,13 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         if (status.kind == ConstraintEvalKind::RuntimeOnly) {
                             return make_error(
                                 EvalContext{
-                                    view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                                    view,
+                                    {},
+                                    kDefaultEvalStepBudget,
+                                    kDefaultEvalCallDepth,
+                                    {},
+                                    std::make_shared<ConstraintEvalState>(),
+                                },
                                 node.span,
                                 "generic constraint for "
                                     + describe_constraint_owner(
@@ -2246,18 +2432,34 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                                         node.name, constraint.span)
                                     + " used runtime-only behavior");
                         }
+                        const std::string message =
+                            "generic constraint for "
+                            + describe_constraint_owner(
+                                std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
+                                node.name, constraint.span)
+                            + (status.kind == ConstraintEvalKind::InvalidType
+                                   ? " is invalid: "
+                                   : " could not be const-evaluated: ")
+                            + status.detail;
+                        if (status.instantiation_limit.has_value()) {
+                            return std::unexpected(
+                                EvalError{
+                                    node.span,
+                                    std::move(message),
+                                    {},
+                                    status.instantiation_limit,
+                                });
+                        }
                         return make_error(
                             EvalContext{
-                                view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
-                            node.span,
-                            "generic constraint for "
-                                + describe_constraint_owner(
-                                    std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
-                                    node.name, constraint.span)
-                                + (status.kind == ConstraintEvalKind::InvalidType
-                                       ? " is invalid: "
-                                       : " could not be const-evaluated: ")
-                                + status.detail);
+                                view,
+                                {},
+                                kDefaultEvalStepBudget,
+                                kDefaultEvalCallDepth,
+                                {},
+                                std::make_shared<ConstraintEvalState>(),
+                            },
+                            node.span, message);
                     }
                     return {};
                 } else if constexpr (std::is_same_v<Node, tyir::TyFnDecl>) {
@@ -2266,13 +2468,20 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     for (const tyir::TyGenericConstraint& constraint : node.lowered_where_clause) {
                         if (expr_depends_on_generic_params(constraint.expr, generic_params))
                             continue;
-                        auto status = evaluate_constraint(constraint.expr, {}, view, {});
+                        auto status = evaluate_constraint(
+                            constraint.expr, {}, view, {}, std::make_shared<ConstraintEvalState>());
                         if (status.kind == ConstraintEvalKind::Satisfied)
                             continue;
                         if (status.kind == ConstraintEvalKind::Unsatisfied) {
                             return make_error(
                                 EvalContext{
-                                    view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                                    view,
+                                    {},
+                                    kDefaultEvalStepBudget,
+                                    kDefaultEvalCallDepth,
+                                    {},
+                                    std::make_shared<ConstraintEvalState>(),
+                                },
                                 node.span,
                                 "generic constraint failed for "
                                     + describe_constraint_owner(
@@ -2281,23 +2490,45 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         if (status.kind == ConstraintEvalKind::RuntimeOnly) {
                             return make_error(
                                 EvalContext{
-                                    view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
+                                    view,
+                                    {},
+                                    kDefaultEvalStepBudget,
+                                    kDefaultEvalCallDepth,
+                                    {},
+                                    std::make_shared<ConstraintEvalState>(),
+                                },
                                 node.span,
                                 "generic constraint for "
                                     + describe_constraint_owner(
                                         "function", node.name, constraint.span)
                                     + " used runtime-only behavior");
                         }
+                        const std::string message =
+                            "generic constraint for "
+                            + describe_constraint_owner("function", node.name, constraint.span)
+                            + (status.kind == ConstraintEvalKind::InvalidType
+                                   ? " is invalid: "
+                                   : " could not be const-evaluated: ")
+                            + status.detail;
+                        if (status.instantiation_limit.has_value()) {
+                            return std::unexpected(
+                                EvalError{
+                                    node.span,
+                                    std::move(message),
+                                    {},
+                                    status.instantiation_limit,
+                                });
+                        }
                         return make_error(
                             EvalContext{
-                                view, {}, kDefaultEvalStepBudget, kDefaultEvalCallDepth, {}},
-                            node.span,
-                            "generic constraint for "
-                                + describe_constraint_owner("function", node.name, constraint.span)
-                                + (status.kind == ConstraintEvalKind::InvalidType
-                                       ? " is invalid: "
-                                       : " could not be const-evaluated: ")
-                                + status.detail);
+                                view,
+                                {},
+                                kDefaultEvalStepBudget,
+                                kDefaultEvalCallDepth,
+                                {},
+                                std::make_shared<ConstraintEvalState>(),
+                            },
+                            node.span, message);
                     }
                     return validate_constraints_in_block(node.body, view, generic_params);
                 } else {

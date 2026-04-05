@@ -31,24 +31,39 @@
 /// if (!tyir) { /* handle error */ }
 ///
 /// const auto lir = cstc::lir_builder::lower_program(*tyir);
-/// std::cout << cstc::lir::format_program(lir);
+/// if (!lir) { /* handle lowering error */ }
+/// std::cout << cstc::lir::format_program(*lir);
 /// ```
 ///
 /// ## Error handling
 ///
-/// Given valid TyIR (produced by the type-checking pass), this lowering is
-/// structurally infallible.  The function therefore returns `LirProgram`
-/// directly without wrapping in `std::expected`.
+/// Lowering returns
+/// `std::expected<cstc::lir::LirProgram, cstc::lir_builder::LirLowerError>`.
+/// Callers should check the result before formatting or otherwise consuming the
+/// program and surface `LirLowerError::message` (and related diagnostic data)
+/// when lowering fails.
+
+#include <expected>
+#include <optional>
+#include <string>
 
 #include <cstc_lir/lir.hpp>
+#include <cstc_tyir/instantiation.hpp>
 #include <cstc_tyir/tyir.hpp>
 
 namespace cstc::lir_builder {
 
+struct LirLowerError {
+    cstc::span::SourceSpan span;
+    std::string message;
+    std::optional<cstc::tyir::InstantiationLimitDiagnostic> instantiation_limit;
+};
+
 /// Lowers a fully type-annotated TyIR program to a flat LIR program.
 ///
 /// Requires an active `SymbolSession` on the calling thread.
-[[nodiscard]] lir::LirProgram lower_program(const tyir::TyProgram& program);
+[[nodiscard]] std::expected<lir::LirProgram, LirLowerError>
+    lower_program(const tyir::TyProgram& program);
 
 } // namespace cstc::lir_builder
 

@@ -21,7 +21,8 @@ static std::string must_codegen(const char* source) {
     const auto tyir = cstc::tyir_builder::lower_program(*ast);
     assert(tyir.has_value());
     const auto lir = cstc::lir_builder::lower_program(*tyir);
-    return cstc::codegen::emit_llvm_ir(lir);
+    assert(lir.has_value());
+    return cstc::codegen::emit_llvm_ir(*lir);
 }
 
 static bool ir_contains(const std::string& ir, const std::string& needle) {
@@ -44,7 +45,8 @@ static void test_custom_module_name() {
     const auto tyir = cstc::tyir_builder::lower_program(*ast);
     assert(tyir.has_value());
     const auto lir = cstc::lir_builder::lower_program(*tyir);
-    const std::string ir = cstc::codegen::emit_llvm_ir(lir, "my_module");
+    assert(lir.has_value());
+    const std::string ir = cstc::codegen::emit_llvm_ir(*lir, "my_module");
     assert(ir_contains(ir, "my_module"));
 }
 

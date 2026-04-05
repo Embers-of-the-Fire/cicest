@@ -47,6 +47,10 @@ LIR is intentionally past the language's generic boundary.
   before any `LirFnDef`, `LirStructDecl`, or `LirEnumDecl` is emitted.
 - Instantiated items receive deterministic internal names so duplicate requests
   reuse the same lowered item and codegen symbol.
+- Recursive generic requests share memoized instances when they normalize to the
+  same declaration and argument list.
+- Recursive growth across distinct instantiations is cut off by the compiler's
+  fixed generic recursion limit, and monomorphization reports the instantiation chain.
 - Codegen therefore never needs to reason about unresolved type parameters.
 
 ## Core concepts

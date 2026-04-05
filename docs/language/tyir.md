@@ -166,6 +166,8 @@ TyProgram
 ## Limitations (current version)
 
 - Break values are not propagated to loop types; all loops have type `Unit`.
-- No support for recursive types beyond single-level named references.
+- Named recursive references are validated before TyIR is finalized.
+- Non-productive recursive type declarations are rejected during type checking.
+- Recursive generic instantiations are bounded by a fixed compiler recursion limit.
 - Generic declarations may still exist here; they must not survive into LIR.
 - Functions are always top-level; no closures or first-class function values.
