@@ -716,6 +716,54 @@ fn main() {
     assert(!error.instantiation_limit->stack.empty());
 }
 
+static void test_declaration_time_struct_constraint_preserves_instantiation_limit() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+struct Wrap<T> { value: T }
+
+fn expand<T>() -> Constraint where expand::<Wrap<T>>() {
+    Constraint::Valid
+}
+
+struct Checked where expand::<num>() {
+    value: num,
+}
+
+fn main() {}
+)");
+
+    assert(
+        error.message.find("generic constraint for type 'Checked' could not be const-evaluated")
+        != std::string::npos);
+    assert(error.instantiation_limit.has_value());
+    assert(error.instantiation_limit->phase == cstc::tyir::InstantiationPhase::ConstEval);
+    assert(!error.instantiation_limit->stack.empty());
+}
+
+static void test_declaration_time_function_constraint_preserves_instantiation_limit() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+struct Wrap<T> { value: T }
+
+fn expand<T>() -> Constraint where expand::<Wrap<T>>() {
+    Constraint::Valid
+}
+
+fn checked() -> bool where expand::<num>() {
+    true
+}
+
+fn main() {}
+)");
+
+    assert(
+        error.message.find("generic constraint for function 'checked' could not be const-evaluated")
+        != std::string::npos);
+    assert(error.instantiation_limit.has_value());
+    assert(error.instantiation_limit->phase == cstc::tyir::InstantiationPhase::ConstEval);
+    assert(!error.instantiation_limit->stack.empty());
+}
+
 static void test_constraint_key_encoding_distinguishes_runtime_named_types() {
     SymbolSession session;
 
@@ -1186,6 +1234,8 @@ int main() {
     test_intrinsic_decl_arity_mismatch_reports_error();
     test_recursive_const_eval_reports_call_depth_error();
     test_recursive_generic_constraint_reports_instantiation_limit();
+    test_declaration_time_struct_constraint_preserves_instantiation_limit();
+    test_declaration_time_function_constraint_preserves_instantiation_limit();
     test_constraint_key_encoding_distinguishes_runtime_named_types();
     test_infinite_loop_reports_step_budget_error();
     test_infinite_while_reports_step_budget_error();

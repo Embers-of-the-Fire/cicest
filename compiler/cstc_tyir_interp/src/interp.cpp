@@ -2429,6 +2429,24 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                                         node.name, constraint.span)
                                     + " used runtime-only behavior");
                         }
+                        const std::string message =
+                            "generic constraint for "
+                            + describe_constraint_owner(
+                                std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
+                                node.name, constraint.span)
+                            + (status.kind == ConstraintEvalKind::InvalidType
+                                   ? " is invalid: "
+                                   : " could not be const-evaluated: ")
+                            + status.detail;
+                        if (status.instantiation_limit.has_value()) {
+                            return std::unexpected(
+                                EvalError{
+                                    node.span,
+                                    std::move(message),
+                                    {},
+                                    status.instantiation_limit,
+                                });
+                        }
                         return make_error(
                             EvalContext{
                                 view,
@@ -2438,15 +2456,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                                 {},
                                 std::make_shared<ConstraintEvalState>(),
                             },
-                            node.span,
-                            "generic constraint for "
-                                + describe_constraint_owner(
-                                    std::is_same_v<Node, tyir::TyStructDecl> ? "type" : "enum",
-                                    node.name, constraint.span)
-                                + (status.kind == ConstraintEvalKind::InvalidType
-                                       ? " is invalid: "
-                                       : " could not be const-evaluated: ")
-                                + status.detail);
+                            node.span, message);
                     }
                     return {};
                 } else if constexpr (std::is_same_v<Node, tyir::TyFnDecl>) {
@@ -2490,6 +2500,22 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                                         "function", node.name, constraint.span)
                                     + " used runtime-only behavior");
                         }
+                        const std::string message =
+                            "generic constraint for "
+                            + describe_constraint_owner("function", node.name, constraint.span)
+                            + (status.kind == ConstraintEvalKind::InvalidType
+                                   ? " is invalid: "
+                                   : " could not be const-evaluated: ")
+                            + status.detail;
+                        if (status.instantiation_limit.has_value()) {
+                            return std::unexpected(
+                                EvalError{
+                                    node.span,
+                                    std::move(message),
+                                    {},
+                                    status.instantiation_limit,
+                                });
+                        }
                         return make_error(
                             EvalContext{
                                 view,
@@ -2499,13 +2525,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                                 {},
                                 std::make_shared<ConstraintEvalState>(),
                             },
-                            node.span,
-                            "generic constraint for "
-                                + describe_constraint_owner("function", node.name, constraint.span)
-                                + (status.kind == ConstraintEvalKind::InvalidType
-                                       ? " is invalid: "
-                                       : " could not be const-evaluated: ")
-                                + status.detail);
+                            node.span, message);
                     }
                     return validate_constraints_in_block(node.body, view, generic_params);
                 } else {
