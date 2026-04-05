@@ -246,10 +246,11 @@ using TypeSubstitution =
 
 [[nodiscard]] static std::string
     format_instantiation_frame(const cstc::tyir::InstantiationFrame& frame) {
-    const std::string display =
-        frame.display_name.is_valid()
-            ? std::string(frame.display_name.as_str())
-            : (frame.item_name.is_valid() ? std::string(frame.item_name.as_str()) : "<unknown>");
+    std::string display = "<unknown>";
+    if (frame.display_name.is_valid())
+        display = std::string(frame.display_name.as_str());
+    else if (frame.item_name.is_valid())
+        display = std::string(frame.item_name.as_str());
     std::string rendered = display + "<";
     for (std::size_t index = 0; index < frame.generic_args.size(); ++index) {
         if (index > 0)
@@ -583,7 +584,7 @@ struct LowerCtx {
 
 [[nodiscard]] static std::unexpected<LowerError>
     make_error(cstc::span::SourceSpan span, std::string msg) {
-    return std::unexpected(LowerError{span, std::move(msg)});
+    return std::unexpected(LowerError{span, std::move(msg), std::nullopt});
 }
 
 [[nodiscard]] static std::string
@@ -727,17 +728,23 @@ template <typename Decl>
                     attr.span,
                     "attribute `lang` is only supported on `extern \"lang\" "
                         + std::string(item_kind) + "` declarations",
+                    std::nullopt,
                 });
         }
         if (!attr.value.has_value())
             return std::unexpected(
-                LowerError{attr.span, "attribute `lang` requires a string value"});
+                LowerError{attr.span, "attribute `lang` requires a string value", std::nullopt});
         if (attr.value->as_str().empty()) {
             return std::unexpected(
-                LowerError{attr.span, "attribute `lang` requires a non-empty string value"});
+                LowerError{
+                    attr.span,
+                    "attribute `lang` requires a non-empty string value",
+                    std::nullopt,
+                });
         }
         if (lang_name.has_value())
-            return std::unexpected(LowerError{attr.span, "duplicate `lang` attribute"});
+            return std::unexpected(
+                LowerError{attr.span, "duplicate `lang` attribute", std::nullopt});
 
         lang_name = *attr.value;
     }
@@ -879,19 +886,20 @@ struct TypeValidationState {
         !stack.empty() ? stack.back().span : cstc::span::SourceSpan{};
 
     if (state.active.contains(key)) {
+        const std::string instantiation = format_instantiation_frame(stack.back());
         return make_instantiation_limit_error(
             span,
-            "non-productive recursive type declaration detected while expanding '"
-                + format_instantiation_frame(stack.back())
+            "non-productive recursive type declaration detected while expanding '" + instantiation
                 + "'; recursive named fields must remain finite under the compiler recursion limit",
             cstc::tyir::InstantiationPhase::TypeChecking, std::move(stack));
     }
 
     if (state.stack.size() >= cstc::tyir::kMaxGenericInstantiationDepth) {
+        const std::string instantiation = format_instantiation_frame(stack.back());
         return make_instantiation_limit_error(
             span,
             "generic instantiation depth limit reached during type checking while expanding '"
-                + format_instantiation_frame(stack.back()) + "'; active limit is "
+                + instantiation + "'; active limit is "
                 + std::to_string(cstc::tyir::kMaxGenericInstantiationDepth)
                 + " and the program may contain non-productive recursion",
             cstc::tyir::InstantiationPhase::TypeChecking, std::move(stack));
@@ -1122,6 +1130,7 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                         expr->span,
                         "function where clauses cannot reference parameter '"
                             + display_symbol(node.display_head, node.head) + "'",
+                        std::nullopt,
                     };
                 }
                 return std::nullopt;
@@ -1313,7 +1322,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                     return find_return_in_where_expr(*node.value);
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, ast::ReturnExpr>) {
-                return LowerError{expr->span, "where clauses cannot contain 'return'"};
+                return LowerError{
+                    expr->span, "where clauses cannot contain 'return'", std::nullopt};
             }
         },
         expr->node);

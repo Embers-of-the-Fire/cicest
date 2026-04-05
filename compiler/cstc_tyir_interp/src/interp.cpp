@@ -133,7 +133,7 @@ struct EvalState {
 
 [[nodiscard]] static std::unexpected<EvalError>
     make_error(const EvalContext& ctx, SourceSpan span, std::string message) {
-    return std::unexpected(EvalError{span, std::move(message), ctx.stack});
+    return std::unexpected(EvalError{span, std::move(message), ctx.stack, std::nullopt});
 }
 
 [[nodiscard]] static std::expected<void, EvalError>
@@ -890,6 +890,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                 "impure lang intrinsic '" + std::string(name)
                     + "' is not const-evaluable; mark it `runtime`",
                 ctx.stack,
+                std::nullopt,
             });
     }
 
@@ -1442,7 +1443,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
 [[nodiscard]] static std::unexpected<EvalError>
     materialization_error(SourceSpan span, std::string message) {
-    return std::unexpected(EvalError{span, std::move(message), {}});
+    return std::unexpected(EvalError{span, std::move(message), {}, std::nullopt});
 }
 
 [[nodiscard]] static bool can_fold_reference_expr(const tyir::Ty& ty, const ValuePtr& value) {
@@ -1534,6 +1535,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     "missing struct declaration while materializing compile-time constant '"
                         + std::string(actual->type_name.as_str()) + "'",
                     {},
+                    std::nullopt,
                 });
 
         TypeSubstitution substitution;
@@ -1555,6 +1557,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         "missing struct field '" + std::string(field_decl.name.as_str())
                             + "' while materializing compile-time constant",
                         {},
+                        std::nullopt,
                     });
             }
             tyir::Ty field_ty = field_decl.ty;
@@ -1570,9 +1573,20 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     }
     case Value::Kind::Ref:
         return std::unexpected(
-            EvalError{span, "unexpected reference value during materialization", {}});
+            EvalError{
+                span,
+                "unexpected reference value during materialization",
+                {},
+                std::nullopt,
+            });
     }
-    return std::unexpected(EvalError{span, "unsupported compile-time value materialization", {}});
+    return std::unexpected(
+        EvalError{
+            span,
+            "unsupported compile-time value materialization",
+            {},
+            std::nullopt,
+        });
 }
 
 [[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError> fold_expr(

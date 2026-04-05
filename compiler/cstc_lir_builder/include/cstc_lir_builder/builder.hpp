@@ -40,15 +40,27 @@
 /// structurally infallible.  The function therefore returns `LirProgram`
 /// directly without wrapping in `std::expected`.
 
+#include <expected>
+#include <optional>
+#include <string>
+
 #include <cstc_lir/lir.hpp>
+#include <cstc_tyir/instantiation.hpp>
 #include <cstc_tyir/tyir.hpp>
 
 namespace cstc::lir_builder {
 
+struct LirLowerError {
+    cstc::span::SourceSpan span;
+    std::string message;
+    std::optional<cstc::tyir::InstantiationLimitDiagnostic> instantiation_limit;
+};
+
 /// Lowers a fully type-annotated TyIR program to a flat LIR program.
 ///
 /// Requires an active `SymbolSession` on the calling thread.
-[[nodiscard]] lir::LirProgram lower_program(const tyir::TyProgram& program);
+[[nodiscard]] std::expected<lir::LirProgram, LirLowerError>
+    lower_program(const tyir::TyProgram& program);
 
 } // namespace cstc::lir_builder
 

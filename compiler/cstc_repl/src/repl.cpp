@@ -1536,11 +1536,28 @@ private:
 
     [[nodiscard]] std::expected<cstc::lir::LirProgram, std::string>
         lower_to_lir(std::string_view source) const {
-        const auto typed = lower_to_tyir(source);
-        if (!typed.has_value())
-            return std::unexpected(typed.error());
+        try {
+            write_text_file(session_source_path_, source);
 
-        return cstc::lir_builder::lower_program(*typed);
+            cstc::span::SourceMap source_map;
+            const auto loaded =
+                cstc::module::load_program(source_map, session_source_path_, CICEST_STD_PATH);
+            if (!loaded.has_value())
+                return std::unexpected(
+                    cstc::module::format_module_error(source_map, loaded.error()));
+
+            const auto typed = cstc::cli_support::lower_and_fold_program(source_map, *loaded);
+            if (!typed.has_value())
+                return std::unexpected(typed.error());
+
+            const auto lir = cstc::lir_builder::lower_program(*typed);
+            if (!lir.has_value())
+                return std::unexpected(
+                    cstc::cli_support::format_lir_error(source_map, lir.error()));
+            return *lir;
+        } catch (const std::exception& error) {
+            return std::unexpected(std::string(error.what()));
+        }
     }
 
     [[nodiscard]] std::expected<CommandResult, std::string>

@@ -152,7 +152,9 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
         throw std::runtime_error(tyir.error());
 
     const auto lir = cstc::lir_builder::lower_program(*tyir);
-    return cstc::lir::format_program(lir);
+    if (!lir.has_value())
+        throw std::runtime_error(cstc::cli_support::format_lir_error(source_map, lir.error()));
+    return cstc::lir::format_program(*lir);
 }
 
 [[nodiscard]] std::string
@@ -165,7 +167,9 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
         throw std::runtime_error(tyir.error());
 
     const auto lir = cstc::lir_builder::lower_program(*tyir);
-    return cstc::codegen::emit_llvm_ir(lir);
+    if (!lir.has_value())
+        throw std::runtime_error(cstc::cli_support::format_lir_error(source_map, lir.error()));
+    return cstc::codegen::emit_llvm_ir(*lir);
 }
 
 [[nodiscard]] std::string

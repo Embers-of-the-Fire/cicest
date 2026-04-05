@@ -2,6 +2,7 @@
 
 #include <cstc_ansi_color/ansi_color.hpp>
 #include <cstc_error_report/report.hpp>
+#include <cstc_lir_builder/builder.hpp>
 #include <cstc_module/module.hpp>
 #include <cstc_parser/diagnostics.hpp>
 #include <cstc_resource_path/resource_path.hpp>
@@ -216,6 +217,29 @@ inline void append_instantiation_limit_children(
         return std::unexpected(format_eval_error(source_map, folded.error()));
 
     return *folded;
+}
+
+[[nodiscard]] inline std::string format_lir_error(
+    const cstc::span::SourceMap& source_map, const cstc::lir_builder::LirLowerError& error) {
+    cstc::error_report::SourceDatabase database;
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Error;
+    diagnostic.message = "monomorphization error: " + error.message;
+
+    if (const auto report_span = detail::append_report_span(database, source_map, error.span);
+        report_span.has_value()) {
+        diagnostic.labels.push_back(
+            cstc::error_report::Label{
+                .span = *report_span,
+                .message = error.message,
+                .style = cstc::error_report::LabelStyle::Primary,
+            });
+    }
+
+    detail::append_instantiation_limit_children(
+        database, source_map, diagnostic, error.instantiation_limit);
+
+    return detail::render_report(database, diagnostic);
 }
 
 [[nodiscard]] inline cstc::ast::Program load_module_program(

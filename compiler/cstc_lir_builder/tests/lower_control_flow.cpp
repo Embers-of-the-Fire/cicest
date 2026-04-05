@@ -34,7 +34,9 @@ static LirProgram must_lower(const char* source) {
         fprintf(stderr, "TYIR FAIL: %s\n  error: %s\n", source, tyir.error().message.c_str());
         assert(false);
     }
-    return lower_program(*tyir);
+    const auto lir = lower_program(*tyir);
+    assert(lir.has_value());
+    return *lir;
 }
 
 static const LirFnDef& first_fn(const LirProgram& prog) {
@@ -534,7 +536,9 @@ static void test_never_call_seals_block() {
     ty_fn.is_runtime = false;
     program.items.push_back(std::move(ty_fn));
 
-    const LirProgram prog = lower_program(program);
+    const auto prog_result = lower_program(program);
+    assert(prog_result.has_value());
+    const LirProgram& prog = *prog_result;
     const LirFnDef& fn = first_fn(prog);
 
     assert(count_unreachable_terminators(fn) == 1);

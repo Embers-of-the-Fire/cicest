@@ -978,35 +978,64 @@ using TypeSubstitution =
     return cstc::symbol::Symbol::intern(mangled);
 }
 
+[[nodiscard]] static cstc::tyir::InstantiationFrame make_instantiation_frame(
+    cstc::symbol::Symbol item_name, cstc::span::SourceSpan span,
+    const std::vector<tyir::Ty>& generic_args) {
+    cstc::tyir::InstantiationFrame frame;
+    frame.item_name = item_name;
+    frame.span = span;
+    frame.generic_args = generic_args;
+    return frame;
+}
+
+[[nodiscard]] static std::unexpected<LirLowerError> make_instantiation_limit_error(
+    cstc::span::SourceSpan span, std::string message,
+    std::vector<cstc::tyir::InstantiationFrame> stack) {
+    return std::unexpected(
+        LirLowerError{
+            span,
+            std::move(message),
+            cstc::tyir::InstantiationLimitDiagnostic{
+                                                     cstc::tyir::InstantiationPhase::Monomorphization,
+                                                     cstc::tyir::kMaxGenericInstantiationDepth,
+                                                     std::move(stack),
+                                                     },
+    });
+}
+
 class Monomorphizer {
 public:
     explicit Monomorphizer(const tyir::TyProgram& program)
         : program_(program) {}
 
-    [[nodiscard]] lir::LirProgram run() {
+    [[nodiscard]] std::expected<lir::LirProgram, LirLowerError> run() {
         collect_generic_items();
 
         for (const tyir::TyItem& item : program_.items) {
-            std::visit(
-                [&](const auto& node) {
+            auto lowered = std::visit(
+                [&](const auto& node) -> std::expected<void, LirLowerError> {
+                    using Result = std::expected<void, LirLowerError>;
                     using T = std::decay_t<decltype(node)>;
                     if constexpr (std::is_same_v<T, tyir::TyStructDecl>) {
                         if (node.generic_params.empty())
-                            emit_struct_decl(node, {}, node.name);
+                            return emit_struct_decl(node, {}, node.name);
                     } else if constexpr (std::is_same_v<T, tyir::TyEnumDecl>) {
                         if (node.generic_params.empty())
-                            emit_enum_decl(node, {}, node.name);
+                            return emit_enum_decl(node, {}, node.name);
                     } else if constexpr (std::is_same_v<T, tyir::TyFnDecl>) {
                         if (node.generic_params.empty())
-                            emit_fn_decl(node, {}, node.name);
+                            return emit_fn_decl(node, {}, node.name);
                     } else if constexpr (std::is_same_v<T, tyir::TyExternFnDecl>) {
-                        emit_extern_fn_decl(node);
+                        return emit_extern_fn_decl(node);
                     } else if constexpr (std::is_same_v<T, tyir::TyExternStructDecl>) {
                         out_.extern_structs.push_back(
                             lir::LirExternStructDecl{node.abi, node.name, node.span});
                     }
+                    return Result{};
                 },
                 item);
+            if (!lowered)
+                return std::unexpected(std::move(lowered.error()));
         }
 
         return std::move(out_);
@@ -1044,12 +1073,16 @@ private:
         return subst;
     }
 
-    [[nodiscard]] tyir::Ty rewrite_type(const tyir::Ty& ty, const TypeSubstitution& subst) {
+    [[nodiscard]] std::expected<tyir::Ty, LirLowerError>
+        rewrite_type(const tyir::Ty& ty, const TypeSubstitution& subst) {
         tyir::Ty rewritten = apply_substitution(ty, subst);
         if (rewritten.kind == tyir::TyKind::Ref) {
-            if (rewritten.pointee != nullptr)
-                rewritten.pointee =
-                    std::make_shared<tyir::Ty>(rewrite_type(*rewritten.pointee, subst));
+            if (rewritten.pointee != nullptr) {
+                auto pointee = rewrite_type(*rewritten.pointee, subst);
+                if (!pointee)
+                    return std::unexpected(std::move(pointee.error()));
+                rewritten.pointee = std::make_shared<tyir::Ty>(*pointee);
+            }
             return rewritten;
         }
 
@@ -1058,21 +1091,27 @@ private:
 
         std::vector<tyir::Ty> concrete_args;
         concrete_args.reserve(rewritten.generic_args.size());
-        for (const tyir::Ty& arg : rewritten.generic_args)
-            concrete_args.push_back(rewrite_type(arg, subst));
+        for (const tyir::Ty& arg : rewritten.generic_args) {
+            auto concrete_arg = rewrite_type(arg, subst);
+            if (!concrete_arg)
+                return std::unexpected(std::move(concrete_arg.error()));
+            concrete_args.push_back(std::move(*concrete_arg));
+        }
 
         if (const auto it = generic_structs_.find(rewritten.name); it != generic_structs_.end()) {
-            const cstc::symbol::Symbol instantiated_name =
-                ensure_struct_instantiation(*it->second, concrete_args);
-            rewritten.name = instantiated_name;
+            auto instantiated_name = ensure_struct_instantiation(*it->second, concrete_args);
+            if (!instantiated_name)
+                return std::unexpected(std::move(instantiated_name.error()));
+            rewritten.name = *instantiated_name;
             rewritten.generic_args.clear();
             return rewritten;
         }
 
         if (const auto it = generic_enums_.find(rewritten.name); it != generic_enums_.end()) {
-            const cstc::symbol::Symbol instantiated_name =
-                ensure_enum_instantiation(*it->second, concrete_args);
-            rewritten.name = instantiated_name;
+            auto instantiated_name = ensure_enum_instantiation(*it->second, concrete_args);
+            if (!instantiated_name)
+                return std::unexpected(std::move(instantiated_name.error()));
+            rewritten.name = *instantiated_name;
             rewritten.generic_args.clear();
             return rewritten;
         }
@@ -1081,83 +1120,122 @@ private:
         return rewritten;
     }
 
-    [[nodiscard]] tyir::TyExprPtr
+    [[nodiscard]] std::expected<tyir::TyExprPtr, LirLowerError>
         rewrite_expr(const tyir::TyExprPtr& expr, const TypeSubstitution& subst) {
         return std::visit(
-            [&](const auto& node) -> tyir::TyExprPtr {
+            [&](const auto& node) -> std::expected<tyir::TyExprPtr, LirLowerError> {
                 using T = std::decay_t<decltype(node)>;
-                const tyir::Ty rewritten_ty = rewrite_type(expr->ty, subst);
+                auto rewritten_ty = rewrite_type(expr->ty, subst);
+                if (!rewritten_ty)
+                    return std::unexpected(std::move(rewritten_ty.error()));
 
                 if constexpr (
                     std::is_same_v<T, tyir::TyLiteral> || std::is_same_v<T, tyir::LocalRef>
                     || std::is_same_v<T, tyir::TyContinue>) {
-                    return tyir::make_ty_expr(expr->span, node, rewritten_ty);
+                    return tyir::make_ty_expr(expr->span, node, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::EnumVariantRef>) {
                     tyir::EnumVariantRef rewritten = node;
                     if (const auto it = generic_enums_.find(node.enum_name);
                         it != generic_enums_.end()) {
                         std::vector<tyir::Ty> concrete_args;
                         concrete_args.reserve(expr->ty.generic_args.size());
-                        for (const tyir::Ty& arg : expr->ty.generic_args)
-                            concrete_args.push_back(rewrite_type(arg, subst));
-                        rewritten.enum_name = ensure_enum_instantiation(*it->second, concrete_args);
+                        for (const tyir::Ty& arg : expr->ty.generic_args) {
+                            auto concrete_arg = rewrite_type(arg, subst);
+                            if (!concrete_arg)
+                                return std::unexpected(std::move(concrete_arg.error()));
+                            concrete_args.push_back(std::move(*concrete_arg));
+                        }
+                        auto enum_name = ensure_enum_instantiation(*it->second, concrete_args);
+                        if (!enum_name)
+                            return std::unexpected(std::move(enum_name.error()));
+                        rewritten.enum_name = *enum_name;
                     }
-                    return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                    return tyir::make_ty_expr(expr->span, rewritten, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyStructInit>) {
                     tyir::TyStructInit rewritten;
                     std::vector<tyir::Ty> concrete_args;
                     concrete_args.reserve(node.generic_args.size());
-                    for (const tyir::Ty& arg : node.generic_args)
-                        concrete_args.push_back(rewrite_type(arg, subst));
+                    for (const tyir::Ty& arg : node.generic_args) {
+                        auto concrete_arg = rewrite_type(arg, subst);
+                        if (!concrete_arg)
+                            return std::unexpected(std::move(concrete_arg.error()));
+                        concrete_args.push_back(std::move(*concrete_arg));
+                    }
 
                     rewritten.type_name = node.type_name;
                     if (const auto it = generic_structs_.find(node.type_name);
-                        it != generic_structs_.end())
-                        rewritten.type_name =
-                            ensure_struct_instantiation(*it->second, concrete_args);
+                        it != generic_structs_.end()) {
+                        auto type_name = ensure_struct_instantiation(*it->second, concrete_args);
+                        if (!type_name)
+                            return std::unexpected(std::move(type_name.error()));
+                        rewritten.type_name = *type_name;
+                    }
                     rewritten.fields.reserve(node.fields.size());
                     for (const tyir::TyStructInitField& field : node.fields) {
+                        auto field_value = rewrite_expr(field.value, subst);
+                        if (!field_value)
+                            return std::unexpected(std::move(field_value.error()));
                         rewritten.fields.push_back(
                             tyir::TyStructInitField{
                                 field.name,
-                                rewrite_expr(field.value, subst),
+                                *field_value,
                                 field.span,
                             });
                     }
-                    return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                    return tyir::make_ty_expr(expr->span, rewritten, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyBorrow>) {
-                    return tyir::make_ty_expr(
-                        expr->span, tyir::TyBorrow{rewrite_expr(node.rhs, subst)}, rewritten_ty);
+                    auto rhs = rewrite_expr(node.rhs, subst);
+                    if (!rhs)
+                        return std::unexpected(std::move(rhs.error()));
+                    return tyir::make_ty_expr(expr->span, tyir::TyBorrow{*rhs}, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyUnary>) {
+                    auto rhs = rewrite_expr(node.rhs, subst);
+                    if (!rhs)
+                        return std::unexpected(std::move(rhs.error()));
                     return tyir::make_ty_expr(
-                        expr->span, tyir::TyUnary{node.op, rewrite_expr(node.rhs, subst)},
-                        rewritten_ty);
+                        expr->span, tyir::TyUnary{node.op, *rhs}, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyBinary>) {
+                    auto lhs = rewrite_expr(node.lhs, subst);
+                    if (!lhs)
+                        return std::unexpected(std::move(lhs.error()));
+                    auto rhs = rewrite_expr(node.rhs, subst);
+                    if (!rhs)
+                        return std::unexpected(std::move(rhs.error()));
                     return tyir::make_ty_expr(
-                        expr->span,
-                        tyir::TyBinary{
-                            node.op, rewrite_expr(node.lhs, subst), rewrite_expr(node.rhs, subst)},
-                        rewritten_ty);
+                        expr->span, tyir::TyBinary{node.op, *lhs, *rhs}, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyFieldAccess>) {
+                    auto base = rewrite_expr(node.base, subst);
+                    if (!base)
+                        return std::unexpected(std::move(base.error()));
                     return tyir::make_ty_expr(
-                        expr->span,
-                        tyir::TyFieldAccess{
-                            rewrite_expr(node.base, subst), node.field, node.use_kind},
-                        rewritten_ty);
+                        expr->span, tyir::TyFieldAccess{*base, node.field, node.use_kind},
+                        *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyCall>) {
                     tyir::TyCall rewritten;
                     std::vector<tyir::Ty> concrete_args;
                     concrete_args.reserve(node.generic_args.size());
-                    for (const tyir::Ty& arg : node.generic_args)
-                        concrete_args.push_back(rewrite_type(arg, subst));
+                    for (const tyir::Ty& arg : node.generic_args) {
+                        auto concrete_arg = rewrite_type(arg, subst);
+                        if (!concrete_arg)
+                            return std::unexpected(std::move(concrete_arg.error()));
+                        concrete_args.push_back(std::move(*concrete_arg));
+                    }
 
                     rewritten.fn_name = node.fn_name;
-                    if (const auto it = generic_fns_.find(node.fn_name); it != generic_fns_.end())
-                        rewritten.fn_name = ensure_fn_instantiation(*it->second, concrete_args);
+                    if (const auto it = generic_fns_.find(node.fn_name); it != generic_fns_.end()) {
+                        auto fn_name = ensure_fn_instantiation(*it->second, concrete_args);
+                        if (!fn_name)
+                            return std::unexpected(std::move(fn_name.error()));
+                        rewritten.fn_name = *fn_name;
+                    }
                     rewritten.args.reserve(node.args.size());
-                    for (const tyir::TyExprPtr& arg : node.args)
-                        rewritten.args.push_back(rewrite_expr(arg, subst));
-                    return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                    for (const tyir::TyExprPtr& arg : node.args) {
+                        auto rewritten_arg = rewrite_expr(arg, subst);
+                        if (!rewritten_arg)
+                            return std::unexpected(std::move(rewritten_arg.error()));
+                        rewritten.args.push_back(*rewritten_arg);
+                    }
+                    return tyir::make_ty_expr(expr->span, rewritten, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyDeferredGenericCall>) {
                     tyir::TyDeferredGenericCall rewritten;
                     rewritten.fn_name = node.fn_name;
@@ -1169,13 +1247,20 @@ private:
                             fully_resolved = false;
                             continue;
                         }
-                        rewritten.generic_args.push_back(rewrite_type(*arg, subst));
+                        auto rewritten_arg = rewrite_type(*arg, subst);
+                        if (!rewritten_arg)
+                            return std::unexpected(std::move(rewritten_arg.error()));
+                        rewritten.generic_args.push_back(*rewritten_arg);
                     }
                     rewritten.args.reserve(node.args.size());
-                    for (const tyir::TyExprPtr& arg : node.args)
-                        rewritten.args.push_back(rewrite_expr(arg, subst));
+                    for (const tyir::TyExprPtr& arg : node.args) {
+                        auto rewritten_arg = rewrite_expr(arg, subst);
+                        if (!rewritten_arg)
+                            return std::unexpected(std::move(rewritten_arg.error()));
+                        rewritten.args.push_back(*rewritten_arg);
+                    }
                     if (!fully_resolved)
-                        return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                        return tyir::make_ty_expr(expr->span, rewritten, *rewritten_ty);
 
                     tyir::TyCall concrete;
                     concrete.fn_name = rewritten.fn_name;
@@ -1186,104 +1271,158 @@ private:
                     }
                     concrete.args = std::move(rewritten.args);
                     if (const auto it = generic_fns_.find(concrete.fn_name);
-                        it != generic_fns_.end())
-                        concrete.fn_name =
-                            ensure_fn_instantiation(*it->second, concrete.generic_args);
-                    return tyir::make_ty_expr(expr->span, concrete, rewritten_ty);
+                        it != generic_fns_.end()) {
+                        auto fn_name = ensure_fn_instantiation(*it->second, concrete.generic_args);
+                        if (!fn_name)
+                            return std::unexpected(std::move(fn_name.error()));
+                        concrete.fn_name = *fn_name;
+                    }
+                    return tyir::make_ty_expr(expr->span, concrete, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyBlockPtr>) {
-                    return tyir::make_ty_expr(expr->span, rewrite_block(node, subst), rewritten_ty);
+                    auto block = rewrite_block(node, subst);
+                    if (!block)
+                        return std::unexpected(std::move(block.error()));
+                    return tyir::make_ty_expr(expr->span, *block, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyIf>) {
                     std::optional<tyir::TyExprPtr> else_branch;
-                    if (node.else_branch.has_value())
-                        else_branch = rewrite_expr(*node.else_branch, subst);
+                    if (node.else_branch.has_value()) {
+                        auto rewritten_else = rewrite_expr(*node.else_branch, subst);
+                        if (!rewritten_else)
+                            return std::unexpected(std::move(rewritten_else.error()));
+                        else_branch = *rewritten_else;
+                    }
+                    auto condition = rewrite_expr(node.condition, subst);
+                    if (!condition)
+                        return std::unexpected(std::move(condition.error()));
+                    auto then_block = rewrite_block(node.then_block, subst);
+                    if (!then_block)
+                        return std::unexpected(std::move(then_block.error()));
                     return tyir::make_ty_expr(
-                        expr->span,
-                        tyir::TyIf{
-                            rewrite_expr(node.condition, subst),
-                            rewrite_block(node.then_block, subst), std::move(else_branch)},
-                        rewritten_ty);
+                        expr->span, tyir::TyIf{*condition, *then_block, std::move(else_branch)},
+                        *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyLoop>) {
-                    return tyir::make_ty_expr(
-                        expr->span, tyir::TyLoop{rewrite_block(node.body, subst)}, rewritten_ty);
+                    auto body = rewrite_block(node.body, subst);
+                    if (!body)
+                        return std::unexpected(std::move(body.error()));
+                    return tyir::make_ty_expr(expr->span, tyir::TyLoop{*body}, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyWhile>) {
+                    auto condition = rewrite_expr(node.condition, subst);
+                    if (!condition)
+                        return std::unexpected(std::move(condition.error()));
+                    auto body = rewrite_block(node.body, subst);
+                    if (!body)
+                        return std::unexpected(std::move(body.error()));
                     return tyir::make_ty_expr(
-                        expr->span,
-                        tyir::TyWhile{
-                            rewrite_expr(node.condition, subst), rewrite_block(node.body, subst)},
-                        rewritten_ty);
+                        expr->span, tyir::TyWhile{*condition, *body}, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyFor>) {
                     tyir::TyFor rewritten;
                     if (node.init.has_value()) {
+                        auto init_ty = rewrite_type(node.init->ty, subst);
+                        if (!init_ty)
+                            return std::unexpected(std::move(init_ty.error()));
+                        auto init_expr = rewrite_expr(node.init->init, subst);
+                        if (!init_expr)
+                            return std::unexpected(std::move(init_expr.error()));
                         rewritten.init = tyir::TyForInit{
-                            node.init->discard,
-                            node.init->name,
-                            rewrite_type(node.init->ty, subst),
-                            rewrite_expr(node.init->init, subst),
-                            node.init->span,
+                            node.init->discard, node.init->name, *init_ty,
+                            *init_expr,         node.init->span,
                         };
                     }
-                    if (node.condition.has_value())
-                        rewritten.condition = rewrite_expr(*node.condition, subst);
-                    if (node.step.has_value())
-                        rewritten.step = rewrite_expr(*node.step, subst);
-                    rewritten.body = rewrite_block(node.body, subst);
-                    return tyir::make_ty_expr(expr->span, rewritten, rewritten_ty);
+                    if (node.condition.has_value()) {
+                        auto condition = rewrite_expr(*node.condition, subst);
+                        if (!condition)
+                            return std::unexpected(std::move(condition.error()));
+                        rewritten.condition = *condition;
+                    }
+                    if (node.step.has_value()) {
+                        auto step = rewrite_expr(*node.step, subst);
+                        if (!step)
+                            return std::unexpected(std::move(step.error()));
+                        rewritten.step = *step;
+                    }
+                    auto body = rewrite_block(node.body, subst);
+                    if (!body)
+                        return std::unexpected(std::move(body.error()));
+                    rewritten.body = *body;
+                    return tyir::make_ty_expr(expr->span, rewritten, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyBreak>) {
                     std::optional<tyir::TyExprPtr> value;
-                    if (node.value.has_value())
-                        value = rewrite_expr(*node.value, subst);
+                    if (node.value.has_value()) {
+                        auto rewritten_value = rewrite_expr(*node.value, subst);
+                        if (!rewritten_value)
+                            return std::unexpected(std::move(rewritten_value.error()));
+                        value = *rewritten_value;
+                    }
                     return tyir::make_ty_expr(
-                        expr->span, tyir::TyBreak{std::move(value)}, rewritten_ty);
+                        expr->span, tyir::TyBreak{std::move(value)}, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyReturn>) {
                     std::optional<tyir::TyExprPtr> value;
-                    if (node.value.has_value())
-                        value = rewrite_expr(*node.value, subst);
+                    if (node.value.has_value()) {
+                        auto rewritten_value = rewrite_expr(*node.value, subst);
+                        if (!rewritten_value)
+                            return std::unexpected(std::move(rewritten_value.error()));
+                        value = *rewritten_value;
+                    }
                     return tyir::make_ty_expr(
-                        expr->span, tyir::TyReturn{std::move(value)}, rewritten_ty);
+                        expr->span, tyir::TyReturn{std::move(value)}, *rewritten_ty);
                 }
 
                 assert(false && "unhandled TyExpr variant during monomorphization");
-                return tyir::make_ty_expr(expr->span, tyir::TyLiteral{}, rewritten_ty);
+                return tyir::make_ty_expr(expr->span, tyir::TyLiteral{}, *rewritten_ty);
             },
             expr->node);
     }
 
-    [[nodiscard]] tyir::TyBlockPtr
+    [[nodiscard]] std::expected<tyir::TyBlockPtr, LirLowerError>
         rewrite_block(const tyir::TyBlockPtr& block, const TypeSubstitution& subst) {
         auto rewritten = std::make_shared<tyir::TyBlock>();
         rewritten->stmts.reserve(block->stmts.size());
         for (const tyir::TyStmt& stmt : block->stmts) {
-            rewritten->stmts.push_back(
-                std::visit(
-                    [&](const auto& node) -> tyir::TyStmt {
-                        using T = std::decay_t<decltype(node)>;
-                        if constexpr (std::is_same_v<T, tyir::TyLetStmt>) {
-                            return tyir::TyLetStmt{
-                                node.discard,
-                                node.name,
-                                rewrite_type(node.ty, subst),
-                                rewrite_expr(node.init, subst),
-                                node.span,
-                            };
-                        } else {
-                            return tyir::TyExprStmt{rewrite_expr(node.expr, subst), node.span};
-                        }
-                    },
-                    stmt));
+            auto rewritten_stmt = std::visit(
+                [&](const auto& node) -> std::expected<tyir::TyStmt, LirLowerError> {
+                    using T = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<T, tyir::TyLetStmt>) {
+                        auto rewritten_ty = rewrite_type(node.ty, subst);
+                        if (!rewritten_ty)
+                            return std::unexpected(std::move(rewritten_ty.error()));
+                        auto rewritten_init = rewrite_expr(node.init, subst);
+                        if (!rewritten_init)
+                            return std::unexpected(std::move(rewritten_init.error()));
+                        return tyir::TyLetStmt{
+                            node.discard, node.name, *rewritten_ty, *rewritten_init, node.span,
+                        };
+                    } else {
+                        auto rewritten_expr = rewrite_expr(node.expr, subst);
+                        if (!rewritten_expr)
+                            return std::unexpected(std::move(rewritten_expr.error()));
+                        return tyir::TyExprStmt{*rewritten_expr, node.span};
+                    }
+                },
+                stmt);
+            if (!rewritten_stmt)
+                return std::unexpected(std::move(rewritten_stmt.error()));
+            rewritten->stmts.push_back(*rewritten_stmt);
         }
-        if (block->tail.has_value())
-            rewritten->tail = rewrite_expr(*block->tail, subst);
-        rewritten->ty = rewrite_type(block->ty, subst);
+        if (block->tail.has_value()) {
+            auto rewritten_tail = rewrite_expr(*block->tail, subst);
+            if (!rewritten_tail)
+                return std::unexpected(std::move(rewritten_tail.error()));
+            rewritten->tail = *rewritten_tail;
+        }
+        auto rewritten_ty = rewrite_type(block->ty, subst);
+        if (!rewritten_ty)
+            return std::unexpected(std::move(rewritten_ty.error()));
+        rewritten->ty = *rewritten_ty;
         rewritten->span = block->span;
         return rewritten;
     }
 
-    void emit_struct_decl(
+    [[nodiscard]] std::expected<void, LirLowerError> emit_struct_decl(
         const tyir::TyStructDecl& decl, const TypeSubstitution& subst,
         cstc::symbol::Symbol emitted_name) {
         const std::string emitted_key(emitted_name.as_str());
         if (!emitted_structs_.insert(emitted_key).second)
-            return;
+            return {};
 
         tyir::TyStructDecl concrete;
         concrete.name = emitted_name;
@@ -1291,18 +1430,21 @@ private:
         concrete.span = decl.span;
         concrete.fields.reserve(decl.fields.size());
         for (const tyir::TyFieldDecl& field : decl.fields) {
-            concrete.fields.push_back(
-                tyir::TyFieldDecl{field.name, rewrite_type(field.ty, subst), field.span});
+            auto field_ty = rewrite_type(field.ty, subst);
+            if (!field_ty)
+                return std::unexpected(std::move(field_ty.error()));
+            concrete.fields.push_back(tyir::TyFieldDecl{field.name, *field_ty, field.span});
         }
         out_.structs.push_back(forward_struct(concrete));
+        return {};
     }
 
-    void emit_enum_decl(
+    [[nodiscard]] std::expected<void, LirLowerError> emit_enum_decl(
         const tyir::TyEnumDecl& decl, const TypeSubstitution& subst,
         cstc::symbol::Symbol emitted_name) {
         const std::string emitted_key(emitted_name.as_str());
         if (!emitted_enums_.insert(emitted_key).second)
-            return;
+            return {};
 
         tyir::TyEnumDecl concrete;
         concrete.name = emitted_name;
@@ -1312,81 +1454,156 @@ private:
         concrete.where_clause.clear();
         (void)subst;
         out_.enums.push_back(forward_enum(concrete));
+        return {};
     }
 
-    void emit_fn_decl(
+    [[nodiscard]] std::expected<void, LirLowerError> emit_fn_decl(
         const tyir::TyFnDecl& decl, const TypeSubstitution& subst,
         cstc::symbol::Symbol emitted_name) {
         const std::string emitted_key(emitted_name.as_str());
         if (!emitted_fns_.insert(emitted_key).second)
-            return;
+            return {};
 
         tyir::TyFnDecl concrete;
         concrete.name = emitted_name;
-        concrete.return_ty = rewrite_type(decl.return_ty, subst);
-        concrete.body = rewrite_block(decl.body, subst);
+        auto return_ty = rewrite_type(decl.return_ty, subst);
+        if (!return_ty)
+            return std::unexpected(std::move(return_ty.error()));
+        concrete.return_ty = *return_ty;
+        auto body = rewrite_block(decl.body, subst);
+        if (!body)
+            return std::unexpected(std::move(body.error()));
+        concrete.body = *body;
         concrete.span = decl.span;
         concrete.is_runtime = decl.is_runtime;
         concrete.params.reserve(decl.params.size());
         for (const tyir::TyParam& param : decl.params) {
-            concrete.params.push_back(
-                tyir::TyParam{param.name, rewrite_type(param.ty, subst), param.span});
+            auto param_ty = rewrite_type(param.ty, subst);
+            if (!param_ty)
+                return std::unexpected(std::move(param_ty.error()));
+            concrete.params.push_back(tyir::TyParam{param.name, *param_ty, param.span});
         }
         out_.fns.push_back(lower_fn(concrete));
+        return {};
     }
 
-    void emit_extern_fn_decl(const tyir::TyExternFnDecl& node) {
+    [[nodiscard]] std::expected<void, LirLowerError>
+        emit_extern_fn_decl(const tyir::TyExternFnDecl& node) {
         lir::LirExternFnDecl ext;
         ext.abi = node.abi;
         ext.name = node.name;
         ext.link_name = node.link_name;
-        ext.return_ty = rewrite_type(node.return_ty, {});
+        auto return_ty = rewrite_type(node.return_ty, {});
+        if (!return_ty)
+            return std::unexpected(std::move(return_ty.error()));
+        ext.return_ty = *return_ty;
         ext.span = node.span;
         for (std::size_t i = 0; i < node.params.size(); ++i) {
+            auto param_ty = rewrite_type(node.params[i].ty, {});
+            if (!param_ty)
+                return std::unexpected(std::move(param_ty.error()));
             ext.params.push_back(
                 lir::LirParam{
                     .local = static_cast<lir::LirLocalId>(i),
                     .name = node.params[i].name,
-                    .ty = rewrite_type(node.params[i].ty, {}),
+                    .ty = *param_ty,
                     .span = node.params[i].span,
                 });
         }
         out_.extern_fns.push_back(std::move(ext));
+        return {};
     }
 
-    [[nodiscard]] cstc::symbol::Symbol ensure_struct_instantiation(
+    [[nodiscard]] std::expected<cstc::symbol::Symbol, LirLowerError> ensure_struct_instantiation(
         const tyir::TyStructDecl& decl, const std::vector<tyir::Ty>& generic_args) {
         const std::string key = instantiation_cache_key(decl.name, generic_args);
         if (const auto it = instantiated_structs_.find(key); it != instantiated_structs_.end())
             return it->second;
 
+        if (instantiation_stack_.size() >= cstc::tyir::kMaxGenericInstantiationDepth) {
+            auto stack = instantiation_stack_;
+            stack.push_back(make_instantiation_frame(decl.name, decl.span, generic_args));
+            return make_instantiation_limit_error(
+                decl.span,
+                "generic instantiation depth limit reached during monomorphization while expanding "
+                "'" + std::string(decl.name.as_str())
+                    + "'; active limit is "
+                    + std::to_string(cstc::tyir::kMaxGenericInstantiationDepth)
+                    + " and the program may contain non-productive recursion",
+                std::move(stack));
+        }
+
         const cstc::symbol::Symbol emitted_name = make_instantiated_name(decl.name, generic_args);
         instantiated_structs_.emplace(key, emitted_name);
-        emit_struct_decl(decl, build_substitution(decl.generic_params, generic_args), emitted_name);
+        instantiation_stack_.push_back(
+            make_instantiation_frame(decl.name, decl.span, generic_args));
+        auto emitted = emit_struct_decl(
+            decl, build_substitution(decl.generic_params, generic_args), emitted_name);
+        instantiation_stack_.pop_back();
+        if (!emitted)
+            return std::unexpected(std::move(emitted.error()));
         return emitted_name;
     }
 
-    [[nodiscard]] cstc::symbol::Symbol ensure_enum_instantiation(
+    [[nodiscard]] std::expected<cstc::symbol::Symbol, LirLowerError> ensure_enum_instantiation(
         const tyir::TyEnumDecl& decl, const std::vector<tyir::Ty>& generic_args) {
         const std::string key = instantiation_cache_key(decl.name, generic_args);
         if (const auto it = instantiated_enums_.find(key); it != instantiated_enums_.end())
             return it->second;
 
+        if (instantiation_stack_.size() >= cstc::tyir::kMaxGenericInstantiationDepth) {
+            auto stack = instantiation_stack_;
+            stack.push_back(make_instantiation_frame(decl.name, decl.span, generic_args));
+            return make_instantiation_limit_error(
+                decl.span,
+                "generic instantiation depth limit reached during monomorphization while expanding "
+                "'" + std::string(decl.name.as_str())
+                    + "'; active limit is "
+                    + std::to_string(cstc::tyir::kMaxGenericInstantiationDepth)
+                    + " and the program may contain non-productive recursion",
+                std::move(stack));
+        }
+
         const cstc::symbol::Symbol emitted_name = make_instantiated_name(decl.name, generic_args);
         instantiated_enums_.emplace(key, emitted_name);
-        emit_enum_decl(decl, build_substitution(decl.generic_params, generic_args), emitted_name);
+        instantiation_stack_.push_back(
+            make_instantiation_frame(decl.name, decl.span, generic_args));
+        auto emitted = emit_enum_decl(
+            decl, build_substitution(decl.generic_params, generic_args), emitted_name);
+        instantiation_stack_.pop_back();
+        if (!emitted)
+            return std::unexpected(std::move(emitted.error()));
         return emitted_name;
     }
 
-    [[nodiscard]] cstc::symbol::Symbol ensure_fn_instantiation(
+    [[nodiscard]] std::expected<cstc::symbol::Symbol, LirLowerError> ensure_fn_instantiation(
         const tyir::TyFnDecl& decl, const std::vector<tyir::Ty>& generic_args) {
         const std::string key = instantiation_cache_key(decl.name, generic_args);
         if (const auto it = instantiated_fns_.find(key); it != instantiated_fns_.end())
             return it->second;
 
+        if (instantiation_stack_.size() >= cstc::tyir::kMaxGenericInstantiationDepth) {
+            auto stack = instantiation_stack_;
+            stack.push_back(make_instantiation_frame(decl.name, decl.span, generic_args));
+            return make_instantiation_limit_error(
+                decl.span,
+                "generic instantiation depth limit reached during monomorphization while expanding "
+                "'" + std::string(decl.name.as_str())
+                    + "'; active limit is "
+                    + std::to_string(cstc::tyir::kMaxGenericInstantiationDepth)
+                    + " and the program may contain non-productive recursion",
+                std::move(stack));
+        }
+
         const cstc::symbol::Symbol emitted_name = make_instantiated_name(decl.name, generic_args);
         instantiated_fns_.emplace(key, emitted_name);
-        emit_fn_decl(decl, build_substitution(decl.generic_params, generic_args), emitted_name);
+        instantiation_stack_.push_back(
+            make_instantiation_frame(decl.name, decl.span, generic_args));
+        auto emitted =
+            emit_fn_decl(decl, build_substitution(decl.generic_params, generic_args), emitted_name);
+        instantiation_stack_.pop_back();
+        if (!emitted)
+            return std::unexpected(std::move(emitted.error()));
         return emitted_name;
     }
 
@@ -1407,13 +1624,14 @@ private:
     std::unordered_set<std::string> emitted_structs_;
     std::unordered_set<std::string> emitted_enums_;
     std::unordered_set<std::string> emitted_fns_;
+    std::vector<cstc::tyir::InstantiationFrame> instantiation_stack_;
 };
 
 } // namespace detail
 
 // ─── Public entry point ───────────────────────────────────────────────────────
 
-lir::LirProgram lower_program(const tyir::TyProgram& program) {
+std::expected<lir::LirProgram, LirLowerError> lower_program(const tyir::TyProgram& program) {
     detail::Monomorphizer monomorphizer(program);
     return monomorphizer.run();
 }
