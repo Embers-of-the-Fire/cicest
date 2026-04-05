@@ -146,8 +146,7 @@ private:
             || std::holds_alternative<ast::StructInitExpr>(expr->node)
             || std::holds_alternative<ast::GenericAppExpr>(expr->node)
             || std::holds_alternative<ast::FieldAccessExpr>(expr->node)
-            || std::holds_alternative<ast::CallExpr>(expr->node)
-            || std::holds_alternative<ast::DeclExpr>(expr->node);
+            || std::holds_alternative<ast::CallExpr>(expr->node);
     }
 
     [[nodiscard]] bool token_can_start_type(TokenKind kind) const {

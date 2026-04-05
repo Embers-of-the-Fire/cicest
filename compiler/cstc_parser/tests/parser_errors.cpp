@@ -196,6 +196,21 @@ void test_error_decl_wrong_arity() {
     expect_error("fn f() { decl(1, 2) }", "`decl` expects exactly 1 argument");
 }
 
+void test_error_decl_call_postfix() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f() { decl(1)() }", "expected `;` or `}` after expression");
+}
+
+void test_error_decl_field_postfix() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f() { decl(1).field }", "expected `;` or `}` after expression");
+}
+
+void test_error_decl_turbofish_postfix() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f() { decl(1)::<num> }", "expected `;` or `}` after expression");
+}
+
 void test_error_import_missing_brace() {
     cstc::symbol::SymbolSession session;
     expect_error("import foo from \"mod.cst\";", "expected `{` after `import`");
@@ -316,6 +331,9 @@ int main() {
     test_error_where_clause_missing_constraint();
     test_error_where_clause_trailing_comma();
     test_error_decl_wrong_arity();
+    test_error_decl_call_postfix();
+    test_error_decl_field_postfix();
+    test_error_decl_turbofish_postfix();
     test_error_import_missing_brace();
     test_error_import_star_not_supported();
     test_error_import_missing_from();
