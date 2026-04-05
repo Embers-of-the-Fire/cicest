@@ -93,6 +93,30 @@ using TypeSubstitution = std::unordered_map<Symbol, tyir::Ty, SymbolHash>;
     SourceSpan span);
 [[nodiscard]] std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     const ProgramView& program, const ValuePtr& value, const tyir::Ty& ty, SourceSpan span);
+[[nodiscard]] inline std::string encode_type_for_constraint_key(const tyir::Ty& ty) {
+    switch (ty.kind) {
+    case tyir::TyKind::Ref:
+        return ty.pointee != nullptr ? "R" + encode_type_for_constraint_key(*ty.pointee) : "R?";
+    case tyir::TyKind::Unit: return "U";
+    case tyir::TyKind::Num: return "N";
+    case tyir::TyKind::Str: return "S";
+    case tyir::TyKind::Bool: return "B";
+    case tyir::TyKind::Never: return "X";
+    case tyir::TyKind::Named: {
+        const std::string text =
+            ty.name.is_valid() ? std::string(ty.name.as_str()) : std::string("invalid");
+        std::string out =
+            "T" + std::to_string(text.size()) + "_" + text + (ty.is_runtime ? "_r1" : "_r0");
+        if (!ty.generic_args.empty()) {
+            out += "_g" + std::to_string(ty.generic_args.size());
+            for (const tyir::Ty& arg : ty.generic_args)
+                out += "_" + encode_type_for_constraint_key(arg);
+        }
+        return out;
+    }
+    }
+    return "?";
+}
 [[nodiscard]] ConstraintEvalResult evaluate_constraint(
     const tyir::TyExprPtr& expr, const TypeSubstitution& substitution, const ProgramView& program,
     std::vector<EvalStackFrame> stack = {},

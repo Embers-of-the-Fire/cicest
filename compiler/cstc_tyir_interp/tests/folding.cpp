@@ -716,6 +716,17 @@ fn main() {
     assert(!error.instantiation_limit->stack.empty());
 }
 
+static void test_constraint_key_encoding_distinguishes_runtime_named_types() {
+    SymbolSession session;
+
+    const std::string runtime_foo = cstc::tyir_interp::detail::encode_type_for_constraint_key(
+        ty::named(Symbol::intern("Foo"), Symbol::intern("Foo"), ValueSemantics::Move, true));
+    const std::string plain_foo_rt = cstc::tyir_interp::detail::encode_type_for_constraint_key(
+        ty::named(Symbol::intern("Foo_rt"), Symbol::intern("Foo_rt"), ValueSemantics::Move, false));
+
+    assert(runtime_foo != plain_foo_rt);
+}
+
 static void test_infinite_loop_reports_step_budget_error() {
     SymbolSession session;
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
@@ -1175,6 +1186,7 @@ int main() {
     test_intrinsic_decl_arity_mismatch_reports_error();
     test_recursive_const_eval_reports_call_depth_error();
     test_recursive_generic_constraint_reports_instantiation_limit();
+    test_constraint_key_encoding_distinguishes_runtime_named_types();
     test_infinite_loop_reports_step_budget_error();
     test_infinite_while_reports_step_budget_error();
     test_infinite_for_reports_step_budget_error();

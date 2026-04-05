@@ -691,36 +691,13 @@ struct NumericOperands {
     return substitution;
 }
 
-[[nodiscard]] static std::string encode_type(const tyir::Ty& ty) {
-    switch (ty.kind) {
-    case tyir::TyKind::Ref: return ty.pointee != nullptr ? "R" + encode_type(*ty.pointee) : "R?";
-    case tyir::TyKind::Unit: return "U";
-    case tyir::TyKind::Num: return "N";
-    case tyir::TyKind::Str: return "S";
-    case tyir::TyKind::Bool: return "B";
-    case tyir::TyKind::Never: return "X";
-    case tyir::TyKind::Named: {
-        std::string out = "T" + std::string(ty.name.as_str());
-        if (ty.is_runtime)
-            out += "_rt";
-        if (!ty.generic_args.empty()) {
-            out += "_g" + std::to_string(ty.generic_args.size());
-            for (const tyir::Ty& arg : ty.generic_args)
-                out += "_" + encode_type(arg);
-        }
-        return out;
-    }
-    }
-    return "?";
-}
-
 [[nodiscard]] static std::string
     constraint_instantiation_key(Symbol owner_name, const std::vector<tyir::Ty>& generic_args) {
     std::string key = std::string(owner_name.as_str()) + "<";
     for (std::size_t index = 0; index < generic_args.size(); ++index) {
         if (index > 0)
             key += ",";
-        key += encode_type(generic_args[index]);
+        key += encode_type_for_constraint_key(generic_args[index]);
     }
     key += ">";
     return key;
