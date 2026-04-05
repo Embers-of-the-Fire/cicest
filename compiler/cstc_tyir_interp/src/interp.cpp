@@ -326,6 +326,9 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
                         return true;
                 }
                 return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                return node.expr.has_value()
+                    && expr_depends_on_generic_params(*node.expr, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                 for (const std::optional<tyir::Ty>& generic_arg : node.generic_args) {
                     if (generic_arg.has_value()
@@ -475,6 +478,11 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
                     rewritten.generic_args.push_back(apply_substitution(generic_arg, subst));
                 for (tyir::TyExprPtr& arg : rewritten.args)
                     arg = apply_substitution(arg, subst);
+                return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                tyir::TyDeclProbe rewritten = node;
+                if (rewritten.expr.has_value())
+                    rewritten.expr = apply_substitution(*rewritten.expr, subst);
                 return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                 tyir::TyDeferredGenericCall rewritten = node;
@@ -643,8 +651,18 @@ bool values_equal(const ValuePtr& lhs, const ValuePtr& rhs) {
     const tyir::TyExprPtr& expr, const ConstEnv& env, const ProgramView& program,
     std::vector<EvalStackFrame> stack, const GenericParamSet& generic_params);
 
+[[nodiscard]] static ConstraintEvalResult validate_decl_probe(
+    const tyir::TyDeclProbe& probe, const ProgramView& program,
+    const GenericParamSet& generic_params);
+
 [[nodiscard]] static std::expected<EvalState, EvalError>
     eval_expr(const tyir::TyExprPtr& expr, ConstEnv& env, EvalContext& ctx);
+
+[[nodiscard]] static std::expected<void, EvalError> enforce_constraints(
+    const ProgramView& program, const std::vector<tyir::TyGenericConstraint>& constraints,
+    const TypeSubstitution& substitution, std::string_view owner_kind, Symbol owner_name,
+    const std::vector<tyir::Ty>& owner_generic_args, SourceSpan owner_span, SourceSpan use_span,
+    const std::shared_ptr<ConstraintEvalState>& constraint_state);
 
 [[nodiscard]] static std::expected<EvalState, EvalError> eval_block(
     const tyir::TyBlockPtr& block, ConstEnv& env, EvalContext& ctx, bool consume_budget = true);
@@ -770,6 +788,206 @@ ConstraintEvalResult evaluate_constraint(
         "constraint must be Constraint::Valid or Constraint::Invalid",
         std::nullopt,
     };
+}
+
+[[nodiscard]] static ConstraintEvalResult validate_decl_probe(
+    const tyir::TyDeclProbe& probe, const ProgramView& program,
+    const GenericParamSet& generic_params) {
+    if (probe.is_invalid) {
+        return {
+            ConstraintEvalKind::Unsatisfied,
+            probe.invalid_reason.value_or("probed expression is not type-valid"),
+            std::nullopt,
+        };
+    }
+    if (!probe.expr.has_value()) {
+        return {
+            ConstraintEvalKind::Unsatisfied,
+            "probed expression is not type-valid",
+            std::nullopt,
+        };
+    }
+
+    const auto validate_expr = [&](const auto& self,
+                                   const tyir::TyExprPtr& expr) -> ConstraintEvalResult {
+        if (expr == nullptr) {
+            return {
+                ConstraintEvalKind::Unsatisfied, "probed expression is not type-valid",
+                std::nullopt};
+        }
+        if (expr->ty.is_runtime) {
+            return {
+                ConstraintEvalKind::Unsatisfied,
+                "probed expression uses runtime-only behavior",
+                std::nullopt,
+            };
+        }
+
+        return std::visit(
+            [&](const auto& node) -> ConstraintEvalResult {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (
+                    std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
+                    || std::is_same_v<Node, tyir::EnumVariantRef>) {
+                    return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
+                } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                    const auto decl_it = program.structs.find(node.type_name);
+                    if (decl_it != program.structs.end()
+                        && !generic_args_depend_on_generic_params(
+                            node.generic_args, generic_params)) {
+                        auto status = enforce_constraints(
+                            program, decl_it->second->lowered_where_clause,
+                            build_substitution(decl_it->second->generic_params, node.generic_args),
+                            "type", decl_it->second->name, node.generic_args, decl_it->second->span,
+                            expr->span, std::make_shared<ConstraintEvalState>());
+                        if (!status) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                status.error().message,
+                                status.error().instantiation_limit,
+                            };
+                        }
+                    }
+                    for (const tyir::TyStructInitField& field : node.fields) {
+                        auto nested = self(self, field.value);
+                        if (nested.kind != ConstraintEvalKind::Satisfied)
+                            return nested;
+                    }
+                    return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
+                } else if constexpr (
+                    std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                    return self(self, node.rhs);
+                } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                    auto lhs = self(self, node.lhs);
+                    if (lhs.kind != ConstraintEvalKind::Satisfied)
+                        return lhs;
+                    return self(self, node.rhs);
+                } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                    return self(self, node.base);
+                } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                    if (const auto fn_it = program.fns.find(node.fn_name);
+                        fn_it != program.fns.end()) {
+                        const tyir::TyFnDecl& fn = *fn_it->second;
+                        if (fn.return_ty.is_runtime || fn.is_runtime) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression uses runtime-only behavior",
+                                std::nullopt,
+                            };
+                        }
+                        if (!generic_args_depend_on_generic_params(
+                                node.generic_args, generic_params)) {
+                            auto status = enforce_constraints(
+                                program, fn.lowered_where_clause,
+                                build_substitution(fn.generic_params, node.generic_args),
+                                "function", fn.name, node.generic_args, fn.span, expr->span,
+                                std::make_shared<ConstraintEvalState>());
+                            if (!status) {
+                                return {
+                                    ConstraintEvalKind::Unsatisfied,
+                                    status.error().message,
+                                    status.error().instantiation_limit,
+                                };
+                            }
+                        }
+                    } else if (const auto ext_it = program.extern_fns.find(node.fn_name);
+                               ext_it != program.extern_fns.end()) {
+                        const tyir::TyExternFnDecl& decl = *ext_it->second;
+                        if (decl.return_ty.is_runtime || decl.is_runtime) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression uses runtime-only behavior",
+                                std::nullopt,
+                            };
+                        }
+                    }
+                    for (const tyir::TyExprPtr& arg : node.args) {
+                        auto nested = self(self, arg);
+                        if (nested.kind != ConstraintEvalKind::Satisfied)
+                            return nested;
+                    }
+                    return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
+                } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                    return validate_decl_probe(node, program, generic_params);
+                } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                    if (expr_depends_on_generic_params(expr, generic_params)) {
+                        return {
+                            ConstraintEvalKind::NotConstEvaluable,
+                            "probed expression still depends on generic substitution",
+                            std::nullopt,
+                        };
+                    }
+                    return {
+                        ConstraintEvalKind::Unsatisfied,
+                        "probed expression requires unresolved generic inference",
+                        std::nullopt,
+                    };
+                } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                    if (node == nullptr)
+                        return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
+                    for (const tyir::TyStmt& stmt : node->stmts) {
+                        auto nested = std::visit(
+                            [&](const auto& stmt_node) -> ConstraintEvalResult {
+                                using StmtNode = std::decay_t<decltype(stmt_node)>;
+                                if constexpr (std::is_same_v<StmtNode, tyir::TyLetStmt>)
+                                    return self(self, stmt_node.init);
+                                else
+                                    return self(self, stmt_node.expr);
+                            },
+                            stmt);
+                        if (nested.kind != ConstraintEvalKind::Satisfied)
+                            return nested;
+                    }
+                    if (node->tail.has_value())
+                        return self(self, *node->tail);
+                    return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
+                } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                    auto condition = self(self, node.condition);
+                    if (condition.kind != ConstraintEvalKind::Satisfied)
+                        return condition;
+                    auto then_branch = self(
+                        self, tyir::make_ty_expr(expr->span, node.then_block, node.then_block->ty));
+                    if (then_branch.kind != ConstraintEvalKind::Satisfied)
+                        return then_branch;
+                    if (node.else_branch.has_value())
+                        return self(self, *node.else_branch);
+                    return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
+                } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                    return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
+                } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                    auto condition = self(self, node.condition);
+                    if (condition.kind != ConstraintEvalKind::Satisfied)
+                        return condition;
+                    return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
+                } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                    if (node.init.has_value()) {
+                        auto init = self(self, node.init->init);
+                        if (init.kind != ConstraintEvalKind::Satisfied)
+                            return init;
+                    }
+                    if (node.condition.has_value()) {
+                        auto condition = self(self, *node.condition);
+                        if (condition.kind != ConstraintEvalKind::Satisfied)
+                            return condition;
+                    }
+                    if (node.step.has_value()) {
+                        auto step = self(self, *node.step);
+                        if (step.kind != ConstraintEvalKind::Satisfied)
+                            return step;
+                    }
+                    return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
+                } else {
+                    return {
+                        ConstraintEvalKind::Unsatisfied,
+                        "probed expression uses non-local control flow",
+                        std::nullopt,
+                    };
+                }
+            },
+            expr->node);
+    };
+
+    return validate_expr(validate_expr, *probe.expr);
 }
 
 [[nodiscard]] static std::expected<void, EvalError> enforce_constraints(
@@ -1057,6 +1275,16 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
             if constexpr (std::is_same_v<Node, tyir::EnumVariantRef>) {
                 return EvalState::from_value(make_enum(node.enum_name, node.variant_name));
+            }
+
+            if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                const auto result = validate_decl_probe(node, ctx.program, ctx.generic_params);
+                if (result.kind == ConstraintEvalKind::NotConstEvaluable)
+                    return EvalState::blocked(EvalState::BlockedReason::UnknownValue);
+                return EvalState::from_value(make_enum(
+                    ctx.program.constraint_enum_name, result.kind == ConstraintEvalKind::Satisfied
+                                                          ? Symbol::intern("Valid")
+                                                          : Symbol::intern("Invalid")));
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
@@ -1778,6 +2006,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         return false;
                 }
                 return true;
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                return !node.expr.has_value() || expr_can_fallthrough(*(*node.expr));
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 return block_can_fallthrough(*node);
             } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
@@ -2018,6 +2248,28 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         expr->span, tyir::TyCall{node.fn_name, node.generic_args, std::move(args)},
                         expr->ty),
                     program, env, generic_params);
+            }
+
+            if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                tyir::TyDeclProbe rewritten = node;
+                if (rewritten.expr.has_value()) {
+                    auto folded_inner = fold_expr(*rewritten.expr, env, program, generic_params);
+                    if (!folded_inner)
+                        return std::unexpected(std::move(folded_inner.error()));
+                    rewritten.expr = *folded_inner;
+                }
+
+                const auto status = validate_decl_probe(rewritten, program, generic_params);
+                if (status.kind == ConstraintEvalKind::NotConstEvaluable)
+                    return tyir::make_ty_expr(expr->span, std::move(rewritten), expr->ty);
+
+                return tyir::make_ty_expr(
+                    expr->span,
+                    tyir::EnumVariantRef{
+                        expr->ty.name, status.kind == ConstraintEvalKind::Satisfied
+                                           ? Symbol::intern("Valid")
+                                           : Symbol::intern("Invalid")},
+                    expr->ty);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
@@ -2321,6 +2573,10 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     if (!nested)
                         return nested;
                 }
+                return {};
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                if (node.expr.has_value())
+                    return validate_constraints_in_expr(*node.expr, program, generic_params);
                 return {};
             } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                 for (const tyir::TyExprPtr& arg : node.args) {

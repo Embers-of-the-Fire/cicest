@@ -470,6 +470,9 @@ private:
             } else if constexpr (std::is_same_v<N, tyir::TyDeferredGenericCall>) {
                 assert(false && "unresolved deferred generic call reached LIR lowering");
                 return terminated_operand();
+            } else if constexpr (std::is_same_v<N, tyir::TyDeclProbe>) {
+                assert(false && "unconsumed decl(expr) probe reached LIR lowering");
+                return terminated_operand();
             }
 
             // ── Nested block ──────────────────────────────────────────────────
@@ -1278,6 +1281,15 @@ private:
                         concrete.fn_name = *fn_name;
                     }
                     return tyir::make_ty_expr(expr->span, concrete, *rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyDeclProbe>) {
+                    tyir::TyDeclProbe rewritten = node;
+                    if (rewritten.expr.has_value()) {
+                        auto rewritten_expr = rewrite_expr(*rewritten.expr, subst);
+                        if (!rewritten_expr)
+                            return std::unexpected(std::move(rewritten_expr.error()));
+                        rewritten.expr = *rewritten_expr;
+                    }
+                    return tyir::make_ty_expr(expr->span, std::move(rewritten), *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyBlockPtr>) {
                     auto block = rewrite_block(node, subst);
                     if (!block)
