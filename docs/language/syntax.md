@@ -148,6 +148,10 @@ Notes:
 
 - `struct Name;` is a valid zero-sized type (ZST).
 - Enum variants are scoped and must be referenced as `EnumName::Variant`.
+- `decl(expr)` is a compiler-recognized expression form that probes whether `expr`
+  is type-valid in the current substituted environment.
+- `decl(expr)` is compile-time only, always yields `Constraint`, and is intended
+  for `where` clauses and other staged validation sites.
 - Enums are fieldless (C++ enum-class-like), i.e., no payload variants.
 - `extern` declarations use a string literal for the ABI (e.g., `"lang"`, `"c"`).
 - `extern` functions have no body; `extern` structs are opaque (no fields).
