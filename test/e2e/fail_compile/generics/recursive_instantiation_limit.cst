@@ -1,0 +1,15 @@
+struct Wrap<T> {
+    value: T,
+}
+
+runtime fn source() -> num {
+    0
+}
+
+fn expand<T>(value: T) -> num {
+    expand(Wrap<T> { value: value })
+}
+
+fn main() -> num {
+    expand(source())
+}

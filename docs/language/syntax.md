@@ -326,6 +326,10 @@ Mandatory constraints for frontend validation:
   If inference succeeds, later lowering stages only see concrete instantiations.
 - `where` clauses are checked after generic substitution and must remain
   const-evaluable in the substituted environment.
+- Recursive generic declarations are only accepted through named items and are
+  rejected when their structural expansion is non-productive.
+- Generic type checking, const-eval, and monomorphization all consume from the
+  compiler's fixed recursion budget; hitting the limit reports the instantiation chain.
 - Backend-facing IR is past the generic boundary: generic declarations are
   monomorphized before LIR/codegen use.
 
