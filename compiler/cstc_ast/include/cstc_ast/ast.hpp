@@ -332,6 +332,12 @@ struct CallExpr {
     std::vector<ExprPtr> args;
 };
 
+/// Declaration-validity probe expression (`decl(expr)`).
+struct DeclExpr {
+    /// Probed expression.
+    ExprPtr expr;
+};
+
 /// Conditional expression.
 struct IfExpr {
     /// Condition expression.
@@ -402,8 +408,8 @@ struct Expr {
     /// Variant payload for expression nodes.
     using Node = std::variant<
         LiteralExpr, PathExpr, StructInitExpr, GenericAppExpr, UnaryExpr, BinaryExpr,
-        FieldAccessExpr, CallExpr, BlockPtr, IfExpr, LoopExpr, WhileExpr, ForExpr, BreakExpr,
-        ContinueExpr, ReturnExpr>;
+        FieldAccessExpr, CallExpr, DeclExpr, BlockPtr, IfExpr, LoopExpr, WhileExpr, ForExpr,
+        BreakExpr, ContinueExpr, ReturnExpr>;
 
     /// Concrete expression node payload.
     Node node;

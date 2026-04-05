@@ -191,6 +191,11 @@ void test_error_where_clause_trailing_comma() {
         "struct Box<T> where ready, { value: T }", "expected constraint expression after `,`");
 }
 
+void test_error_decl_wrong_arity() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f() { decl(1, 2) }", "`decl` expects exactly 1 argument");
+}
+
 void test_error_import_missing_brace() {
     cstc::symbol::SymbolSession session;
     expect_error("import foo from \"mod.cst\";", "expected `{` after `import`");
@@ -310,6 +315,7 @@ int main() {
     test_error_missing_generic_argument_close();
     test_error_where_clause_missing_constraint();
     test_error_where_clause_trailing_comma();
+    test_error_decl_wrong_arity();
     test_error_import_missing_brace();
     test_error_import_star_not_supported();
     test_error_import_missing_from();
