@@ -1386,6 +1386,101 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         expr->node);
 }
 
+[[nodiscard]] static bool contains_decl_probe_block(const ast::BlockPtr& block);
+
+[[nodiscard]] static bool contains_decl_probe_expr(const ast::ExprPtr& expr) {
+    if (expr == nullptr)
+        return false;
+
+    return std::visit(
+        [&](const auto& node) -> bool {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
+                return true;
+            } else if constexpr (
+                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::PathExpr>
+                || std::is_same_v<Node, ast::GenericAppExpr>
+                || std::is_same_v<Node, ast::ContinueExpr>) {
+                return false;
+            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
+                for (const ast::StructInitField& field : node.fields) {
+                    if (contains_decl_probe_expr(field.value))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
+                return contains_decl_probe_expr(node.rhs);
+            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
+                return contains_decl_probe_expr(node.base);
+            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
+                return contains_decl_probe_expr(node.lhs) || contains_decl_probe_expr(node.rhs);
+            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
+                if (contains_decl_probe_expr(node.callee))
+                    return true;
+                for (const ast::ExprPtr& arg : node.args) {
+                    if (contains_decl_probe_expr(arg))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
+                return contains_decl_probe_block(node);
+            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
+                return contains_decl_probe_expr(node.condition)
+                    || contains_decl_probe_block(node.then_block)
+                    || (node.else_branch.has_value()
+                        && contains_decl_probe_expr(*node.else_branch));
+            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
+                return contains_decl_probe_block(node.body);
+            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
+                return contains_decl_probe_expr(node.condition)
+                    || contains_decl_probe_block(node.body);
+            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
+                const bool init_has_decl =
+                    node.init.has_value()
+                    && std::visit(
+                        [&](const auto& init_node) {
+                            using InitNode = std::decay_t<decltype(init_node)>;
+                            if constexpr (std::is_same_v<InitNode, ast::ForInitLet>)
+                                return contains_decl_probe_expr(init_node.initializer);
+                            else
+                                return contains_decl_probe_expr(init_node);
+                        },
+                        *node.init);
+                const bool cond_has_decl =
+                    node.condition.has_value() && contains_decl_probe_expr(*node.condition);
+                const bool step_has_decl =
+                    node.step.has_value() && contains_decl_probe_expr(*node.step);
+                return init_has_decl || cond_has_decl || step_has_decl
+                    || contains_decl_probe_block(node.body);
+            } else if constexpr (
+                std::is_same_v<Node, ast::BreakExpr> || std::is_same_v<Node, ast::ReturnExpr>) {
+                return node.value.has_value() && contains_decl_probe_expr(*node.value);
+            }
+        },
+        expr->node);
+}
+
+[[nodiscard]] static bool contains_decl_probe_block(const ast::BlockPtr& block) {
+    if (block == nullptr)
+        return false;
+
+    for (const ast::Stmt& stmt : block->statements) {
+        const bool found = std::visit(
+            [&](const auto& stmt_node) {
+                using StmtNode = std::decay_t<decltype(stmt_node)>;
+                if constexpr (std::is_same_v<StmtNode, ast::LetStmt>)
+                    return contains_decl_probe_expr(stmt_node.initializer);
+                else
+                    return contains_decl_probe_expr(stmt_node.expr);
+            },
+            stmt);
+        if (found)
+            return true;
+    }
+
+    return block->tail.has_value() && contains_decl_probe_expr(*block->tail);
+}
+
 [[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
     const tyir::TyExprPtr& expr, const tyir::Ty& expected_ty, LowerCtx& ctx) {
     if (expr == nullptr)
@@ -3057,7 +3152,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (!resolved_val)
                         return std::unexpected(std::move(resolved_val.error()));
                     val->expr = std::move(*resolved_val);
-                    if (!compatible(val->expr->ty, ctx.current_return_ty))
+                    if (!compatible(val->expr->ty, ctx.current_return_ty)
+                        && !should_defer_generic_probe_failure(
+                            val->expr->ty, ctx.current_return_ty, ctx))
                         return make_error(
                             expr->span, "return type mismatch: expected '"
                                             + ctx.current_return_ty.display() + "', found '"
@@ -3100,7 +3197,15 @@ static std::expected<void, LowerError> merge_loop_break_types(
             tyir::TyParam{fn.params[i].name, sig.param_types[i], fn.params[i].span});
 
     // Set up lowering context with params in scope
-    LowerCtx ctx{env, {}, make_generic_param_set(fn.generic_params), false, sig.return_ty, {}};
+    const bool body_uses_decl_where_probe = std::any_of(
+        fn.where_clause.begin(), fn.where_clause.end(),
+        [](const ast::GenericConstraint& constraint) {
+            return contains_decl_probe_expr(constraint.expr);
+        });
+    LowerCtx ctx{
+        env,           {}, make_generic_param_set(fn.generic_params), body_uses_decl_where_probe,
+        sig.return_ty, {},
+    };
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params) {
         if (!ctx.scope.insert(p.name, p.ty))
@@ -3121,7 +3226,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
     }
 
     // Check that body type matches declared return type (when a tail is present)
-    if (body->tail.has_value() && !compatible(body->ty, sig.return_ty))
+    if (body->tail.has_value() && !compatible(body->ty, sig.return_ty)
+        && !should_defer_generic_probe_failure(body->ty, sig.return_ty, ctx))
         return make_error(
             fn.body->span, "function '" + display_decl_name(fn) + "' body has type '"
                                + body->ty.display() + "' but return type is '"

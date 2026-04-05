@@ -1277,7 +1277,7 @@ static void test_decl_generic_parameter_probe_rechecks_after_substitution() {
     SymbolSession session;
     const auto program = must_fold_with_constraint_prelude(R"(
 fn probe<T>(a: T) -> T where decl(a + a) {
-    a
+    a + a
 }
 
 fn main() -> num {
@@ -1287,11 +1287,11 @@ fn main() -> num {
 
     const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
     assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"3"});
+    assert(literal.symbol.as_str() == std::string_view{"6"});
 
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
 fn probe<T>(a: T) -> T where decl(a + a) {
-    a
+    a + a
 }
 
 fn main() -> num {
