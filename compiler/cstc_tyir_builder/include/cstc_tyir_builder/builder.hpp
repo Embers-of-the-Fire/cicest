@@ -43,10 +43,12 @@
 /// ```
 
 #include <expected>
+#include <optional>
 #include <string>
 
 #include <cstc_ast/ast.hpp>
 #include <cstc_span/span.hpp>
+#include <cstc_tyir/instantiation.hpp>
 #include <cstc_tyir/tyir.hpp>
 
 namespace cstc::tyir_builder {
@@ -57,6 +59,8 @@ struct LowerError {
     cstc::span::SourceSpan span;
     /// Human-readable description of the error.
     std::string message;
+    /// Structured recursion-limit details when lowering exhausts the generic budget.
+    std::optional<cstc::tyir::InstantiationLimitDiagnostic> instantiation_limit;
 };
 
 /// Lowers an AST program to a fully type-annotated TyIR program.

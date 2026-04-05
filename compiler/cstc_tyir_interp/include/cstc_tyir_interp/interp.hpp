@@ -23,6 +23,7 @@
 #include <cstc_ast/ast.hpp>
 #include <cstc_span/span.hpp>
 #include <cstc_symbol/symbol.hpp>
+#include <cstc_tyir/instantiation.hpp>
 #include <cstc_tyir/tyir.hpp>
 
 namespace cstc::tyir_interp {
@@ -36,6 +37,7 @@ struct EvalError {
     cstc::span::SourceSpan span;
     std::string message;
     std::vector<EvalStackFrame> stack;
+    std::optional<cstc::tyir::InstantiationLimitDiagnostic> instantiation_limit;
 };
 
 enum class ConstraintEvalKind {

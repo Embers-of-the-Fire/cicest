@@ -153,6 +153,24 @@ static void test_struct_ref_field_error() {
     must_fail_with_message("struct Foo { value: &num }", "reference fields are not supported");
 }
 
+static void test_struct_direct_recursive_field_error() {
+    must_fail_with_message(
+        "struct Node { next: Node }", "non-productive recursive type declaration detected");
+}
+
+static void test_struct_mutual_recursive_field_error() {
+    must_fail_with_message(
+        "struct Left { right: Right }"
+        "struct Right { left: Left }",
+        "non-productive recursive type declaration detected");
+}
+
+static void test_generic_struct_expanding_recursive_field_error() {
+    must_fail_with_message(
+        "struct Nest<T> { next: Nest<Nest<T>> }",
+        "generic instantiation depth limit reached during type checking");
+}
+
 static void test_duplicate_struct_name_error() {
     must_fail_with_message(
         "struct Point { x: num }"
@@ -555,6 +573,9 @@ int main() {
     test_struct_with_named_field();
     test_struct_undefined_type_error();
     test_struct_ref_field_error();
+    test_struct_direct_recursive_field_error();
+    test_struct_mutual_recursive_field_error();
+    test_generic_struct_expanding_recursive_field_error();
     test_duplicate_struct_name_error();
     test_enum_decl();
     test_duplicate_enum_name_error();
