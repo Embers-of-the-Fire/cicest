@@ -872,6 +872,14 @@ struct TypeValidationState {
     std::vector<cstc::tyir::InstantiationFrame> stack;
 };
 
+[[nodiscard]] static std::size_t
+    active_generic_instantiation_depth(const std::vector<cstc::tyir::InstantiationFrame>& stack) {
+    return static_cast<std::size_t>(
+        std::count_if(stack.begin(), stack.end(), [](const cstc::tyir::InstantiationFrame& frame) {
+            return !frame.generic_args.empty();
+        }));
+}
+
 [[nodiscard]] static std::vector<tyir::Ty>
     make_generic_param_types(const std::vector<cstc::ast::GenericParam>& generic_params) {
     std::vector<tyir::Ty> generic_args;
@@ -920,7 +928,8 @@ struct TypeValidationState {
             cstc::tyir::InstantiationPhase::TypeChecking, std::move(stack));
     }
 
-    if (state.stack.size() >= cstc::tyir::kMaxGenericInstantiationDepth) {
+    if (active_generic_instantiation_depth(state.stack)
+        >= cstc::tyir::kMaxGenericInstantiationDepth) {
         const std::string instantiation = format_instantiation_frame(stack.back());
         return make_instantiation_limit_error(
             span,
