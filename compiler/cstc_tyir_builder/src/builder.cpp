@@ -1641,7 +1641,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
             if constexpr (
                 std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
                 || std::is_same_v<Node, tyir::EnumVariantRef>
-                || std::is_same_v<Node, tyir::TyContinue>) {
+                || std::is_same_v<Node, tyir::TyContinue>
+                || std::is_same_v<Node, tyir::TyDeclProbe>) {
                 return std::nullopt;
             } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                 for (const tyir::TyStructInitField& field : node.fields) {
@@ -1669,10 +1670,6 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                         return unresolved;
                 }
                 return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
-                if (!node.expr.has_value())
-                    return std::nullopt;
-                return find_unresolved_deferred_generic_call(*node.expr, env, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                 const auto sig_it = env.fn_signatures.find(node.fn_name);
                 assert(sig_it != env.fn_signatures.end());

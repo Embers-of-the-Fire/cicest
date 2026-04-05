@@ -474,6 +474,29 @@ static void test_decl_probe_preserves_generic_inner_call() {
     assert(call.generic_args[0].name == Symbol::intern("T"));
 }
 
+static void test_decl_probe_contains_unresolved_generic_inference_in_let() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn make<T>() -> T { loop {} }"
+        "fn main() { let x = decl(make()); }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    assert(fn.body->stmts.size() == 1);
+    const auto& let_stmt = std::get<TyLetStmt>(fn.body->stmts[0]);
+    const auto& probe = require_decl_probe(let_stmt.init);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    assert(std::holds_alternative<TyDeferredGenericCall>((*probe.expr)->node));
+}
+
+static void test_decl_probe_does_not_drive_if_branch_join_inference() {
+    must_fail_with_message(
+        "[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }"
+        "[[lang = \"cstc_std_constraint\"]] extern \"lang\" fn "
+        "constraint(value: bool) -> Constraint;"
+        "fn make<T>() -> T { loop {} }"
+        "fn main(cond: bool) { if cond { decl(make()) } else { true }; }",
+        "'if' then-branch has type 'Constraint' but else-branch has type 'bool'");
+}
+
 static void test_decl_runtime_use_is_rejected() {
     must_fail_with_message(
         R"(
@@ -682,6 +705,8 @@ int main() {
     test_decl_where_clause_lowers_to_constraint_probe();
     test_decl_probe_recovers_invalid_inner_expression();
     test_decl_probe_preserves_generic_inner_call();
+    test_decl_probe_contains_unresolved_generic_inference_in_let();
+    test_decl_probe_does_not_drive_if_branch_join_inference();
     test_decl_runtime_use_is_rejected();
     test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();
