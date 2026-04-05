@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <unordered_map>
 #include <unordered_set>
@@ -197,6 +199,30 @@ using TypeSubstitution =
     return "<unknown>";
 }
 
+[[nodiscard]] static std::string sanitize_symbol_fragment(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (const unsigned char ch : text) {
+        if (std::isalnum(ch) != 0 || ch == '_') {
+            out.push_back(static_cast<char>(ch));
+            continue;
+        }
+
+        const auto hex_digit = [](unsigned char value) {
+            return static_cast<char>(value < 10U ? ('0' + value) : ('a' + (value - 10U)));
+        };
+        out += "_x";
+        out.push_back(hex_digit(static_cast<unsigned char>((ch >> 4U) & 0x0FU)));
+        out.push_back(hex_digit(static_cast<unsigned char>(ch & 0x0FU)));
+    }
+    return out;
+}
+
+[[nodiscard]] static std::string encode_symbol(cstc::symbol::Symbol symbol) {
+    const std::string text = symbol.is_valid() ? std::string(symbol.as_str()) : "invalid";
+    return std::to_string(text.size()) + "_" + sanitize_symbol_fragment(text);
+}
+
 [[nodiscard]] static std::string encode_type(const tyir::Ty& ty) {
     switch (ty.kind) {
     case tyir::TyKind::Ref: return ty.pointee != nullptr ? "R" + encode_type(*ty.pointee) : "R?";
@@ -206,7 +232,7 @@ using TypeSubstitution =
     case tyir::TyKind::Bool: return "B";
     case tyir::TyKind::Never: return "X";
     case tyir::TyKind::Named: {
-        std::string out = "T" + std::string(ty.name.as_str());
+        std::string out = "T" + encode_symbol(ty.name);
         if (ty.is_runtime)
             out += "_rt";
         if (!ty.generic_args.empty()) {
