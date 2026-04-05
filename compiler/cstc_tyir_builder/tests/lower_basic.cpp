@@ -503,6 +503,28 @@ static void test_decl_probe_defers_generic_parameter_validation() {
     assert(std::get<LocalRef>(binary.rhs->node).name == Symbol::intern("a"));
 }
 
+static void test_decl_probe_defers_generic_let_annotation_validation() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn probe<T>(a: T) -> T where decl({ let x: num = a; x }) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& block = *std::get<TyBlockPtr>((*probe.expr)->node);
+    assert(block.stmts.size() == 1);
+    assert(std::holds_alternative<TyLetStmt>(block.stmts[0]));
+}
+
+static void test_decl_probe_defers_generic_if_branch_join_validation() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn probe<T>(a: T) -> T where decl(if true { 1 } else { a }) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    assert(std::holds_alternative<TyIf>((*probe.expr)->node));
+}
+
 static void test_decl_probe_contains_unresolved_generic_inference_in_let() {
     const auto prog = must_lower_with_constraint_prelude(
         "fn make<T>() -> T { loop {} }"
@@ -736,6 +758,8 @@ int main() {
     test_decl_probe_recovers_invalid_inner_expression();
     test_decl_probe_preserves_generic_inner_call();
     test_decl_probe_defers_generic_parameter_validation();
+    test_decl_probe_defers_generic_let_annotation_validation();
+    test_decl_probe_defers_generic_if_branch_join_validation();
     test_decl_probe_contains_unresolved_generic_inference_in_let();
     test_decl_probe_does_not_drive_if_branch_join_inference();
     test_decl_runtime_use_is_rejected();

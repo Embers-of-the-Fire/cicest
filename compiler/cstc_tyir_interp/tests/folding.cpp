@@ -1458,6 +1458,70 @@ fn main() -> num {
     assert(error.message.find("function 'probe'") != std::string::npos);
 }
 
+static void test_decl_generic_let_annotation_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe<T>(value: T) -> T where decl({ let x: num = value; x }) {
+    value
+}
+
+fn main() -> num {
+    probe::<num>(1);
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn probe<T>(value: T) -> T where decl({ let x: num = value; x }) {
+    value
+}
+
+fn main() -> num {
+    probe::<bool>(true);
+    0
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'probe'") != std::string::npos);
+}
+
+static void test_decl_generic_if_branch_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe<T>(value: T) -> T where decl(if true { 1 } else { value }) {
+    value
+}
+
+fn main() -> num {
+    probe::<num>(1);
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn probe<T>(value: T) -> T where decl(if true { 1 } else { value }) {
+    value
+}
+
+fn main() -> num {
+    probe::<bool>(true);
+    0
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'probe'") != std::string::npos);
+}
+
 static void test_generic_where_false_reports_constraint_failure() {
     SymbolSession session;
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
@@ -1754,6 +1818,8 @@ int main() {
     test_decl_generic_struct_field_probe_rechecks_after_substitution();
     test_decl_generic_unary_probe_rechecks_after_substitution();
     test_decl_generic_if_condition_probe_rechecks_after_substitution();
+    test_decl_generic_let_annotation_probe_rechecks_after_substitution();
+    test_decl_generic_if_branch_probe_rechecks_after_substitution();
     test_generic_where_false_reports_constraint_failure();
     test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();

@@ -535,6 +535,20 @@ struct LowerCtx {
         || should_defer_generic_probe_failure(rhs, ctx);
 }
 
+[[nodiscard]] static std::optional<tyir::Ty> deferred_generic_probe_join_type(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const LowerCtx& ctx) {
+    if (!ctx.defer_generic_probe_validation)
+        return std::nullopt;
+
+    const bool lhs_depends = type_depends_on_generic_params(lhs, ctx.generic_params);
+    const bool rhs_depends = type_depends_on_generic_params(rhs, ctx.generic_params);
+    if (!lhs_depends && !rhs_depends)
+        return std::nullopt;
+    if (lhs_depends != rhs_depends)
+        return lhs_depends ? rhs : lhs;
+    return lhs;
+}
+
 // ─── Type compatibility ──────────────────────────────────────────────────────
 
 /// Returns true when two types share the same non-`runtime` shape.
@@ -1899,7 +1913,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                     if (!resolved_init)
                         return std::unexpected(std::move(resolved_init.error()));
                     init->expr = std::move(*resolved_init);
-                    if (!compatible(init->expr->ty, *ann))
+                    if (!compatible(init->expr->ty, *ann)
+                        && !should_defer_generic_probe_failure(init->expr->ty, *ann, ctx))
                         return make_error(
                             s.span, "type mismatch in let binding: expected '" + ann->display()
                                         + "', found '" + init->expr->ty.display() + "'");
@@ -2808,21 +2823,27 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     const tyir::Ty& else_ty = else_val->expr->ty;
                     const auto joined_ty = common_type(then_ptr->ty, else_ty);
                     if (!joined_ty.has_value()) {
-                        const bool then_needs_context =
-                            find_unresolved_deferred_generic_call(
-                                then_ptr->tail.value_or(nullptr), ctx.env, ctx.generic_params)
-                                .has_value();
-                        const bool else_needs_context =
-                            find_unresolved_deferred_generic_call(
-                                else_val->expr, ctx.env, ctx.generic_params)
-                                .has_value();
-                        if (then_needs_context != else_needs_context)
-                            result_ty = then_needs_context ? else_ty : then_ptr->ty;
-                        else
-                            return make_error(
-                                expr->span, "'if' then-branch has type '" + then_ptr->ty.display()
-                                                + "' but else-branch has type '" + else_ty.display()
-                                                + "'");
+                        if (auto deferred_ty =
+                                deferred_generic_probe_join_type(then_ptr->ty, else_ty, ctx);
+                            deferred_ty.has_value()) {
+                            result_ty = *deferred_ty;
+                        } else {
+                            const bool then_needs_context =
+                                find_unresolved_deferred_generic_call(
+                                    then_ptr->tail.value_or(nullptr), ctx.env, ctx.generic_params)
+                                    .has_value();
+                            const bool else_needs_context =
+                                find_unresolved_deferred_generic_call(
+                                    else_val->expr, ctx.env, ctx.generic_params)
+                                    .has_value();
+                            if (then_needs_context != else_needs_context)
+                                result_ty = then_needs_context ? else_ty : then_ptr->ty;
+                            else
+                                return make_error(
+                                    expr->span,
+                                    "'if' then-branch has type '" + then_ptr->ty.display()
+                                        + "' but else-branch has type '" + else_ty.display() + "'");
+                        }
                     } else {
                         result_ty = *joined_ty;
                     }
@@ -2953,7 +2974,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 ctx.scope.pop();
                                 return std::unexpected(std::move(ann.error()));
                             }
-                            if (!compatible(init_expr->expr->ty, *ann)) {
+                            if (!compatible(init_expr->expr->ty, *ann)
+                                && !should_defer_generic_probe_failure(
+                                    init_expr->expr->ty, *ann, ctx)) {
                                 ctx.scope.pop();
                                 return make_error(
                                     init_let->span, "for-init type mismatch: expected '"
