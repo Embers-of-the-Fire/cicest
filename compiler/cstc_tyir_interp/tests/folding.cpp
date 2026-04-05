@@ -136,6 +136,11 @@ static const TyStructInit& require_struct_init(const TyExprPtr& expr) {
     return std::get<TyStructInit>(expr->node);
 }
 
+static const EnumVariantRef& require_constraint_variant(const TyExprPtr& expr) {
+    assert(std::holds_alternative<EnumVariantRef>(expr->node));
+    return std::get<EnumVariantRef>(expr->node);
+}
+
 static void test_const_function_call_folds_to_literal() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -1016,6 +1021,49 @@ fn main() -> num {
     assert(literal.symbol.as_str() == std::string_view{"1"});
 }
 
+static void test_decl_valid_probe_folds_to_constraint_valid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe() -> Constraint {
+    decl(1 + 2)
+}
+)");
+
+    const auto& variant = require_constraint_variant(require_tail(find_fn(program, "probe")));
+    assert(variant.enum_name == Symbol::intern("Constraint"));
+    assert(variant.variant_name == Symbol::intern("Valid"));
+}
+
+static void test_decl_invalid_probe_folds_to_constraint_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe() -> Constraint {
+    decl(1 + true)
+}
+)");
+
+    const auto& variant = require_constraint_variant(require_tail(find_fn(program, "probe")));
+    assert(variant.enum_name == Symbol::intern("Constraint"));
+    assert(variant.variant_name == Symbol::intern("Invalid"));
+}
+
+static void test_decl_runtime_probe_folds_to_constraint_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+runtime fn runtime_true() -> bool {
+    true
+}
+
+fn probe() -> Constraint {
+    decl(runtime_true())
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
 static void test_generic_where_false_reports_constraint_failure() {
     SymbolSession session;
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
@@ -1297,6 +1345,9 @@ int main() {
     test_comparison_requires_numeric_operands();
     test_numeric_equality_treats_nan_as_not_equal();
     test_generic_where_true_allows_instantiation();
+    test_decl_valid_probe_folds_to_constraint_valid();
+    test_decl_invalid_probe_folds_to_constraint_invalid();
+    test_decl_runtime_probe_folds_to_constraint_invalid();
     test_generic_where_false_reports_constraint_failure();
     test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();

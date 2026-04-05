@@ -71,6 +71,10 @@ static const TyCall& require_constraint_call(const TyExprPtr& expr) {
     return call;
 }
 
+static const TyDeclProbe& require_decl_probe(const TyExprPtr& expr) {
+    return std::get<TyDeclProbe>(expr->node);
+}
+
 // ─── Empty program ────────────────────────────────────────────────────────────
 
 static void test_empty_program() {
@@ -434,6 +438,52 @@ static void test_fn_where_clause_allows_generic_call_callee_name_collision_with_
     assert(call.generic_args[0].generic_args.empty());
 }
 
+static void test_decl_where_clause_lowers_to_constraint_probe() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn id<T>(value: T) -> T where decl(1 + 2) { value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    assert(fn.lowered_where_clause.size() == 1);
+    assert(fn.lowered_where_clause[0].expr->ty.name == Symbol::intern("Constraint"));
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    assert(std::holds_alternative<TyBinary>((*probe.expr)->node));
+}
+
+static void test_decl_probe_recovers_invalid_inner_expression() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn id<T>(value: T) -> T where decl(1 + true) { value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(probe.is_invalid);
+    assert(!probe.expr.has_value());
+    assert(probe.invalid_reason.has_value());
+}
+
+static void test_decl_probe_preserves_generic_inner_call() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn helper<T>() -> bool { true }"
+        "fn id<T>(value: T) -> T where decl(helper::<T>()) { value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& call = std::get<TyCall>((*probe.expr)->node);
+    assert(call.fn_name == Symbol::intern("helper"));
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0].name == Symbol::intern("T"));
+}
+
+static void test_decl_runtime_use_is_rejected() {
+    must_fail_with_message(
+        R"(
+[[lang = "cstc_constraint"]] enum Constraint { Valid, Invalid }
+runtime fn probe() -> runtime Constraint { decl(1) }
+fn main() {}
+)",
+        "decl(expr) is compile-time only and cannot be used where runtime behavior is required");
+}
+
 static void test_generic_type_arguments_lower_in_signatures() {
     const auto prog = must_lower(
         "struct Box<T> { value: T }"
@@ -629,6 +679,10 @@ int main() {
     test_fn_where_clause_lowers_generic_type_args();
     test_fn_where_clause_allows_call_callee_name_collision_with_parameter();
     test_fn_where_clause_allows_generic_call_callee_name_collision_with_parameter();
+    test_decl_where_clause_lowers_to_constraint_probe();
+    test_decl_probe_recovers_invalid_inner_expression();
+    test_decl_probe_preserves_generic_inner_call();
+    test_decl_runtime_use_is_rejected();
     test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();
     test_runtime_return_type_mismatch_rejected();

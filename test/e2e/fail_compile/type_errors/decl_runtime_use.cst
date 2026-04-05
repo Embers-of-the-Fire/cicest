@@ -1,0 +1,5 @@
+runtime fn probe() -> runtime Constraint {
+    decl(1)
+}
+
+fn main() {}

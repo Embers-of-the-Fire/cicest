@@ -1,0 +1,7 @@
+fn id<T>(value: T) -> T where decl(1 + 2) {
+    value
+}
+
+fn main() -> num {
+    id(0)
+}
