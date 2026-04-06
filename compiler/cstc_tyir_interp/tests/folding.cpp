@@ -141,6 +141,28 @@ static const EnumVariantRef& require_constraint_variant(const TyExprPtr& expr) {
     return std::get<EnumVariantRef>(expr->node);
 }
 
+struct DeclProbeRecheckCase {
+    const char* folded_source;
+    TyLiteral::Kind literal_kind;
+    std::string_view literal_symbol;
+    const char* failing_source;
+    std::string_view failing_function;
+};
+
+static void expect_decl_probe_recheck_case(const DeclProbeRecheckCase& test_case) {
+    const auto program = must_fold_with_constraint_prelude(test_case.folded_source);
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == test_case.literal_kind);
+    assert(literal.symbol.as_str() == test_case.literal_symbol);
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(test_case.failing_source);
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(
+        error.message.find(
+            std::string("function '") + std::string(test_case.failing_function) + "'")
+        != std::string::npos);
+}
+
 static void test_const_function_call_folds_to_literal() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -1275,7 +1297,8 @@ fn main() -> num {
 
 static void test_decl_generic_parameter_probe_rechecks_after_substitution() {
     SymbolSession session;
-    const auto program = must_fold_with_constraint_prelude(R"(
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
 fn probe<T>(a: T) -> T where decl(a + a) {
     a + a
 }
@@ -1283,13 +1306,10 @@ fn probe<T>(a: T) -> T where decl(a + a) {
 fn main() -> num {
     probe::<num>(3)
 }
-)");
-
-    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"6"});
-
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "6",
+        .failing_source = R"(
 fn probe<T>(a: T) -> T where decl(a + a) {
     a + a
 }
@@ -1298,15 +1318,15 @@ fn main() -> num {
     probe::<bool>(true);
     0
 }
-)");
-
-    assert(error.message.find("generic constraint failed") != std::string::npos);
-    assert(error.message.find("function 'probe'") != std::string::npos);
+)",
+        .failing_function = "probe",
+    });
 }
 
 static void test_decl_generic_call_argument_probe_rechecks_after_substitution() {
     SymbolSession session;
-    const auto program = must_fold_with_constraint_prelude(R"(
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
 fn id<T>(value: T) -> T {
     value
 }
@@ -1322,13 +1342,10 @@ fn wrapper<T>() -> num where probe::<T>() {
 fn main() -> num {
     0
 }
-)");
-
-    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"0"});
-
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
 fn id<T>(value: T) -> T {
     value
 }
@@ -1344,15 +1361,15 @@ fn wrapper<T>() -> num where probe::<T>() {
 fn main() -> num {
     wrapper::<bool>()
 }
-)");
-
-    assert(error.message.find("generic constraint failed") != std::string::npos);
-    assert(error.message.find("function 'wrapper'") != std::string::npos);
+)",
+        .failing_function = "wrapper",
+    });
 }
 
 static void test_decl_generic_struct_field_probe_rechecks_after_substitution() {
     SymbolSession session;
-    const auto program = must_fold_with_constraint_prelude(R"(
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
 struct Box<T> {
     value: T
 }
@@ -1368,13 +1385,10 @@ fn wrapper<T>() -> num where probe::<T>() {
 fn main() -> num {
     0
 }
-)");
-
-    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"0"});
-
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
 struct Box<T> {
     value: T
 }
@@ -1390,15 +1404,15 @@ fn wrapper<T>() -> num where probe::<T>() {
 fn main() -> num {
     wrapper::<bool>()
 }
-)");
-
-    assert(error.message.find("generic constraint failed") != std::string::npos);
-    assert(error.message.find("function 'wrapper'") != std::string::npos);
+)",
+        .failing_function = "wrapper",
+    });
 }
 
 static void test_decl_generic_unary_probe_rechecks_after_substitution() {
     SymbolSession session;
-    const auto program = must_fold_with_constraint_prelude(R"(
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
 fn probe<T>(value: T) -> T where decl(-value) {
     value
 }
@@ -1406,13 +1420,10 @@ fn probe<T>(value: T) -> T where decl(-value) {
 fn main() -> num {
     0
 }
-)");
-
-    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"0"});
-
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
 fn probe<T>(value: T) -> T where decl(-value) {
     value
 }
@@ -1421,15 +1432,15 @@ fn main() -> num {
     probe::<bool>(true);
     0
 }
-)");
-
-    assert(error.message.find("generic constraint failed") != std::string::npos);
-    assert(error.message.find("function 'probe'") != std::string::npos);
+)",
+        .failing_function = "probe",
+    });
 }
 
 static void test_decl_generic_if_condition_probe_rechecks_after_substitution() {
     SymbolSession session;
-    const auto program = must_fold_with_constraint_prelude(R"(
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
 fn probe<T>(value: T) -> T where decl(if value { 0 } else { 1 }) {
     value
 }
@@ -1437,13 +1448,10 @@ fn probe<T>(value: T) -> T where decl(if value { 0 } else { 1 }) {
 fn main() -> num {
     0
 }
-)");
-
-    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"0"});
-
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
 fn probe<T>(value: T) -> T where decl(if value { 0 } else { 1 }) {
     value
 }
@@ -1452,15 +1460,15 @@ fn main() -> num {
     probe::<num>(1);
     0
 }
-)");
-
-    assert(error.message.find("generic constraint failed") != std::string::npos);
-    assert(error.message.find("function 'probe'") != std::string::npos);
+)",
+        .failing_function = "probe",
+    });
 }
 
 static void test_decl_generic_let_annotation_probe_rechecks_after_substitution() {
     SymbolSession session;
-    const auto program = must_fold_with_constraint_prelude(R"(
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
 fn probe<T>(value: T) -> T where decl({ let x: num = value; x }) {
     value
 }
@@ -1469,13 +1477,10 @@ fn main() -> num {
     probe::<num>(1);
     0
 }
-)");
-
-    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"0"});
-
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
 fn probe<T>(value: T) -> T where decl({ let x: num = value; x }) {
     value
 }
@@ -1484,15 +1489,15 @@ fn main() -> num {
     probe::<bool>(true);
     0
 }
-)");
-
-    assert(error.message.find("generic constraint failed") != std::string::npos);
-    assert(error.message.find("function 'probe'") != std::string::npos);
+)",
+        .failing_function = "probe",
+    });
 }
 
 static void test_decl_generic_if_branch_probe_rechecks_after_substitution() {
     SymbolSession session;
-    const auto program = must_fold_with_constraint_prelude(R"(
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
 fn probe<T>(value: T) -> T where decl(if true { 1 } else { value }) {
     value
 }
@@ -1501,13 +1506,10 @@ fn main() -> num {
     probe::<num>(1);
     0
 }
-)");
-
-    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"0"});
-
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
 fn probe<T>(value: T) -> T where decl(if true { 1 } else { value }) {
     value
 }
@@ -1516,15 +1518,15 @@ fn main() -> num {
     probe::<bool>(true);
     0
 }
-)");
-
-    assert(error.message.find("generic constraint failed") != std::string::npos);
-    assert(error.message.find("function 'probe'") != std::string::npos);
+)",
+        .failing_function = "probe",
+    });
 }
 
 static void test_decl_generic_extern_call_probe_rechecks_after_substitution() {
     SymbolSession session;
-    const auto program = must_fold_with_constraint_prelude(R"(
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
 extern "lang" fn to_str(value: num) -> str;
 
 fn wrapper<T>(value: T) -> num where decl(to_str(value)) {
@@ -1534,13 +1536,10 @@ fn wrapper<T>(value: T) -> num where decl(to_str(value)) {
 fn main() -> num {
     wrapper::<num>(1)
 }
-)");
-
-    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"1"});
-
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "1",
+        .failing_source = R"(
 extern "lang" fn to_str(value: num) -> str;
 
 fn wrapper<T>(value: T) -> num where decl(to_str(value)) {
@@ -1550,10 +1549,9 @@ fn wrapper<T>(value: T) -> num where decl(to_str(value)) {
 fn main() -> num {
     wrapper::<bool>(true)
 }
-)");
-
-    assert(error.message.find("generic constraint failed") != std::string::npos);
-    assert(error.message.find("function 'wrapper'") != std::string::npos);
+)",
+        .failing_function = "wrapper",
+    });
 }
 
 static void test_decl_generic_call_probe_bad_arity_is_unsatisfied() {
