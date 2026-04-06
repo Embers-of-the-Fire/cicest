@@ -2927,6 +2927,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 ctx.scope.pop();
                                 return std::unexpected(std::move(ann.error()));
                             }
+                            auto resolved_init =
+                                resolve_expr_against_type(init_expr->expr, *ann, ctx);
+                            if (!resolved_init) {
+                                ctx.scope.pop();
+                                return std::unexpected(std::move(resolved_init.error()));
+                            }
+                            init_expr->expr = std::move(*resolved_init);
                             if (!compatible(init_expr->expr->ty, *ann)
                                 && !should_defer_generic_probe_failure(
                                     init_expr->expr->ty, *ann, ctx)) {

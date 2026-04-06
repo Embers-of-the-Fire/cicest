@@ -422,6 +422,22 @@ static void test_for_loop() {
     assert(for_node.step.has_value());
 }
 
+static void test_for_loop_annotation_resolves_direct_deferred_call() {
+    const auto prog = must_lower(
+        "fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn flag() -> bool { true }"
+        "fn f() { for (let x: num = make_default(flag()); ; ) { break; } }");
+    const auto& for_expr = *nth_fn(prog, 2).body->tail;
+    assert(std::holds_alternative<TyFor>(for_expr->node));
+    const auto& for_node = std::get<TyFor>(for_expr->node);
+    assert(for_node.init.has_value());
+    assert(for_node.init->ty == ty::num());
+    assert(for_node.init->init->ty == ty::num());
+    const auto& call = std::get<TyCall>(for_node.init->init->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+}
+
 static void test_runtime_for_condition_accepted() {
     const auto prog =
         must_lower("fn f() { for (; flag(); ) { break; } } runtime fn flag() -> bool { true }");
@@ -1389,6 +1405,7 @@ int main() {
     test_block_divergence_with_break();
 
     test_fn_call();
+    test_for_loop_annotation_resolves_direct_deferred_call();
     test_call_undefined_fn_error();
     test_call_arg_count_error();
     test_call_arg_type_error();
