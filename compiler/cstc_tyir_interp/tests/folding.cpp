@@ -1593,6 +1593,84 @@ fn main() -> num {
     assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
 }
 
+static void test_decl_generic_call_probe_bad_generic_arity_is_unsatisfied() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+fn id<T>(value: T) -> T {
+    value
+}
+
+fn wrapper() -> num where decl(id::<num>(0)) {
+    1
+}
+
+fn main() -> num {
+    wrapper()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* call = std::get_if<TyCall>(&(*decl_probe->expr)->node);
+        assert(call != nullptr);
+        assert(call->generic_args.size() == 1);
+        call->generic_args.clear();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_generic_struct_probe_bad_generic_arity_is_unsatisfied() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+struct Box<T> {
+    value: T
+}
+
+fn wrapper() -> num where decl(Box<num> { value: 0 }) {
+    1
+}
+
+fn main() -> num {
+    wrapper()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* init = std::get_if<TyStructInit>(&(*decl_probe->expr)->node);
+        assert(init != nullptr);
+        assert(init->generic_args.size() == 1);
+        init->generic_args.clear();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
 static void test_generic_where_false_reports_constraint_failure() {
     SymbolSession session;
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
@@ -1893,6 +1971,8 @@ int main() {
     test_decl_generic_if_branch_probe_rechecks_after_substitution();
     test_decl_generic_extern_call_probe_rechecks_after_substitution();
     test_decl_generic_call_probe_bad_arity_is_unsatisfied();
+    test_decl_generic_call_probe_bad_generic_arity_is_unsatisfied();
+    test_decl_generic_struct_probe_bad_generic_arity_is_unsatisfied();
     test_generic_where_false_reports_constraint_failure();
     test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();

@@ -857,6 +857,13 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                     const auto decl_it = program.structs.find(node.type_name);
                     if (decl_it != program.structs.end()) {
+                        if (node.generic_args.size() != decl_it->second->generic_params.size()) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
                         const bool generic_args_depend = generic_args_depend_on_generic_params(
                             node.generic_args, generic_params);
                         const auto substitution =
@@ -1033,6 +1040,13 @@ ConstraintEvalResult evaluate_constraint(
                         }
                         const bool generic_args_depend = generic_args_depend_on_generic_params(
                             node.generic_args, generic_params);
+                        if (node.generic_args.size() != fn.generic_params.size()) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
                         const auto substitution =
                             build_substitution(fn.generic_params, node.generic_args);
                         if (node.args.size() != fn.params.size()) {
