@@ -561,6 +561,30 @@ static void test_decl_probe_defers_generic_if_join_during_expected_type_resoluti
     assert(std::holds_alternative<TyIf>(call.args[0]->node));
 }
 
+static void test_decl_probe_rejects_conflicting_generic_let_annotation_bindings() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "struct Pair<A, B> { left: A, right: B }"
+        "fn probe<T>(a: Pair<T, T>) -> Pair<T, T> where decl({ let x: Pair<num, bool> = a; x }) {"
+        " a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(probe.is_invalid);
+    assert(!probe.expr.has_value());
+    assert(probe.invalid_reason.has_value());
+}
+
+static void test_decl_probe_rejects_conflicting_generic_if_branch_join_bindings() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "struct Pair<A, B> { left: A, right: B }"
+        "fn probe<T>(a: Pair<T, T>) -> Pair<T, T> where decl(if true { a } else { Pair<num, bool>"
+        " { left: 1, right: false } }) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(probe.is_invalid);
+    assert(!probe.expr.has_value());
+    assert(probe.invalid_reason.has_value());
+}
+
 static void test_decl_probe_contains_unresolved_generic_inference_in_let() {
     const auto prog = must_lower_with_constraint_prelude(
         "fn make<T>() -> T { loop {} }"
@@ -799,6 +823,8 @@ int main() {
     test_decl_probe_defers_generic_if_branch_join_validation();
     test_decl_probe_keeps_ref_shape_if_join_invalid();
     test_decl_probe_defers_generic_if_join_during_expected_type_resolution();
+    test_decl_probe_rejects_conflicting_generic_let_annotation_bindings();
+    test_decl_probe_rejects_conflicting_generic_if_branch_join_bindings();
     test_decl_probe_contains_unresolved_generic_inference_in_let();
     test_decl_probe_does_not_drive_if_branch_join_inference();
     test_decl_runtime_use_is_rejected();
