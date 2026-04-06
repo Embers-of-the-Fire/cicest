@@ -529,81 +529,122 @@ struct LowerCtx {
     }
 };
 
-[[nodiscard]] static bool type_shape_may_match_after_generic_substitution(
+[[nodiscard]] static bool type_shapes_may_unify_after_generic_substitution(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params);
+
+[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
     const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params);
 
-[[nodiscard]] static bool type_shapes_may_unify_after_generic_substitution(
+[[nodiscard]] static std::optional<tyir::Ty> joined_type_after_generic_substitution(
     const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params);
 
 [[nodiscard]] static bool should_defer_generic_probe_failure(
     const tyir::Ty& actual, const tyir::Ty& expected, const LowerCtx& ctx) {
     if (!ctx.defer_generic_probe_validation)
         return false;
-    return type_shape_may_match_after_generic_substitution(actual, expected, ctx.generic_params);
-}
-
-[[nodiscard]] static bool type_shape_may_match_after_generic_substitution(
-    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
-    if (actual.kind == tyir::TyKind::Named && actual.generic_args.empty()
-        && generic_params.contains(actual.name)) {
-        return true;
-    }
-    if (expected.kind == tyir::TyKind::Named && expected.generic_args.empty()
-        && generic_params.contains(expected.name)) {
-        return true;
-    }
-    if (actual.kind != expected.kind)
+    if (!type_depends_on_generic_params(actual, ctx.generic_params)
+        && !type_depends_on_generic_params(expected, ctx.generic_params)) {
         return false;
-    switch (actual.kind) {
-    case tyir::TyKind::Ref:
-        if (actual.pointee == nullptr || expected.pointee == nullptr)
-            return actual.pointee == expected.pointee;
-        return type_shape_may_match_after_generic_substitution(
-            *actual.pointee, *expected.pointee, generic_params);
-    case tyir::TyKind::Named:
-        if (actual.name != expected.name
-            || actual.generic_args.size() != expected.generic_args.size())
-            return false;
-        for (std::size_t index = 0; index < actual.generic_args.size(); ++index) {
-            if (!type_shape_may_match_after_generic_substitution(
-                    actual.generic_args[index], expected.generic_args[index], generic_params)) {
-                return false;
-            }
-        }
-        return true;
-    case tyir::TyKind::Unit:
-    case tyir::TyKind::Num:
-    case tyir::TyKind::Str:
-    case tyir::TyKind::Bool:
-    case tyir::TyKind::Never: return true;
     }
-    return false;
+    return type_may_be_compatible_after_generic_substitution(actual, expected, ctx.generic_params);
 }
 
 [[nodiscard]] static bool type_shapes_may_unify_after_generic_substitution(
     const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params) {
-    if (lhs.kind == tyir::TyKind::Named && lhs.generic_args.empty()
-        && generic_params.contains(lhs.name)) {
-        return true;
+    return joined_type_after_generic_substitution(lhs, rhs, generic_params).has_value();
+}
+
+[[nodiscard]] static std::optional<tyir::Ty> joined_type_after_generic_substitution(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params) {
+    if (lhs.is_never())
+        return rhs;
+    if (rhs.is_never())
+        return lhs;
+    if (is_generic_param_ty(lhs, generic_params)) {
+        tyir::Ty joined = rhs;
+        joined.is_runtime = lhs.is_runtime || rhs.is_runtime;
+        if (!joined.display_name.is_valid())
+            joined.display_name = lhs.display_name;
+        return joined;
     }
-    if (rhs.kind == tyir::TyKind::Named && rhs.generic_args.empty()
-        && generic_params.contains(rhs.name)) {
-        return true;
+    if (is_generic_param_ty(rhs, generic_params)) {
+        tyir::Ty joined = lhs;
+        joined.is_runtime = lhs.is_runtime || rhs.is_runtime;
+        if (!joined.display_name.is_valid())
+            joined.display_name = rhs.display_name;
+        return joined;
     }
     if (lhs.kind != rhs.kind)
-        return false;
+        return std::nullopt;
+
+    tyir::Ty joined = lhs;
+    joined.is_runtime = lhs.is_runtime || rhs.is_runtime;
+    if (!joined.display_name.is_valid())
+        joined.display_name = rhs.display_name;
+
     switch (lhs.kind) {
     case tyir::TyKind::Ref:
         if (lhs.pointee == nullptr || rhs.pointee == nullptr)
-            return lhs.pointee == rhs.pointee;
-        return type_shapes_may_unify_after_generic_substitution(
-            *lhs.pointee, *rhs.pointee, generic_params);
+            return lhs.pointee == rhs.pointee ? std::optional<tyir::Ty>{joined} : std::nullopt;
+        if (auto pointee =
+                joined_type_after_generic_substitution(*lhs.pointee, *rhs.pointee, generic_params);
+            pointee.has_value()) {
+            joined.pointee = std::make_shared<tyir::Ty>(std::move(*pointee));
+            return joined;
+        }
+        return std::nullopt;
     case tyir::TyKind::Named:
         if (lhs.name != rhs.name || lhs.generic_args.size() != rhs.generic_args.size())
-            return false;
+            return std::nullopt;
+        joined.generic_args.clear();
+        joined.generic_args.reserve(lhs.generic_args.size());
         for (std::size_t index = 0; index < lhs.generic_args.size(); ++index) {
-            if (!type_shapes_may_unify_after_generic_substitution(
-                    lhs.generic_args[index], rhs.generic_args[index], generic_params)) {
+            auto arg = joined_type_after_generic_substitution(
+                lhs.generic_args[index], rhs.generic_args[index], generic_params);
+            if (!arg.has_value())
+                return std::nullopt;
+            joined.generic_args.push_back(std::move(*arg));
+        }
+        return joined;
+    case tyir::TyKind::Unit:
+    case tyir::TyKind::Num:
+    case tyir::TyKind::Str:
+    case tyir::TyKind::Bool:
+    case tyir::TyKind::Never: return joined;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
+    if (actual.is_never())
+        return true;
+
+    if (is_generic_param_ty(actual, generic_params))
+        return !actual.is_runtime || expected.is_runtime
+            || is_generic_param_ty(expected, generic_params);
+    if (is_generic_param_ty(expected, generic_params))
+        return true;
+
+    if (actual.kind != expected.kind)
+        return false;
+    if (actual.is_runtime && !expected.is_runtime)
+        return false;
+
+    switch (actual.kind) {
+    case tyir::TyKind::Ref:
+        if (actual.pointee == nullptr || expected.pointee == nullptr)
+            return actual.pointee == expected.pointee;
+        return type_may_be_compatible_after_generic_substitution(
+            *actual.pointee, *expected.pointee, generic_params);
+    case tyir::TyKind::Named:
+        if (actual.name != expected.name
+            || actual.generic_args.size() != expected.generic_args.size()) {
+            return false;
+        }
+        for (std::size_t index = 0; index < actual.generic_args.size(); ++index) {
+            if (!type_may_be_compatible_after_generic_substitution(
+                    actual.generic_args[index], expected.generic_args[index], generic_params)) {
                 return false;
             }
         }
@@ -619,8 +660,13 @@ struct LowerCtx {
 
 [[nodiscard]] static bool should_defer_generic_probe_common_type_failure(
     const tyir::Ty& lhs, const tyir::Ty& rhs, const LowerCtx& ctx) {
-    return ctx.defer_generic_probe_validation
-        && type_shapes_may_unify_after_generic_substitution(lhs, rhs, ctx.generic_params);
+    if (!ctx.defer_generic_probe_validation)
+        return false;
+    if (!type_depends_on_generic_params(lhs, ctx.generic_params)
+        && !type_depends_on_generic_params(rhs, ctx.generic_params)) {
+        return false;
+    }
+    return type_shapes_may_unify_after_generic_substitution(lhs, rhs, ctx.generic_params);
 }
 
 [[nodiscard]] static std::optional<cstc::symbol::Symbol> find_unresolved_deferred_generic_call(
@@ -630,17 +676,12 @@ struct LowerCtx {
     const tyir::Ty& lhs, const tyir::Ty& rhs, const LowerCtx& ctx) {
     if (!ctx.defer_generic_probe_validation)
         return std::nullopt;
-
-    if (!type_shapes_may_unify_after_generic_substitution(lhs, rhs, ctx.generic_params))
+    if (!type_depends_on_generic_params(lhs, ctx.generic_params)
+        && !type_depends_on_generic_params(rhs, ctx.generic_params)) {
         return std::nullopt;
+    }
 
-    const bool lhs_depends = type_depends_on_generic_params(lhs, ctx.generic_params);
-    const bool rhs_depends = type_depends_on_generic_params(rhs, ctx.generic_params);
-    if (!lhs_depends && !rhs_depends)
-        return std::nullopt;
-    if (lhs_depends != rhs_depends)
-        return lhs_depends ? rhs : lhs;
-    return lhs;
+    return joined_type_after_generic_substitution(lhs, rhs, ctx.generic_params);
 }
 
 [[nodiscard]] static std::expected<tyir::Ty, LowerError> join_branch_types(

@@ -266,6 +266,13 @@ static void test_runtime_arithmetic_prevents_demotion() {
         "body has type 'runtime num' but return type is 'num'");
 }
 
+static void test_runtime_deferred_generic_return_prevents_demotion() {
+    must_fail_with_message(
+        "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn f() -> num { make_default(true) }",
+        "body has type 'runtime num' but return type is 'num'");
+}
+
 static void test_runtime_comparison_preserves_runtime_type() {
     const auto prog =
         must_lower("fn f() -> runtime bool { source() < 2 } runtime fn source() -> num { 1 }");
@@ -914,6 +921,13 @@ static void test_return_type_resolves_deferred_call_through_if_branches() {
     assert(call.generic_args[0] == ty::num());
 }
 
+static void test_if_branch_join_keeps_runtime_on_deferred_generic_call() {
+    must_fail_with_message(
+        "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn f(cond: bool) -> num { if cond { make_default(true) } else { 0 } }",
+        "body has type 'runtime num' but return type is 'num'");
+}
+
 static void test_expected_type_resolves_nested_deferred_generic_argument() {
     const auto prog = must_lower(
         "fn make_default<T>(flag: bool) -> T { loop {} }"
@@ -1324,6 +1338,7 @@ int main() {
     test_nominal_ref_argument_mismatch_error();
     test_runtime_arithmetic_preserves_runtime_type();
     test_runtime_arithmetic_prevents_demotion();
+    test_runtime_deferred_generic_return_prevents_demotion();
     test_runtime_comparison_preserves_runtime_type();
     test_runtime_equality_preserves_runtime_type();
     test_runtime_logical_preserves_runtime_type();
@@ -1414,6 +1429,7 @@ int main() {
     test_let_annotation_resolves_deferred_call_in_block_tail();
     test_let_annotation_resolves_direct_deferred_call();
     test_return_type_resolves_deferred_call_through_if_branches();
+    test_if_branch_join_keeps_runtime_on_deferred_generic_call();
     test_expected_type_resolves_nested_deferred_generic_argument();
     test_deferred_resolution_uses_specialized_parameter_type();
     test_path_expr_rejects_bare_generic_args();

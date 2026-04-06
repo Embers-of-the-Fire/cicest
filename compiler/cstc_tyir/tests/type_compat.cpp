@@ -24,6 +24,16 @@ static void test_compatible_handles_refs_recursively() {
         ty::ref(ty::named(handle))));
 }
 
+static void test_compatible_handles_named_generic_args_recursively() {
+    const Symbol foo = Symbol::intern("Foo");
+    assert(compatible(
+        ty::named(foo, kInvalidSymbol, ValueSemantics::Move, false, {ty::num()}),
+        ty::named(foo, kInvalidSymbol, ValueSemantics::Move, false, {ty::num(true)})));
+    assert(!compatible(
+        ty::named(foo, kInvalidSymbol, ValueSemantics::Move, false, {ty::num(true)}),
+        ty::named(foo, kInvalidSymbol, ValueSemantics::Move, false, {ty::num()})));
+}
+
 static void test_matches_type_shape_ignores_runtime_tags() {
     const Symbol handle = Symbol::intern("Handle");
     assert(matches_type_shape(
@@ -49,14 +59,26 @@ static void test_common_type_handles_never_and_mismatch() {
     assert(!common_type(ty::bool_(), ty::num()).has_value());
 }
 
+static void test_common_type_promotes_named_generic_args_recursively() {
+    const Symbol foo = Symbol::intern("Foo");
+    const auto joined = common_type(
+        ty::named(foo, kInvalidSymbol, ValueSemantics::Move, false, {ty::num()}),
+        ty::named(foo, kInvalidSymbol, ValueSemantics::Move, false, {ty::num(true)}));
+    assert(joined.has_value());
+    assert(joined->generic_args.size() == 1);
+    assert(joined->generic_args[0] == ty::num(true));
+}
+
 int main() {
     SymbolSession session;
 
     test_compatible_allows_runtime_promotion();
     test_compatible_handles_refs_recursively();
+    test_compatible_handles_named_generic_args_recursively();
     test_matches_type_shape_ignores_runtime_tags();
     test_common_type_promotes_runtime_and_display_name();
     test_common_type_handles_never_and_mismatch();
+    test_common_type_promotes_named_generic_args_recursively();
 
     return 0;
 }

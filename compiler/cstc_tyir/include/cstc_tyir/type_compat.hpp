@@ -28,6 +28,13 @@ namespace cstc::tyir {
         return false;
     if (actual.is_runtime && !expected.is_runtime)
         return false;
+    if (actual.kind == TyKind::Named) {
+        for (std::size_t index = 0; index < actual.generic_args.size(); ++index) {
+            if (!compatible(actual.generic_args[index], expected.generic_args[index]))
+                return false;
+        }
+        return true;
+    }
     if (actual.kind != TyKind::Ref)
         return true;
     if (actual.pointee == nullptr || expected.pointee == nullptr)
@@ -60,6 +67,17 @@ namespace cstc::tyir {
     joined.is_runtime = lhs.is_runtime || rhs.is_runtime;
     if (!joined.display_name.is_valid())
         joined.display_name = rhs.display_name;
+
+    if (joined.kind == TyKind::Named) {
+        joined.generic_args.clear();
+        joined.generic_args.reserve(lhs.generic_args.size());
+        for (std::size_t index = 0; index < lhs.generic_args.size(); ++index) {
+            auto arg = common_type(lhs.generic_args[index], rhs.generic_args[index]);
+            if (!arg.has_value())
+                return std::nullopt;
+            joined.generic_args.push_back(std::move(*arg));
+        }
+    }
 
     if (joined.kind == TyKind::Ref) {
         if (lhs.pointee == nullptr || rhs.pointee == nullptr) {
