@@ -1124,6 +1124,225 @@ static void consume_temp_borrow(std::vector<std::size_t>& borrows, std::size_t o
 
 using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash>;
 
+template <typename Result>
+struct WhereWalkResultTraits;
+
+template <>
+struct WhereWalkResultTraits<bool> {
+    [[nodiscard]] static constexpr bool empty() { return false; }
+    [[nodiscard]] static constexpr bool found(const bool value) { return value; }
+};
+
+template <typename T>
+struct WhereWalkResultTraits<std::optional<T>> {
+    [[nodiscard]] static std::optional<T> empty() { return std::nullopt; }
+    [[nodiscard]] static bool found(const std::optional<T>& value) { return value.has_value(); }
+};
+
+struct WhereWalkContext {
+    bool allow_call_position_path = false;
+};
+
+template <typename Visitor>
+[[nodiscard]] static typename Visitor::Result walk_where_expr(
+    const ast::ExprPtr& expr, Visitor& visitor, WhereWalkContext ctx = WhereWalkContext{});
+
+template <typename Visitor>
+[[nodiscard]] static typename Visitor::Result
+    walk_where_block(const ast::BlockPtr& block, Visitor& visitor);
+
+template <typename Visitor>
+static void walk_where_enter_scope(Visitor& visitor) {
+    if constexpr (requires { visitor.enter_scope(); })
+        visitor.enter_scope();
+}
+
+template <typename Visitor>
+static void walk_where_leave_scope(Visitor& visitor) {
+    if constexpr (requires { visitor.leave_scope(); })
+        visitor.leave_scope();
+}
+
+template <typename Visitor>
+static void walk_where_bind_local(Visitor& visitor, cstc::symbol::Symbol name) {
+    if constexpr (requires { visitor.bind_local(name); })
+        visitor.bind_local(name);
+}
+
+template <typename Visitor, typename Node>
+[[nodiscard]] static bool
+    walk_where_should_descend(Visitor& visitor, const Node& node, const WhereWalkContext& ctx) {
+    if constexpr (requires { visitor.should_descend(node, ctx); })
+        return visitor.should_descend(node, ctx);
+    return true;
+}
+
+template <typename Visitor>
+[[nodiscard]] static typename Visitor::Result
+    walk_where_expr(const ast::ExprPtr& expr, Visitor& visitor, const WhereWalkContext ctx) {
+    using Result = typename Visitor::Result;
+    using Traits = WhereWalkResultTraits<Result>;
+
+    if (expr == nullptr)
+        return Traits::empty();
+
+    return std::visit(
+        [&](const auto& node) -> Result {
+            if (auto result = visitor.inspect(expr, node, ctx); Traits::found(result))
+                return result;
+            if (!walk_where_should_descend(visitor, node, ctx))
+                return Traits::empty();
+
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (
+                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::PathExpr>
+                || std::is_same_v<Node, ast::ContinueExpr>) {
+                return Traits::empty();
+            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
+                for (const ast::StructInitField& field : node.fields) {
+                    auto result = walk_where_expr(field.value, visitor);
+                    if (Traits::found(result))
+                        return result;
+                }
+                return Traits::empty();
+            } else if constexpr (std::is_same_v<Node, ast::GenericAppExpr>) {
+                return walk_where_expr(
+                    node.callee, visitor, WhereWalkContext{.allow_call_position_path = true});
+            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
+                return walk_where_expr(node.rhs, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
+                auto lhs = walk_where_expr(node.lhs, visitor);
+                if (Traits::found(lhs))
+                    return lhs;
+                return walk_where_expr(node.rhs, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
+                return walk_where_expr(node.base, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
+                auto callee = walk_where_expr(
+                    node.callee, visitor, WhereWalkContext{.allow_call_position_path = true});
+                if (Traits::found(callee))
+                    return callee;
+                for (const ast::ExprPtr& arg : node.args) {
+                    auto result = walk_where_expr(arg, visitor);
+                    if (Traits::found(result))
+                        return result;
+                }
+                return Traits::empty();
+            } else if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
+                return walk_where_expr(node.expr, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
+                return walk_where_block(node, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
+                auto condition = walk_where_expr(node.condition, visitor);
+                if (Traits::found(condition))
+                    return condition;
+                auto then_block = walk_where_block(node.then_block, visitor);
+                if (Traits::found(then_block))
+                    return then_block;
+                if (node.else_branch.has_value())
+                    return walk_where_expr(*node.else_branch, visitor);
+                return Traits::empty();
+            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
+                return walk_where_block(node.body, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
+                auto condition = walk_where_expr(node.condition, visitor);
+                if (Traits::found(condition))
+                    return condition;
+                return walk_where_block(node.body, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
+                walk_where_enter_scope(visitor);
+                if (node.init.has_value()) {
+                    auto init = std::visit(
+                        [&](const auto& init_node) -> Result {
+                            using InitNode = std::decay_t<decltype(init_node)>;
+                            if constexpr (std::is_same_v<InitNode, ast::ForInitLet>) {
+                                auto result = walk_where_expr(init_node.initializer, visitor);
+                                if (Traits::found(result))
+                                    return result;
+                                if (!init_node.discard && init_node.name.is_valid())
+                                    walk_where_bind_local(visitor, init_node.name);
+                                return Traits::empty();
+                            } else {
+                                return walk_where_expr(init_node, visitor);
+                            }
+                        },
+                        *node.init);
+                    if (Traits::found(init)) {
+                        walk_where_leave_scope(visitor);
+                        return init;
+                    }
+                }
+                if (node.condition.has_value()) {
+                    auto condition = walk_where_expr(*node.condition, visitor);
+                    if (Traits::found(condition)) {
+                        walk_where_leave_scope(visitor);
+                        return condition;
+                    }
+                }
+                if (node.step.has_value()) {
+                    auto step = walk_where_expr(*node.step, visitor);
+                    if (Traits::found(step)) {
+                        walk_where_leave_scope(visitor);
+                        return step;
+                    }
+                }
+                auto body = walk_where_block(node.body, visitor);
+                walk_where_leave_scope(visitor);
+                return body;
+            } else if constexpr (
+                std::is_same_v<Node, ast::BreakExpr> || std::is_same_v<Node, ast::ReturnExpr>) {
+                if (node.value.has_value())
+                    return walk_where_expr(*node.value, visitor);
+                return Traits::empty();
+            }
+        },
+        expr->node);
+}
+
+template <typename Visitor>
+[[nodiscard]] static typename Visitor::Result
+    walk_where_block(const ast::BlockPtr& block, Visitor& visitor) {
+    using Result = typename Visitor::Result;
+    using Traits = WhereWalkResultTraits<Result>;
+
+    if (block == nullptr)
+        return Traits::empty();
+
+    walk_where_enter_scope(visitor);
+    for (const ast::Stmt& stmt : block->statements) {
+        auto result = std::visit(
+            [&](const auto& node) -> Result {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<Node, ast::LetStmt>) {
+                    auto init = walk_where_expr(node.initializer, visitor);
+                    if (Traits::found(init))
+                        return init;
+                    if (!node.discard && node.name.is_valid())
+                        walk_where_bind_local(visitor, node.name);
+                    return Traits::empty();
+                } else {
+                    return walk_where_expr(node.expr, visitor);
+                }
+            },
+            stmt);
+        if (Traits::found(result)) {
+            walk_where_leave_scope(visitor);
+            return result;
+        }
+    }
+
+    if (block->tail.has_value()) {
+        auto tail = walk_where_expr(*block->tail, visitor);
+        if (Traits::found(tail)) {
+            walk_where_leave_scope(visitor);
+            return tail;
+        }
+    }
+
+    walk_where_leave_scope(visitor);
+    return Traits::empty();
+}
+
 [[nodiscard]] static bool
     has_local_binding(const std::vector<LocalNameSet>& scopes, cstc::symbol::Symbol name) {
     for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
@@ -1133,392 +1352,92 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
     return false;
 }
 
+struct ReturnInWhereVisitor {
+    using Result = std::optional<LowerError>;
+
+    template <typename Node>
+    [[nodiscard]] Result
+        inspect(const ast::ExprPtr& expr, const Node& node, const WhereWalkContext& ctx) const {
+        (void)node;
+        (void)ctx;
+        if constexpr (std::is_same_v<Node, ast::ReturnExpr>) {
+            return LowerError{expr->span, "where clauses cannot contain 'return'", std::nullopt};
+        }
+        return std::nullopt;
+    }
+};
+
+struct ParamReferenceVisitor {
+    using Result = std::optional<LowerError>;
+
+    const LocalNameSet& param_names;
+    std::vector<LocalNameSet>& scopes;
+
+    template <typename Node>
+    [[nodiscard]] Result
+        inspect(const ast::ExprPtr& expr, const Node& node, const WhereWalkContext& ctx) const {
+        if constexpr (std::is_same_v<Node, ast::PathExpr>) {
+            if (!ctx.allow_call_position_path && !node.tail.has_value()
+                && param_names.contains(node.head) && !has_local_binding(scopes, node.head)) {
+                return LowerError{
+                    expr->span,
+                    "function where clauses cannot reference parameter '"
+                        + display_symbol(node.display_head, node.head) + "'",
+                    std::nullopt,
+                };
+            }
+        }
+        return std::nullopt;
+    }
+
+    void enter_scope() { scopes.emplace_back(); }
+    void leave_scope() { scopes.pop_back(); }
+    void bind_local(const cstc::symbol::Symbol name) { scopes.back().insert(name); }
+
+    template <typename Node>
+    [[nodiscard]] static constexpr bool
+        should_descend(const Node& node, const WhereWalkContext& ctx) {
+        (void)node;
+        (void)ctx;
+        return !std::is_same_v<Node, ast::DeclExpr>;
+    }
+};
+
+struct DeclProbeVisitor {
+    using Result = bool;
+
+    template <typename Node>
+    [[nodiscard]] static constexpr bool
+        inspect(const ast::ExprPtr& expr, const Node& node, const WhereWalkContext& ctx) {
+        (void)expr;
+        (void)node;
+        (void)ctx;
+        return std::is_same_v<Node, ast::DeclExpr>;
+    }
+};
+
 [[nodiscard]] static std::optional<LowerError> find_param_reference_in_expr(
     const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes,
     bool allow_call_position_path = false);
 
 [[nodiscard]] static std::optional<LowerError> find_return_in_where_expr(const ast::ExprPtr& expr);
 
-[[nodiscard]] static std::optional<LowerError>
-    find_return_in_where_block(const ast::BlockPtr& block) {
-    if (block == nullptr)
-        return std::nullopt;
-
-    for (const ast::Stmt& stmt : block->statements) {
-        auto result = std::visit(
-            [&](const auto& node) -> std::optional<LowerError> {
-                using Node = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<Node, ast::LetStmt>)
-                    return find_return_in_where_expr(node.initializer);
-                else
-                    return find_return_in_where_expr(node.expr);
-            },
-            stmt);
-        if (result.has_value())
-            return result;
-    }
-
-    if (block->tail.has_value())
-        return find_return_in_where_expr(*block->tail);
-
-    return std::nullopt;
-}
-
-[[nodiscard]] static std::optional<LowerError> find_param_reference_in_block(
-    const ast::BlockPtr& block, const LocalNameSet& param_names,
-    std::vector<LocalNameSet>& scopes) {
-    if (block == nullptr)
-        return std::nullopt;
-
-    scopes.emplace_back();
-    for (const ast::Stmt& stmt : block->statements) {
-        auto result = std::visit(
-            [&](const auto& node) -> std::optional<LowerError> {
-                using Node = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<Node, ast::LetStmt>) {
-                    auto init = find_param_reference_in_expr(node.initializer, param_names, scopes);
-                    if (init.has_value())
-                        return init;
-                    if (!node.discard && node.name.is_valid())
-                        scopes.back().insert(node.name);
-                    return std::nullopt;
-                } else {
-                    return find_param_reference_in_expr(node.expr, param_names, scopes);
-                }
-            },
-            stmt);
-        if (result.has_value()) {
-            scopes.pop_back();
-            return result;
-        }
-    }
-
-    if (block->tail.has_value()) {
-        auto tail = find_param_reference_in_expr(*block->tail, param_names, scopes);
-        if (tail.has_value()) {
-            scopes.pop_back();
-            return tail;
-        }
-    }
-
-    scopes.pop_back();
-    return std::nullopt;
-}
-
 [[nodiscard]] static std::optional<LowerError> find_param_reference_in_expr(
     const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes,
     const bool allow_call_position_path) {
-    if (expr == nullptr)
-        return std::nullopt;
-
-    return std::visit(
-        [&](const auto& node) -> std::optional<LowerError> {
-            using Node = std::decay_t<decltype(node)>;
-            if constexpr (
-                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::ContinueExpr>
-                || std::is_same_v<Node, ast::DeclExpr>) {
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::PathExpr>) {
-                if (!allow_call_position_path && !node.tail.has_value()
-                    && param_names.contains(node.head) && !has_local_binding(scopes, node.head)) {
-                    return LowerError{
-                        expr->span,
-                        "function where clauses cannot reference parameter '"
-                            + display_symbol(node.display_head, node.head) + "'",
-                        std::nullopt,
-                    };
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
-                for (const ast::StructInitField& field : node.fields) {
-                    auto result = find_param_reference_in_expr(field.value, param_names, scopes);
-                    if (result.has_value())
-                        return result;
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::GenericAppExpr>) {
-                return find_param_reference_in_expr(node.callee, param_names, scopes, true);
-            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
-                return find_param_reference_in_expr(node.rhs, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
-                auto lhs = find_param_reference_in_expr(node.lhs, param_names, scopes);
-                if (lhs.has_value())
-                    return lhs;
-                return find_param_reference_in_expr(node.rhs, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
-                return find_param_reference_in_expr(node.base, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
-                auto callee = find_param_reference_in_expr(node.callee, param_names, scopes, true);
-                if (callee.has_value())
-                    return callee;
-                for (const ast::ExprPtr& arg : node.args) {
-                    auto result = find_param_reference_in_expr(arg, param_names, scopes);
-                    if (result.has_value())
-                        return result;
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
-                return find_param_reference_in_block(node, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
-                auto condition = find_param_reference_in_expr(node.condition, param_names, scopes);
-                if (condition.has_value())
-                    return condition;
-                auto then_block =
-                    find_param_reference_in_block(node.then_block, param_names, scopes);
-                if (then_block.has_value())
-                    return then_block;
-                if (node.else_branch.has_value())
-                    return find_param_reference_in_expr(*node.else_branch, param_names, scopes);
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
-                return find_param_reference_in_block(node.body, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
-                auto condition = find_param_reference_in_expr(node.condition, param_names, scopes);
-                if (condition.has_value())
-                    return condition;
-                return find_param_reference_in_block(node.body, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
-                scopes.emplace_back();
-                if (node.init.has_value()) {
-                    auto init = std::visit(
-                        [&](const auto& init_node) -> std::optional<LowerError> {
-                            using InitNode = std::decay_t<decltype(init_node)>;
-                            if constexpr (std::is_same_v<InitNode, ast::ForInitLet>) {
-                                auto result = find_param_reference_in_expr(
-                                    init_node.initializer, param_names, scopes);
-                                if (result.has_value())
-                                    return result;
-                                if (!init_node.discard && init_node.name.is_valid())
-                                    scopes.back().insert(init_node.name);
-                                return std::nullopt;
-                            } else {
-                                return find_param_reference_in_expr(init_node, param_names, scopes);
-                            }
-                        },
-                        *node.init);
-                    if (init.has_value()) {
-                        scopes.pop_back();
-                        return init;
-                    }
-                }
-                if (node.condition.has_value()) {
-                    auto condition =
-                        find_param_reference_in_expr(*node.condition, param_names, scopes);
-                    if (condition.has_value()) {
-                        scopes.pop_back();
-                        return condition;
-                    }
-                }
-                if (node.step.has_value()) {
-                    auto step = find_param_reference_in_expr(*node.step, param_names, scopes);
-                    if (step.has_value()) {
-                        scopes.pop_back();
-                        return step;
-                    }
-                }
-                auto body = find_param_reference_in_block(node.body, param_names, scopes);
-                scopes.pop_back();
-                return body;
-            } else if constexpr (
-                std::is_same_v<Node, ast::BreakExpr> || std::is_same_v<Node, ast::ReturnExpr>) {
-                if (node.value.has_value())
-                    return find_param_reference_in_expr(*node.value, param_names, scopes);
-                return std::nullopt;
-            }
-        },
-        expr->node);
+    ParamReferenceVisitor visitor{param_names, scopes};
+    return walk_where_expr(
+        expr, visitor, WhereWalkContext{.allow_call_position_path = allow_call_position_path});
 }
 
 [[nodiscard]] static std::optional<LowerError> find_return_in_where_expr(const ast::ExprPtr& expr) {
-    if (expr == nullptr)
-        return std::nullopt;
-
-    return std::visit(
-        [&](const auto& node) -> std::optional<LowerError> {
-            using Node = std::decay_t<decltype(node)>;
-            if constexpr (
-                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::PathExpr>
-                || std::is_same_v<Node, ast::ContinueExpr>) {
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
-                for (const ast::StructInitField& field : node.fields) {
-                    auto result = find_return_in_where_expr(field.value);
-                    if (result.has_value())
-                        return result;
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::GenericAppExpr>) {
-                return find_return_in_where_expr(node.callee);
-            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
-                return find_return_in_where_expr(node.rhs);
-            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
-                auto lhs = find_return_in_where_expr(node.lhs);
-                if (lhs.has_value())
-                    return lhs;
-                return find_return_in_where_expr(node.rhs);
-            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
-                return find_return_in_where_expr(node.base);
-            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
-                auto callee = find_return_in_where_expr(node.callee);
-                if (callee.has_value())
-                    return callee;
-                for (const ast::ExprPtr& arg : node.args) {
-                    auto result = find_return_in_where_expr(arg);
-                    if (result.has_value())
-                        return result;
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
-                return find_return_in_where_expr(node.expr);
-            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
-                return find_return_in_where_block(node);
-            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
-                auto condition = find_return_in_where_expr(node.condition);
-                if (condition.has_value())
-                    return condition;
-                auto then_block = find_return_in_where_block(node.then_block);
-                if (then_block.has_value())
-                    return then_block;
-                if (node.else_branch.has_value())
-                    return find_return_in_where_expr(*node.else_branch);
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
-                return find_return_in_where_block(node.body);
-            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
-                auto condition = find_return_in_where_expr(node.condition);
-                if (condition.has_value())
-                    return condition;
-                return find_return_in_where_block(node.body);
-            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
-                if (node.init.has_value()) {
-                    auto init = std::visit(
-                        [&](const auto& init_node) -> std::optional<LowerError> {
-                            using InitNode = std::decay_t<decltype(init_node)>;
-                            if constexpr (std::is_same_v<InitNode, ast::ForInitLet>)
-                                return find_return_in_where_expr(init_node.initializer);
-                            else
-                                return find_return_in_where_expr(init_node);
-                        },
-                        *node.init);
-                    if (init.has_value())
-                        return init;
-                }
-                if (node.condition.has_value()) {
-                    auto condition = find_return_in_where_expr(*node.condition);
-                    if (condition.has_value())
-                        return condition;
-                }
-                if (node.step.has_value()) {
-                    auto step = find_return_in_where_expr(*node.step);
-                    if (step.has_value())
-                        return step;
-                }
-                return find_return_in_where_block(node.body);
-            } else if constexpr (std::is_same_v<Node, ast::BreakExpr>) {
-                if (node.value.has_value())
-                    return find_return_in_where_expr(*node.value);
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::ReturnExpr>) {
-                return LowerError{
-                    expr->span, "where clauses cannot contain 'return'", std::nullopt};
-            }
-        },
-        expr->node);
+    ReturnInWhereVisitor visitor;
+    return walk_where_expr(expr, visitor);
 }
-
-[[nodiscard]] static bool contains_decl_probe_block(const ast::BlockPtr& block);
 
 [[nodiscard]] static bool contains_decl_probe_expr(const ast::ExprPtr& expr) {
-    if (expr == nullptr)
-        return false;
-
-    return std::visit(
-        [&](const auto& node) -> bool {
-            using Node = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
-                return true;
-            } else if constexpr (
-                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::PathExpr>
-                || std::is_same_v<Node, ast::GenericAppExpr>
-                || std::is_same_v<Node, ast::ContinueExpr>) {
-                return false;
-            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
-                for (const ast::StructInitField& field : node.fields) {
-                    if (contains_decl_probe_expr(field.value))
-                        return true;
-                }
-                return false;
-            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
-                return contains_decl_probe_expr(node.rhs);
-            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
-                return contains_decl_probe_expr(node.base);
-            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
-                return contains_decl_probe_expr(node.lhs) || contains_decl_probe_expr(node.rhs);
-            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
-                if (contains_decl_probe_expr(node.callee))
-                    return true;
-                for (const ast::ExprPtr& arg : node.args) {
-                    if (contains_decl_probe_expr(arg))
-                        return true;
-                }
-                return false;
-            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
-                return contains_decl_probe_block(node);
-            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
-                return contains_decl_probe_expr(node.condition)
-                    || contains_decl_probe_block(node.then_block)
-                    || (node.else_branch.has_value()
-                        && contains_decl_probe_expr(*node.else_branch));
-            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
-                return contains_decl_probe_block(node.body);
-            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
-                return contains_decl_probe_expr(node.condition)
-                    || contains_decl_probe_block(node.body);
-            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
-                const bool init_has_decl =
-                    node.init.has_value()
-                    && std::visit(
-                        [&](const auto& init_node) {
-                            using InitNode = std::decay_t<decltype(init_node)>;
-                            if constexpr (std::is_same_v<InitNode, ast::ForInitLet>)
-                                return contains_decl_probe_expr(init_node.initializer);
-                            else
-                                return contains_decl_probe_expr(init_node);
-                        },
-                        *node.init);
-                const bool cond_has_decl =
-                    node.condition.has_value() && contains_decl_probe_expr(*node.condition);
-                const bool step_has_decl =
-                    node.step.has_value() && contains_decl_probe_expr(*node.step);
-                return init_has_decl || cond_has_decl || step_has_decl
-                    || contains_decl_probe_block(node.body);
-            } else if constexpr (
-                std::is_same_v<Node, ast::BreakExpr> || std::is_same_v<Node, ast::ReturnExpr>) {
-                return node.value.has_value() && contains_decl_probe_expr(*node.value);
-            }
-        },
-        expr->node);
-}
-
-[[nodiscard]] static bool contains_decl_probe_block(const ast::BlockPtr& block) {
-    if (block == nullptr)
-        return false;
-
-    for (const ast::Stmt& stmt : block->statements) {
-        const bool found = std::visit(
-            [&](const auto& stmt_node) {
-                using StmtNode = std::decay_t<decltype(stmt_node)>;
-                if constexpr (std::is_same_v<StmtNode, ast::LetStmt>)
-                    return contains_decl_probe_expr(stmt_node.initializer);
-                else
-                    return contains_decl_probe_expr(stmt_node.expr);
-            },
-            stmt);
-        if (found)
-            return true;
-    }
-
-    return block->tail.has_value() && contains_decl_probe_expr(*block->tail);
+    DeclProbeVisitor visitor;
+    return walk_where_expr(expr, visitor);
 }
 
 [[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
