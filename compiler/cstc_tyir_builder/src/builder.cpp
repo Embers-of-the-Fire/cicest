@@ -312,6 +312,9 @@ using TypeSubstitution =
 
 [[nodiscard]] static tyir::Ty annotate_type_semantics(tyir::Ty ty, const TypeEnv& env);
 
+[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params);
+
 [[nodiscard]] static std::expected<TypeSubstitution, LowerError> build_substitution(
     const std::vector<cstc::ast::GenericParam>& generic_params,
     const std::vector<tyir::Ty>& generic_args, cstc::span::SourceSpan span,
@@ -332,7 +335,8 @@ using TypeSubstitution =
 
 [[nodiscard]] static std::expected<void, LowerError> infer_substitution(
     const tyir::Ty& pattern, const tyir::Ty& actual, const GenericParamSet& generic_params,
-    TypeSubstitution& subst, cstc::span::SourceSpan span, std::string_view owner_name) {
+    TypeSubstitution& subst, cstc::span::SourceSpan span, std::string_view owner_name,
+    const GenericParamSet* tentative_generic_params = nullptr) {
     if (is_generic_param_ty(pattern, generic_params)) {
         const auto found = subst.find(pattern.name);
         if (found == subst.end()) {
@@ -341,6 +345,11 @@ using TypeSubstitution =
         }
         if (found->second == actual)
             return {};
+        if (tentative_generic_params != nullptr
+            && type_may_be_compatible_after_generic_substitution(
+                found->second, actual, *tentative_generic_params)) {
+            return {};
+        }
         return make_error(
             span, "conflicting inferred types for generic parameter '"
                       + std::string(pattern.name.as_str()) + "' in '" + std::string(owner_name)
@@ -352,7 +361,8 @@ using TypeSubstitution =
     if (pattern.kind == tyir::TyKind::Ref) {
         if (pattern.pointee != nullptr && actual.pointee != nullptr)
             return infer_substitution(
-                *pattern.pointee, *actual.pointee, generic_params, subst, span, owner_name);
+                *pattern.pointee, *actual.pointee, generic_params, subst, span, owner_name,
+                tentative_generic_params);
         return {};
     }
     if (pattern.kind != tyir::TyKind::Named || pattern.name != actual.name
@@ -362,7 +372,7 @@ using TypeSubstitution =
     for (std::size_t index = 0; index < pattern.generic_args.size(); ++index) {
         auto result = infer_substitution(
             pattern.generic_args[index], actual.generic_args[index], generic_params, subst, span,
-            owner_name);
+            owner_name, tentative_generic_params);
         if (!result)
             return result;
     }
@@ -532,9 +542,6 @@ struct LowerCtx {
 
 [[nodiscard]] static bool type_shapes_may_unify_after_generic_substitution(
     const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params);
-
-[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
-    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params);
 
 [[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
     const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params,
@@ -1900,7 +1907,8 @@ static void collect_decl_probe_exprs(const ast::ExprPtr& expr, std::vector<ast::
 
     auto inferred = infer_substitution(
         sig.return_ty, expected_ty, generic_param_set, substitution, expr->span,
-        std::string_view{deferred->fn_name.as_str()});
+        std::string_view{deferred->fn_name.as_str()},
+        ctx.defer_generic_probe_validation ? &ctx.generic_params : nullptr);
     if (!inferred)
         return std::unexpected(std::move(inferred.error()));
 
@@ -3039,7 +3047,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     }
                     auto inferred = infer_substitution(
                         sig.param_types[i], lowered_args[i]->ty, generic_param_set, substitution,
-                        node.args[i]->span, display_fn_name);
+                        node.args[i]->span, display_fn_name,
+                        ctx.defer_generic_probe_validation ? &ctx.generic_params : nullptr);
                     if (!inferred)
                         return std::unexpected(std::move(inferred.error()));
                 }

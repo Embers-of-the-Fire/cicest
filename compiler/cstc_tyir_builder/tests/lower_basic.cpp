@@ -598,6 +598,22 @@ static void test_decl_probe_contains_unresolved_generic_inference_in_let() {
     assert(std::holds_alternative<TyDeferredGenericCall>((*probe.expr)->node));
 }
 
+static void test_decl_probe_tentatively_accepts_explicit_outer_generic_call_arguments() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn id<T>(value: T) -> T { value }"
+        "fn probe<T>() -> Constraint where decl(id::<T>(0)) { Constraint::Valid }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& call = std::get<TyCall>((*probe.expr)->node);
+    assert(call.fn_name == Symbol::intern("id"));
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0].name == Symbol::intern("T"));
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty == ty::num());
+}
+
 static void test_decl_probe_does_not_drive_if_branch_join_inference() {
     must_fail_with_message(
         "[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }"
@@ -831,6 +847,7 @@ int main() {
     test_decl_probe_rejects_conflicting_generic_let_annotation_bindings();
     test_decl_probe_rejects_conflicting_generic_if_branch_join_bindings();
     test_decl_probe_contains_unresolved_generic_inference_in_let();
+    test_decl_probe_tentatively_accepts_explicit_outer_generic_call_arguments();
     test_decl_probe_does_not_drive_if_branch_join_inference();
     test_decl_probe_does_not_relax_unrelated_body_checks();
     test_decl_runtime_use_is_rejected();
