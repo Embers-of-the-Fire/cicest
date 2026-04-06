@@ -514,7 +514,6 @@ struct LowerCtx {
     Scope scope;
     GenericParamSet generic_params;
     bool defer_generic_probe_validation = false;
-    std::vector<ast::ExprPtr> deferred_generic_probe_exprs;
     /// Return type of the function currently being lowered.
     tyir::Ty current_return_ty;
 
@@ -1567,22 +1566,6 @@ struct ParamReferenceVisitor {
     }
 };
 
-struct DeclProbeCollector {
-    using Result = bool;
-
-    std::vector<ast::ExprPtr>& probes;
-
-    template <typename Node>
-    [[nodiscard]] bool
-        inspect(const ast::ExprPtr& expr, const Node& node, const WhereWalkContext& ctx) {
-        (void)ctx;
-        if constexpr (std::is_same_v<Node, ast::DeclExpr>)
-            probes.push_back(node.expr);
-        (void)expr;
-        return false;
-    }
-};
-
 [[nodiscard]] static std::optional<LowerError> find_param_reference_in_expr(
     const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes,
     bool allow_call_position_path = false);
@@ -1600,234 +1583,6 @@ struct DeclProbeCollector {
 [[nodiscard]] static std::optional<LowerError> find_return_in_where_expr(const ast::ExprPtr& expr) {
     ReturnInWhereVisitor visitor;
     return walk_where_expr(expr, visitor);
-}
-
-[[nodiscard]] static bool ast_type_ref_matches(const ast::TypeRef& lhs, const ast::TypeRef& rhs) {
-    if (lhs.kind != rhs.kind || lhs.symbol != rhs.symbol || lhs.display_name != rhs.display_name
-        || lhs.is_runtime != rhs.is_runtime || lhs.generic_args.size() != rhs.generic_args.size()) {
-        return false;
-    }
-    if (static_cast<bool>(lhs.pointee) != static_cast<bool>(rhs.pointee))
-        return false;
-    if (lhs.pointee != nullptr && !ast_type_ref_matches(*lhs.pointee, *rhs.pointee))
-        return false;
-    for (std::size_t index = 0; index < lhs.generic_args.size(); ++index) {
-        if (!ast_type_ref_matches(lhs.generic_args[index], rhs.generic_args[index]))
-            return false;
-    }
-    return true;
-}
-
-[[nodiscard]] static bool ast_expr_matches(const ast::ExprPtr& lhs, const ast::ExprPtr& rhs);
-
-[[nodiscard]] static bool ast_stmt_matches(const ast::Stmt& lhs, const ast::Stmt& rhs) {
-    if (lhs.index() != rhs.index())
-        return false;
-    return std::visit(
-        [&](const auto& lhs_node) {
-            using Node = std::decay_t<decltype(lhs_node)>;
-            const auto& rhs_node = std::get<Node>(rhs);
-            if constexpr (std::is_same_v<Node, ast::LetStmt>) {
-                if (lhs_node.discard != rhs_node.discard || lhs_node.name != rhs_node.name
-                    || lhs_node.type_annotation.has_value()
-                           != rhs_node.type_annotation.has_value()) {
-                    return false;
-                }
-                if (lhs_node.type_annotation.has_value()
-                    && !ast_type_ref_matches(
-                        *lhs_node.type_annotation, *rhs_node.type_annotation)) {
-                    return false;
-                }
-                return ast_expr_matches(lhs_node.initializer, rhs_node.initializer);
-            } else {
-                return ast_expr_matches(lhs_node.expr, rhs_node.expr);
-            }
-        },
-        lhs);
-}
-
-[[nodiscard]] static bool ast_block_matches(const ast::BlockPtr& lhs, const ast::BlockPtr& rhs) {
-    if (static_cast<bool>(lhs) != static_cast<bool>(rhs))
-        return false;
-    if (lhs == nullptr)
-        return true;
-    if (lhs->statements.size() != rhs->statements.size()
-        || lhs->tail.has_value() != rhs->tail.has_value()) {
-        return false;
-    }
-    for (std::size_t index = 0; index < lhs->statements.size(); ++index) {
-        if (!ast_stmt_matches(lhs->statements[index], rhs->statements[index]))
-            return false;
-    }
-    if (lhs->tail.has_value()) {
-        if (!ast_expr_matches(*lhs->tail, *rhs->tail))
-            return false;
-    }
-    return true;
-}
-
-[[nodiscard]] static bool ast_expr_matches(const ast::ExprPtr& lhs, const ast::ExprPtr& rhs) {
-    if (static_cast<bool>(lhs) != static_cast<bool>(rhs))
-        return false;
-    if (lhs == nullptr)
-        return true;
-    if (lhs->node.index() != rhs->node.index())
-        return false;
-
-    return std::visit(
-        [&](const auto& lhs_node) {
-            using Node = std::decay_t<decltype(lhs_node)>;
-            const auto& rhs_node = std::get<Node>(rhs->node);
-            if constexpr (std::is_same_v<Node, ast::LiteralExpr>) {
-                return lhs_node.kind == rhs_node.kind && lhs_node.symbol == rhs_node.symbol
-                    && lhs_node.bool_value == rhs_node.bool_value;
-            } else if constexpr (std::is_same_v<Node, ast::PathExpr>) {
-                if (lhs_node.head != rhs_node.head || lhs_node.tail != rhs_node.tail
-                    || lhs_node.display_head != rhs_node.display_head
-                    || lhs_node.generic_args.size() != rhs_node.generic_args.size()) {
-                    return false;
-                }
-                for (std::size_t index = 0; index < lhs_node.generic_args.size(); ++index) {
-                    if (!ast_type_ref_matches(
-                            lhs_node.generic_args[index], rhs_node.generic_args[index])) {
-                        return false;
-                    }
-                }
-                return true;
-            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
-                if (lhs_node.type_name != rhs_node.type_name
-                    || lhs_node.display_name != rhs_node.display_name
-                    || lhs_node.generic_args.size() != rhs_node.generic_args.size()
-                    || lhs_node.fields.size() != rhs_node.fields.size()) {
-                    return false;
-                }
-                for (std::size_t index = 0; index < lhs_node.generic_args.size(); ++index) {
-                    if (!ast_type_ref_matches(
-                            lhs_node.generic_args[index], rhs_node.generic_args[index])) {
-                        return false;
-                    }
-                }
-                for (std::size_t index = 0; index < lhs_node.fields.size(); ++index) {
-                    if (lhs_node.fields[index].name != rhs_node.fields[index].name
-                        || !ast_expr_matches(
-                            lhs_node.fields[index].value, rhs_node.fields[index].value)) {
-                        return false;
-                    }
-                }
-                return true;
-            } else if constexpr (std::is_same_v<Node, ast::GenericAppExpr>) {
-                if (lhs_node.args.size() != rhs_node.args.size()
-                    || !ast_expr_matches(lhs_node.callee, rhs_node.callee)) {
-                    return false;
-                }
-                for (std::size_t index = 0; index < lhs_node.args.size(); ++index) {
-                    if (!ast_type_ref_matches(lhs_node.args[index], rhs_node.args[index]))
-                        return false;
-                }
-                return true;
-            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
-                return lhs_node.op == rhs_node.op && ast_expr_matches(lhs_node.rhs, rhs_node.rhs);
-            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
-                return lhs_node.op == rhs_node.op && ast_expr_matches(lhs_node.lhs, rhs_node.lhs)
-                    && ast_expr_matches(lhs_node.rhs, rhs_node.rhs);
-            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
-                return lhs_node.field == rhs_node.field
-                    && ast_expr_matches(lhs_node.base, rhs_node.base);
-            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
-                if (lhs_node.args.size() != rhs_node.args.size()
-                    || !ast_expr_matches(lhs_node.callee, rhs_node.callee)) {
-                    return false;
-                }
-                for (std::size_t index = 0; index < lhs_node.args.size(); ++index) {
-                    if (!ast_expr_matches(lhs_node.args[index], rhs_node.args[index]))
-                        return false;
-                }
-                return true;
-            } else if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
-                return ast_expr_matches(lhs_node.expr, rhs_node.expr);
-            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
-                return ast_block_matches(lhs_node, rhs_node);
-            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
-                if (!ast_expr_matches(lhs_node.condition, rhs_node.condition)
-                    || !ast_block_matches(lhs_node.then_block, rhs_node.then_block)
-                    || lhs_node.else_branch.has_value() != rhs_node.else_branch.has_value()) {
-                    return false;
-                }
-                return !lhs_node.else_branch.has_value()
-                    || ast_expr_matches(*lhs_node.else_branch, *rhs_node.else_branch);
-            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
-                return ast_block_matches(lhs_node.body, rhs_node.body);
-            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
-                return ast_expr_matches(lhs_node.condition, rhs_node.condition)
-                    && ast_block_matches(lhs_node.body, rhs_node.body);
-            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
-                if (lhs_node.init.has_value() != rhs_node.init.has_value()
-                    || lhs_node.condition.has_value() != rhs_node.condition.has_value()
-                    || lhs_node.step.has_value() != rhs_node.step.has_value()
-                    || !ast_block_matches(lhs_node.body, rhs_node.body)) {
-                    return false;
-                }
-                if (lhs_node.init.has_value()) {
-                    if (lhs_node.init->index() != rhs_node.init->index())
-                        return false;
-                    const bool init_matches = std::visit(
-                        [&](const auto& lhs_init) {
-                            using Init = std::decay_t<decltype(lhs_init)>;
-                            const auto& rhs_init = std::get<Init>(*rhs_node.init);
-                            if constexpr (std::is_same_v<Init, ast::ForInitLet>) {
-                                if (lhs_init.discard != rhs_init.discard
-                                    || lhs_init.name != rhs_init.name
-                                    || lhs_init.type_annotation.has_value()
-                                           != rhs_init.type_annotation.has_value()) {
-                                    return false;
-                                }
-                                if (lhs_init.type_annotation.has_value()
-                                    && !ast_type_ref_matches(
-                                        *lhs_init.type_annotation, *rhs_init.type_annotation)) {
-                                    return false;
-                                }
-                                return ast_expr_matches(lhs_init.initializer, rhs_init.initializer);
-                            } else {
-                                return ast_expr_matches(lhs_init, rhs_init);
-                            }
-                        },
-                        *lhs_node.init);
-                    if (!init_matches)
-                        return false;
-                }
-                if (lhs_node.condition.has_value()
-                    && !ast_expr_matches(*lhs_node.condition, *rhs_node.condition)) {
-                    return false;
-                }
-                if (lhs_node.step.has_value() && !ast_expr_matches(*lhs_node.step, *rhs_node.step))
-                    return false;
-                return true;
-            } else if constexpr (
-                std::is_same_v<Node, ast::BreakExpr> || std::is_same_v<Node, ast::ReturnExpr>) {
-                return lhs_node.value.has_value() == rhs_node.value.has_value()
-                    && (!lhs_node.value.has_value()
-                        || ast_expr_matches(*lhs_node.value, *rhs_node.value));
-            } else if constexpr (std::is_same_v<Node, ast::ContinueExpr>) {
-                return true;
-            }
-        },
-        lhs->node);
-}
-
-static void collect_decl_probe_exprs(const ast::ExprPtr& expr, std::vector<ast::ExprPtr>& probes) {
-    DeclProbeCollector collector{probes};
-    (void)walk_where_expr(expr, collector);
-}
-
-[[nodiscard]] static bool
-    should_enable_deferred_generic_probe_validation(const ast::ExprPtr& expr, const LowerCtx& ctx) {
-    if (ctx.defer_generic_probe_validation)
-        return true;
-    for (const ast::ExprPtr& probe_expr : ctx.deferred_generic_probe_exprs) {
-        if (ast_expr_matches(expr, probe_expr))
-            return true;
-    }
-    return false;
 }
 
 [[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
@@ -2040,7 +1795,7 @@ static void collect_decl_probe_exprs(const ast::ExprPtr& expr, std::vector<ast::
         const std::vector<cstc::ast::GenericParam>& generic_params = {},
         const std::vector<tyir::TyParam>* params = nullptr,
         const tyir::Ty& current_return_ty = tyir::ty::unit()) {
-    LowerCtx ctx{env, {}, make_generic_param_set(generic_params), false, {}, current_return_ty, {}};
+    LowerCtx ctx{env, {}, make_generic_param_set(generic_params), false, current_return_ty, {}};
     ctx.scope.push();
     for (const cstc::ast::GenericConstraint& constraint : constraints) {
         auto invalid_return = find_return_in_where_expr(constraint.expr);
@@ -2540,10 +2295,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
     assert(expr != nullptr);
 
     std::unique_ptr<LowerCtx> scoped_ctx;
-    if (should_enable_deferred_generic_probe_validation(expr, outer_ctx)
-        && !outer_ctx.defer_generic_probe_validation) {
+    if (outer_ctx.defer_generic_probe_validation) {
         scoped_ctx = std::make_unique<LowerCtx>(outer_ctx);
-        scoped_ctx->defer_generic_probe_validation = true;
     }
     LowerCtx& ctx = scoped_ctx != nullptr ? *scoped_ctx : outer_ctx;
 
@@ -3561,19 +3314,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
         ty_params.push_back(
             tyir::TyParam{fn.params[i].name, sig.param_types[i], fn.params[i].span});
 
-    // Set up lowering context with params in scope
-    std::vector<ast::ExprPtr> deferred_generic_probe_exprs;
-    for (const ast::GenericConstraint& constraint : fn.where_clause)
-        collect_decl_probe_exprs(constraint.expr, deferred_generic_probe_exprs);
-
     LowerCtx ctx{
-        env,
-        {},
-        make_generic_param_set(fn.generic_params),
-        false,
-        std::move(deferred_generic_probe_exprs),
-        sig.return_ty,
-        {},
+        env, {}, make_generic_param_set(fn.generic_params), false, sig.return_ty, {},
     };
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params) {
@@ -3595,12 +3337,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
     }
 
     // Check that body type matches declared return type (when a tail is present)
-    const bool body_tail_uses_deferred_generic_probe =
-        fn.body->tail.has_value()
-        && should_enable_deferred_generic_probe_validation(*fn.body->tail, ctx);
     if (body->tail.has_value() && !compatible(body->ty, sig.return_ty)
-        && !should_defer_generic_probe_failure(
-            body->ty, sig.return_ty, ctx, body_tail_uses_deferred_generic_probe))
+        && !should_defer_generic_probe_failure(body->ty, sig.return_ty, ctx))
         return make_error(
             fn.body->span, "function '" + display_decl_name(fn) + "' body has type '"
                                + body->ty.display() + "' but return type is '"

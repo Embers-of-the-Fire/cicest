@@ -384,9 +384,9 @@ static void test_fn_where_clause_rejects_parameter_references() {
         "function where clauses cannot reference parameter 'value'");
 }
 
-static void test_fn_decl_where_clause_allows_parameter_references() {
+static void test_fn_decl_where_clause_allows_parameter_references_in_decl_probe() {
     const auto prog =
-        must_lower_with_constraint_prelude("fn add<T>(a: T) -> T where decl(a + a) { a + a }");
+        must_lower_with_constraint_prelude("fn add<T>(a: T) -> T where decl(a + a) { a }");
     const auto& fn = std::get<TyFnDecl>(prog.items[2]);
     assert(fn.lowered_where_clause.size() == 1);
     const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
@@ -398,7 +398,19 @@ static void test_fn_decl_where_clause_allows_parameter_references() {
     assert(lhs.name == Symbol::intern("a"));
     assert(rhs.name == Symbol::intern("a"));
     assert(fn.body->tail.has_value());
-    assert(std::holds_alternative<TyBinary>((*fn.body->tail)->node));
+    assert(std::holds_alternative<LocalRef>((*fn.body->tail)->node));
+}
+
+static void test_decl_probe_does_not_relax_matching_body_checks() {
+    must_fail_with_constraint_prelude(
+        "fn bad<T>(value: T) -> num where decl(value) { value }",
+        "function 'bad' body has type 'T' but return type is 'num'");
+}
+
+static void test_decl_probe_inside_disjunction_does_not_relax_matching_body_checks() {
+    must_fail_with_constraint_prelude(
+        "fn bad<T>(a: T) -> T where true || decl(a + a) { a + a }",
+        "arithmetic operator requires 'num' on left, found 'T'");
 }
 
 static void test_struct_where_clause_rejects_return() {
@@ -829,7 +841,7 @@ int main() {
     test_runtime_fn_return_uses_runtime_sugar();
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();
-    test_fn_decl_where_clause_allows_parameter_references();
+    test_fn_decl_where_clause_allows_parameter_references_in_decl_probe();
     test_struct_where_clause_rejects_return();
     test_fn_where_clause_rejects_return();
     test_fn_where_clause_lowers_generic_type_args();
@@ -850,6 +862,8 @@ int main() {
     test_decl_probe_tentatively_accepts_explicit_outer_generic_call_arguments();
     test_decl_probe_does_not_drive_if_branch_join_inference();
     test_decl_probe_does_not_relax_unrelated_body_checks();
+    test_decl_probe_does_not_relax_matching_body_checks();
+    test_decl_probe_inside_disjunction_does_not_relax_matching_body_checks();
     test_decl_runtime_use_is_rejected();
     test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();

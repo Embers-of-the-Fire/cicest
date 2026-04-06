@@ -1,5 +1,5 @@
 fn add<T>(a: T) -> T where decl(a + a) {
-    a + a
+    a
 }
 
 fn main() -> num {

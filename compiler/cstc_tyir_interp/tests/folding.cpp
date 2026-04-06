@@ -1300,7 +1300,7 @@ static void test_decl_generic_parameter_probe_rechecks_after_substitution() {
     expect_decl_probe_recheck_case({
         .folded_source = R"(
 fn probe<T>(a: T) -> T where decl(a + a) {
-    a + a
+    a
 }
 
 fn main() -> num {
@@ -1308,10 +1308,10 @@ fn main() -> num {
 }
 )",
         .literal_kind = TyLiteral::Kind::Num,
-        .literal_symbol = "6",
+        .literal_symbol = "3",
         .failing_source = R"(
 fn probe<T>(a: T) -> T where decl(a + a) {
-    a + a
+    a
 }
 
 fn main() -> num {
