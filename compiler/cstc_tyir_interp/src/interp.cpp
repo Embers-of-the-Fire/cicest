@@ -1,10 +1,16 @@
 #include <cstc_tyir_interp/detail.hpp>
 #include <cstc_tyir_interp/interp.hpp>
 
+#include <cstc_tyir/type_compat.hpp>
+
 #include <cassert>
 #include <unordered_set>
 
 namespace cstc::tyir_interp::detail {
+
+using tyir::common_type;
+using tyir::compatible;
+using tyir::matches_type_shape;
 
 ValuePtr make_num(double value) {
     auto out = std::make_shared<Value>();
@@ -246,54 +252,6 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
             return true;
     }
     return false;
-}
-
-[[nodiscard]] static bool same_type_shape(const tyir::Ty& lhs, const tyir::Ty& rhs) {
-    return lhs.same_shape_as(rhs);
-}
-
-[[nodiscard]] static bool compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
-    if (actual.is_never())
-        return true;
-    if (!same_type_shape(actual, expected))
-        return false;
-    if (actual.is_runtime && !expected.is_runtime)
-        return false;
-    if (actual.kind != tyir::TyKind::Ref)
-        return true;
-    if (actual.pointee == nullptr || expected.pointee == nullptr)
-        return actual.pointee == expected.pointee;
-    return compatible(*actual.pointee, *expected.pointee);
-}
-
-[[nodiscard]] static bool matches_type_shape(const tyir::Ty& actual, const tyir::Ty& expected) {
-    return actual.is_never() || same_type_shape(actual, expected);
-}
-
-[[nodiscard]] static std::optional<tyir::Ty> common_type(const tyir::Ty& lhs, const tyir::Ty& rhs) {
-    if (lhs.is_never())
-        return rhs;
-    if (rhs.is_never())
-        return lhs;
-    if (!same_type_shape(lhs, rhs))
-        return std::nullopt;
-
-    tyir::Ty joined = lhs;
-    joined.is_runtime = lhs.is_runtime || rhs.is_runtime;
-
-    if (lhs.kind == tyir::TyKind::Ref) {
-        if (lhs.pointee == nullptr || rhs.pointee == nullptr) {
-            if (lhs.pointee != rhs.pointee)
-                return std::nullopt;
-        } else {
-            auto pointee = common_type(*lhs.pointee, *rhs.pointee);
-            if (!pointee.has_value())
-                return std::nullopt;
-            joined.pointee = std::make_shared<tyir::Ty>(*pointee);
-        }
-    }
-
-    return joined;
 }
 
 [[nodiscard]] static bool generic_args_depend_on_generic_params(
