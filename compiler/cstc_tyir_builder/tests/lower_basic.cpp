@@ -503,6 +503,17 @@ static void test_decl_probe_defers_generic_parameter_validation() {
     assert(std::get<LocalRef>(binary.rhs->node).name == Symbol::intern("a"));
 }
 
+static void test_decl_probe_keeps_ref_shape_arithmetic_invalid() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn probe<T>(a: &T) where decl(a + a) { () }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(probe.is_invalid);
+    assert(!probe.expr.has_value());
+    assert(probe.invalid_reason.has_value());
+    assert(*probe.invalid_reason == "arithmetic operator requires 'num' on left, found '&T'");
+}
+
 static void test_decl_probe_defers_generic_let_annotation_validation() {
     const auto prog = must_lower_with_constraint_prelude(
         "fn probe<T>(a: T) -> T where decl({ let x: num = a; x }) { a }");
@@ -523,6 +534,16 @@ static void test_decl_probe_defers_generic_if_branch_join_validation() {
     assert(!probe.is_invalid);
     assert(probe.expr.has_value());
     assert(std::holds_alternative<TyIf>((*probe.expr)->node));
+}
+
+static void test_decl_probe_keeps_ref_shape_if_join_invalid() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn probe<T>(a: &T) where decl(if true { 1 } else { a }) { () }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(probe.is_invalid);
+    assert(!probe.expr.has_value());
+    assert(probe.invalid_reason.has_value());
 }
 
 static void test_decl_probe_defers_generic_if_join_during_expected_type_resolution() {
@@ -773,8 +794,10 @@ int main() {
     test_decl_probe_recovers_invalid_inner_expression();
     test_decl_probe_preserves_generic_inner_call();
     test_decl_probe_defers_generic_parameter_validation();
+    test_decl_probe_keeps_ref_shape_arithmetic_invalid();
     test_decl_probe_defers_generic_let_annotation_validation();
     test_decl_probe_defers_generic_if_branch_join_validation();
+    test_decl_probe_keeps_ref_shape_if_join_invalid();
     test_decl_probe_defers_generic_if_join_during_expected_type_resolution();
     test_decl_probe_contains_unresolved_generic_inference_in_let();
     test_decl_probe_does_not_drive_if_branch_join_inference();
