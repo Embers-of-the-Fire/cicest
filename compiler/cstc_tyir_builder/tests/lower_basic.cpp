@@ -608,6 +608,11 @@ static void test_decl_probe_does_not_drive_if_branch_join_inference() {
         "'if' then-branch has type 'Constraint' but else-branch has type 'bool'");
 }
 
+static void test_decl_probe_does_not_relax_unrelated_body_checks() {
+    must_fail_with_message(
+        "fn f<T>(a: T) -> bool where decl(1 + 1) { !a }", "unary '!' requires 'bool', found 'T'");
+}
+
 static void test_decl_runtime_use_is_rejected() {
     must_fail_with_message(
         R"(
@@ -827,6 +832,7 @@ int main() {
     test_decl_probe_rejects_conflicting_generic_if_branch_join_bindings();
     test_decl_probe_contains_unresolved_generic_inference_in_let();
     test_decl_probe_does_not_drive_if_branch_join_inference();
+    test_decl_probe_does_not_relax_unrelated_body_checks();
     test_decl_runtime_use_is_rejected();
     test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();
