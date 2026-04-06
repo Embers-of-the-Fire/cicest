@@ -892,7 +892,16 @@ ConstraintEvalResult evaluate_constraint(
                             }
                         }
 
+                        std::unordered_set<Symbol, SymbolHash> seen_fields;
+                        seen_fields.reserve(node.fields.size());
                         for (const tyir::TyStructInitField& field : node.fields) {
+                            if (!seen_fields.insert(field.name).second) {
+                                return {
+                                    ConstraintEvalKind::Unsatisfied,
+                                    "probed expression is not type-valid",
+                                    std::nullopt,
+                                };
+                            }
                             const auto field_it = std::find_if(
                                 decl_it->second->fields.begin(), decl_it->second->fields.end(),
                                 [&](const tyir::TyFieldDecl& decl_field) {
