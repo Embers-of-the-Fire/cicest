@@ -2294,11 +2294,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
     lower_expr(const ast::ExprPtr& expr, LowerCtx& outer_ctx) {
     assert(expr != nullptr);
 
-    std::unique_ptr<LowerCtx> scoped_ctx;
-    if (outer_ctx.defer_generic_probe_validation) {
-        scoped_ctx = std::make_unique<LowerCtx>(outer_ctx);
-    }
-    LowerCtx& ctx = scoped_ctx != nullptr ? *scoped_ctx : outer_ctx;
+    LowerCtx& ctx = outer_ctx;
 
     auto lowered = std::visit(
         [&](const auto& node) -> std::expected<LoweredExpr, LowerError> {
