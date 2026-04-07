@@ -1430,89 +1430,93 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                     const auto decl_it = program.structs.find(node.type_name);
                     bool defer_where_clause = false;
-                    if (decl_it != program.structs.end()) {
-                        if (node.generic_args.size() != decl_it->second->generic_params.size()) {
+                    if (decl_it == program.structs.end()) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
+                    if (node.generic_args.size() != decl_it->second->generic_params.size()) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
+                    const bool generic_args_depend =
+                        generic_args_depend_on_generic_params(node.generic_args, generic_params);
+                    const auto substitution =
+                        build_substitution(decl_it->second->generic_params, node.generic_args);
+                    if (!generic_args_depend) {
+                        auto status = enforce_constraints(
+                            program, decl_it->second->lowered_where_clause, substitution, "type",
+                            decl_it->second->name, node.generic_args, decl_it->second->span,
+                            expr->span, constraint_state);
+                        if (!status) {
+                            if (status.error().instantiation_limit.has_value()) {
+                                return {
+                                    ConstraintEvalKind::NotConstEvaluable,
+                                    status.error().message,
+                                    status.error().instantiation_limit,
+                                };
+                            }
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                status.error().message,
+                                status.error().instantiation_limit,
+                            };
+                        }
+                    }
+
+                    std::unordered_set<Symbol, SymbolHash> seen_fields;
+                    seen_fields.reserve(node.fields.size());
+                    for (const tyir::TyStructInitField& field : node.fields) {
+                        if (!seen_fields.insert(field.name).second) {
                             return {
                                 ConstraintEvalKind::Unsatisfied,
                                 "probed expression is not type-valid",
                                 std::nullopt,
                             };
                         }
-                        const bool generic_args_depend = generic_args_depend_on_generic_params(
-                            node.generic_args, generic_params);
-                        const auto substitution =
-                            build_substitution(decl_it->second->generic_params, node.generic_args);
-                        if (!generic_args_depend) {
-                            auto status = enforce_constraints(
-                                program, decl_it->second->lowered_where_clause, substitution,
-                                "type", decl_it->second->name, node.generic_args,
-                                decl_it->second->span, expr->span, constraint_state);
-                            if (!status) {
-                                if (status.error().instantiation_limit.has_value()) {
-                                    return {
-                                        ConstraintEvalKind::NotConstEvaluable,
-                                        status.error().message,
-                                        status.error().instantiation_limit,
-                                    };
-                                }
-                                return {
-                                    ConstraintEvalKind::Unsatisfied,
-                                    status.error().message,
-                                    status.error().instantiation_limit,
-                                };
-                            }
+                        const auto field_it = std::find_if(
+                            decl_it->second->fields.begin(), decl_it->second->fields.end(),
+                            [&](const tyir::TyFieldDecl& decl_field) {
+                                return decl_field.name == field.name;
+                            });
+                        if (field_it == decl_it->second->fields.end()) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
                         }
 
-                        std::unordered_set<Symbol, SymbolHash> seen_fields;
-                        seen_fields.reserve(node.fields.size());
-                        for (const tyir::TyStructInitField& field : node.fields) {
-                            if (!seen_fields.insert(field.name).second) {
-                                return {
-                                    ConstraintEvalKind::Unsatisfied,
-                                    "probed expression is not type-valid",
-                                    std::nullopt,
-                                };
+                        const tyir::Ty expected_ty = apply_substitution(field_it->ty, substitution);
+                        if (!compatible(field.value->ty, expected_ty)) {
+                            if (auto unresolved = unresolved_compatibility_check(
+                                    field.value->ty, expected_ty, generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
                             }
-                            const auto field_it = std::find_if(
-                                decl_it->second->fields.begin(), decl_it->second->fields.end(),
-                                [&](const tyir::TyFieldDecl& decl_field) {
-                                    return decl_field.name == field.name;
-                                });
-                            if (field_it == decl_it->second->fields.end()) {
-                                return {
-                                    ConstraintEvalKind::Unsatisfied,
-                                    "probed expression is not type-valid",
-                                    std::nullopt,
-                                };
-                            }
-
-                            const tyir::Ty expected_ty =
-                                apply_substitution(field_it->ty, substitution);
-                            if (!compatible(field.value->ty, expected_ty)) {
-                                if (auto unresolved = unresolved_compatibility_check(
-                                        field.value->ty, expected_ty, generic_params);
-                                    unresolved.has_value()) {
-                                    return *unresolved;
-                                }
-                                return {
-                                    ConstraintEvalKind::Unsatisfied,
-                                    "probed expression is not type-valid",
-                                    std::nullopt,
-                                };
-                            }
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
                         }
-                        for (const tyir::TyFieldDecl& decl_field : decl_it->second->fields) {
-                            if (seen_fields.count(decl_field.name) == 0) {
-                                return {
-                                    ConstraintEvalKind::Unsatisfied,
-                                    "probed expression is not type-valid",
-                                    std::nullopt,
-                                };
-                            }
-                        }
-                        defer_where_clause =
-                            generic_args_depend && !decl_it->second->lowered_where_clause.empty();
                     }
+                    for (const tyir::TyFieldDecl& decl_field : decl_it->second->fields) {
+                        if (seen_fields.count(decl_field.name) == 0) {
+                            return {
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
+                        }
+                    }
+                    defer_where_clause =
+                        generic_args_depend && !decl_it->second->lowered_where_clause.empty();
                     for (const tyir::TyStructInitField& field : node.fields) {
                         auto nested = self(self, field.value);
                         if (nested.kind != ConstraintEvalKind::Satisfied)
@@ -1726,6 +1730,12 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                         }
+                    } else {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
                     }
                     for (const tyir::TyExprPtr& arg : node.args) {
                         auto nested = self(self, arg);
