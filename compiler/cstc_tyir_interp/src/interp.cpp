@@ -505,20 +505,8 @@ struct ProbeOwnershipCheck {
 }
 
 static void release_uncaptured_temp_borrows(
-    ProbeOwnershipScope& scope, const std::vector<std::size_t>& temp_borrows,
-    std::optional<std::size_t> captured_borrowed_local) {
-    bool released_captured_borrow = false;
-    std::vector<std::size_t> remaining_borrows;
-    remaining_borrows.reserve(temp_borrows.size());
-    for (const std::size_t borrowed_local : temp_borrows) {
-        if (captured_borrowed_local.has_value() && borrowed_local == *captured_borrowed_local
-            && !released_captured_borrow) {
-            released_captured_borrow = true;
-            continue;
-        }
-        remaining_borrows.push_back(borrowed_local);
-    }
-    scope.release_temp_borrows(remaining_borrows);
+    ProbeOwnershipScope& scope, const std::vector<std::size_t>& temp_borrows) {
+    scope.release_temp_borrows(temp_borrows);
 }
 
 [[nodiscard]] static std::optional<std::size_t> escaped_current_frame_temp_borrow(
@@ -530,9 +518,128 @@ static void release_uncaptured_temp_borrows(
     return std::nullopt;
 }
 
+static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnershipScope& scope) {
+    struct BoundNames {
+        std::vector<std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash>> scopes;
+
+        void push() { scopes.emplace_back(); }
+        void pop() {
+            assert(!scopes.empty());
+            scopes.pop_back();
+        }
+        void bind(cstc::symbol::Symbol name) {
+            assert(!scopes.empty());
+            scopes.back().insert(name);
+        }
+        [[nodiscard]] bool contains(cstc::symbol::Symbol name) const {
+            for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
+                if (it->contains(name))
+                    return true;
+            }
+            return false;
+        }
+    };
+
+    BoundNames bound_names;
+    bound_names.push();
+    std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash> seeded;
+    const auto collect_expr = [&](const auto& self, const tyir::TyExprPtr& value) -> void {
+        if (value == nullptr)
+            return;
+        std::visit(
+            [&](const auto& node) {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (
+                    std::is_same_v<Node, tyir::TyLiteral>
+                    || std::is_same_v<Node, tyir::EnumVariantRef>
+                    || std::is_same_v<Node, tyir::TyContinue>) {
+                    return;
+                } else if constexpr (std::is_same_v<Node, tyir::LocalRef>) {
+                    if (!bound_names.contains(node.name) && seeded.insert(node.name).second)
+                        static_cast<void>(scope.ensure_external_local(node.name, value->ty));
+                } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                    for (const tyir::TyStructInitField& field : node.fields)
+                        self(self, field.value);
+                } else if constexpr (
+                    std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                    self(self, node.rhs);
+                } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                    self(self, node.lhs);
+                    self(self, node.rhs);
+                } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                    self(self, node.base);
+                } else if constexpr (
+                    std::is_same_v<Node, tyir::TyCall>
+                    || std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                    for (const tyir::TyExprPtr& arg : node.args)
+                        self(self, arg);
+                } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                    if (node.expr.has_value())
+                        self(self, *node.expr);
+                } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                    if (node == nullptr)
+                        return;
+                    bound_names.push();
+                    for (const tyir::TyStmt& stmt : node->stmts) {
+                        std::visit(
+                            [&](const auto& stmt_node) {
+                                using StmtNode = std::decay_t<decltype(stmt_node)>;
+                                if constexpr (std::is_same_v<StmtNode, tyir::TyLetStmt>) {
+                                    self(self, stmt_node.init);
+                                    if (!stmt_node.discard)
+                                        bound_names.bind(stmt_node.name);
+                                } else {
+                                    self(self, stmt_node.expr);
+                                }
+                            },
+                            stmt);
+                    }
+                    if (node->tail.has_value())
+                        self(self, *node->tail);
+                    bound_names.pop();
+                } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                    self(self, node.condition);
+                    self(
+                        self,
+                        tyir::make_ty_expr(value->span, node.then_block, node.then_block->ty));
+                    if (node.else_branch.has_value())
+                        self(self, *node.else_branch);
+                } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                    self(self, tyir::make_ty_expr(value->span, node.body, node.body->ty));
+                } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                    self(self, node.condition);
+                    self(self, tyir::make_ty_expr(value->span, node.body, node.body->ty));
+                } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                    bound_names.push();
+                    if (node.init.has_value()) {
+                        self(self, node.init->init);
+                        if (!node.init->discard)
+                            bound_names.bind(node.init->name);
+                    }
+                    if (node.condition.has_value())
+                        self(self, *node.condition);
+                    if (node.step.has_value())
+                        self(self, *node.step);
+                    self(self, tyir::make_ty_expr(value->span, node.body, node.body->ty));
+                    bound_names.pop();
+                } else {
+                    static_assert(
+                        std::is_same_v<Node, tyir::TyBreak>
+                        || std::is_same_v<Node, tyir::TyReturn>);
+                    if (node.value.has_value())
+                        self(self, *node.value);
+                }
+            },
+            value->node);
+    };
+
+    collect_expr(collect_expr, expr);
+}
+
 [[nodiscard]] static ConstraintEvalResult validate_decl_probe_ownership(
     const tyir::TyExprPtr& expr, const GenericParamSet& generic_params) {
     ProbeOwnershipScope scope;
+    seed_probe_external_locals(expr, scope);
     const auto validate_expr = [&](const auto& self, const tyir::TyExprPtr& value,
                                    ProbeOwnershipScope& current) -> ProbeOwnershipCheck {
         if (value == nullptr)
@@ -675,8 +782,7 @@ static void release_uncaptured_temp_borrows(
                                     if (!stmt_node.discard)
                                         current.insert(
                                             stmt_node.name, stmt_node.ty, borrowed_local);
-                                    release_uncaptured_temp_borrows(
-                                        current, init.temp_borrows, borrowed_local);
+                                    release_uncaptured_temp_borrows(current, init.temp_borrows);
                                     return satisfied_probe_ownership();
                                 } else {
                                     auto nested_expr = self(self, stmt_node.expr, current);
@@ -772,8 +878,9 @@ static void release_uncaptured_temp_borrows(
                         if (node.init->ty.is_ref())
                             borrowed_local = captured_borrowed_local(
                                 node.init->init, init.temp_borrows, current);
-                        current.insert(node.init->name, node.init->ty, borrowed_local);
-                        release_uncaptured_temp_borrows(current, init.temp_borrows, borrowed_local);
+                        if (!node.init->discard)
+                            current.insert(node.init->name, node.init->ty, borrowed_local);
+                        release_uncaptured_temp_borrows(current, init.temp_borrows);
                     }
                     if (node.condition.has_value()) {
                         auto condition = self(self, *node.condition, current);

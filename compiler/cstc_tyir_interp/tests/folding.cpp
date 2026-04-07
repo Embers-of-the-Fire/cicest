@@ -1665,6 +1665,86 @@ fn main() -> num {
     assert(error.message.find("function 'probe'") != std::string::npos);
 }
 
+static void test_decl_inner_ref_binding_releases_temp_borrow_on_scope_exit() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(s: T) -> num where decl({ { let r: &T = &s; 0 }; s }) {
+    0
+}
+
+fn main() -> num {
+    wrapper::<str>(to_str(1));
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
+static void test_decl_discarded_ref_binding_releases_temp_borrow() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(s: T) -> num where decl({ let _: &T = &s; s }) {
+    0
+}
+
+fn main() -> num {
+    wrapper::<str>(to_str(1));
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
+static void test_decl_for_ref_init_releases_temp_borrow_after_loop_scope() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(s: T) -> num where decl({ for (let r: &T = &s; false; 0) { }; s }) {
+    0
+}
+
+fn main() -> num {
+    wrapper::<str>(to_str(1));
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
+static void test_decl_for_discarded_ref_init_releases_temp_borrow() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(s: T) -> num where decl({ for (let _: &T = &s; false; 0) { }; s }) {
+    0
+}
+
+fn main() -> num {
+    wrapper::<str>(to_str(1));
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
 static void test_decl_generic_named_actual_to_bare_param_defers_until_substitution() {
     SymbolSession session;
     expect_decl_probe_recheck_case({
@@ -2610,6 +2690,10 @@ int main() {
     test_decl_block_borrow_escape_stays_invalid_through_outer_let();
     test_decl_generic_ref_local_keeps_temp_borrow_after_substitution();
     test_decl_generic_if_ref_local_rechecks_borrow_after_substitution();
+    test_decl_inner_ref_binding_releases_temp_borrow_on_scope_exit();
+    test_decl_discarded_ref_binding_releases_temp_borrow();
+    test_decl_for_ref_init_releases_temp_borrow_after_loop_scope();
+    test_decl_for_discarded_ref_init_releases_temp_borrow();
     test_decl_generic_named_actual_to_bare_param_defers_until_substitution();
     test_decl_generic_ref_actual_to_bare_param_defers_until_substitution();
     test_decl_generic_ref_unary_probe_is_immediately_invalid();
