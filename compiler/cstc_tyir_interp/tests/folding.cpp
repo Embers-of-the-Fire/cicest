@@ -1583,6 +1583,36 @@ fn main() -> num {
     });
 }
 
+static void test_decl_generic_ref_local_keeps_temp_borrow_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(s: T) -> T where decl({ let r: &T = &s; s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<num>(1)
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "1",
+        .failing_source = R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn probe<T>(s: T) -> T where decl({ let r: &T = &s; s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<str>(to_str(1));
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
 static void test_decl_generic_ref_unary_probe_is_immediately_invalid() {
     SymbolSession session;
     const auto program = must_fold_with_constraint_prelude(R"(
@@ -2330,6 +2360,7 @@ int main() {
     test_decl_generic_if_condition_probe_rechecks_after_substitution();
     test_decl_generic_let_annotation_probe_rechecks_after_substitution();
     test_decl_generic_if_branch_probe_rechecks_after_substitution();
+    test_decl_generic_ref_local_keeps_temp_borrow_after_substitution();
     test_decl_generic_ref_unary_probe_is_immediately_invalid();
     test_decl_generic_ref_condition_probe_is_immediately_invalid();
     test_decl_generic_ref_call_probe_is_immediately_invalid();

@@ -454,15 +454,53 @@ struct ProbeOwnershipCheck {
                 if (node.use_kind != tyir::ValueUseKind::Borrow)
                     return std::nullopt;
                 return scope.ensure_external_local(node.name, expr->ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBorrow>) {
+                return borrowed_owner_local(node.rhs, scope);
             } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
                 if (node.use_kind != tyir::ValueUseKind::Borrow)
                     return std::nullopt;
                 return borrowed_owner_local(node.base, scope);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                if (node == nullptr || !node->tail.has_value())
+                    return std::nullopt;
+                return borrowed_owner_local(*node->tail, scope);
             } else {
                 return std::nullopt;
             }
         },
         expr->node);
+}
+
+[[nodiscard]] static std::optional<std::size_t> captured_borrowed_local(
+    const tyir::TyExprPtr& expr, const std::vector<std::size_t>& temp_borrows,
+    ProbeOwnershipScope& scope) {
+    if (const auto borrowed_local = borrowed_owner_local(expr, scope); borrowed_local.has_value())
+        return borrowed_local;
+    if (temp_borrows.empty())
+        return std::nullopt;
+    const std::size_t borrowed_local = temp_borrows.front();
+    for (const std::size_t local : temp_borrows) {
+        if (local != borrowed_local)
+            return std::nullopt;
+    }
+    return borrowed_local;
+}
+
+static void release_uncaptured_temp_borrows(
+    ProbeOwnershipScope& scope, const std::vector<std::size_t>& temp_borrows,
+    std::optional<std::size_t> captured_borrowed_local) {
+    bool released_captured_borrow = false;
+    std::vector<std::size_t> remaining_borrows;
+    remaining_borrows.reserve(temp_borrows.size());
+    for (const std::size_t borrowed_local : temp_borrows) {
+        if (captured_borrowed_local.has_value() && borrowed_local == *captured_borrowed_local
+            && !released_captured_borrow) {
+            released_captured_borrow = true;
+            continue;
+        }
+        remaining_borrows.push_back(borrowed_local);
+    }
+    scope.release_temp_borrows(remaining_borrows);
 }
 
 [[nodiscard]] static ConstraintEvalResult validate_decl_probe_ownership(
@@ -597,20 +635,13 @@ struct ProbeOwnershipCheck {
                                         return init;
                                     std::optional<std::size_t> borrowed_local;
                                     if (stmt_node.ty.is_ref())
-                                        borrowed_local =
-                                            borrowed_owner_local(stmt_node.init, current);
+                                        borrowed_local = captured_borrowed_local(
+                                            stmt_node.init, init.temp_borrows, current);
                                     if (!stmt_node.discard)
                                         current.insert(
                                             stmt_node.name, stmt_node.ty, borrowed_local);
-                                    std::vector<std::size_t> remaining_borrows = init.temp_borrows;
-                                    if (borrowed_local.has_value()) {
-                                        remaining_borrows.erase(
-                                            std::remove(
-                                                remaining_borrows.begin(), remaining_borrows.end(),
-                                                *borrowed_local),
-                                            remaining_borrows.end());
-                                    }
-                                    current.release_temp_borrows(remaining_borrows);
+                                    release_uncaptured_temp_borrows(
+                                        current, init.temp_borrows, borrowed_local);
                                     return satisfied_probe_ownership();
                                 } else {
                                     auto nested_expr = self(self, stmt_node.expr, current);
@@ -691,17 +722,10 @@ struct ProbeOwnershipCheck {
                         }
                         std::optional<std::size_t> borrowed_local;
                         if (node.init->ty.is_ref())
-                            borrowed_local = borrowed_owner_local(node.init->init, current);
+                            borrowed_local = captured_borrowed_local(
+                                node.init->init, init.temp_borrows, current);
                         current.insert(node.init->name, node.init->ty, borrowed_local);
-                        std::vector<std::size_t> remaining_borrows = init.temp_borrows;
-                        if (borrowed_local.has_value()) {
-                            remaining_borrows.erase(
-                                std::remove(
-                                    remaining_borrows.begin(), remaining_borrows.end(),
-                                    *borrowed_local),
-                                remaining_borrows.end());
-                        }
-                        current.release_temp_borrows(remaining_borrows);
+                        release_uncaptured_temp_borrows(current, init.temp_borrows, borrowed_local);
                     }
                     if (node.condition.has_value()) {
                         auto condition = self(self, *node.condition, current);
