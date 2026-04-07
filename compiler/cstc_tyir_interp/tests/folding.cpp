@@ -1613,6 +1613,24 @@ fn main() -> num {
     });
 }
 
+static void test_decl_generic_if_ref_local_rechecks_borrow_after_substitution() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn probe<T>(s: T) -> T where decl({ let r: &T = if true { &s } else { &s }; s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<str>(to_str(1));
+    0
+}
+)");
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'probe'") != std::string::npos);
+}
+
 static void test_decl_generic_ref_unary_probe_is_immediately_invalid() {
     SymbolSession session;
     const auto program = must_fold_with_constraint_prelude(R"(
@@ -2361,6 +2379,7 @@ int main() {
     test_decl_generic_let_annotation_probe_rechecks_after_substitution();
     test_decl_generic_if_branch_probe_rechecks_after_substitution();
     test_decl_generic_ref_local_keeps_temp_borrow_after_substitution();
+    test_decl_generic_if_ref_local_rechecks_borrow_after_substitution();
     test_decl_generic_ref_unary_probe_is_immediately_invalid();
     test_decl_generic_ref_condition_probe_is_immediately_invalid();
     test_decl_generic_ref_call_probe_is_immediately_invalid();

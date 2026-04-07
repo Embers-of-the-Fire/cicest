@@ -460,6 +460,15 @@ struct ProbeOwnershipCheck {
                 if (node.use_kind != tyir::ValueUseKind::Borrow)
                     return std::nullopt;
                 return borrowed_owner_local(node.base, scope);
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                const auto then_local = borrowed_owner_local(
+                    tyir::make_ty_expr(expr->span, node.then_block, node.then_block->ty), scope);
+                if (!node.else_branch.has_value())
+                    return then_local;
+                const auto else_local = borrowed_owner_local(*node.else_branch, scope);
+                if (then_local.has_value() && else_local == then_local)
+                    return then_local;
+                return std::nullopt;
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 if (node == nullptr || !node->tail.has_value())
                     return std::nullopt;
