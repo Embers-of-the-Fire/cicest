@@ -632,6 +632,14 @@ static void release_uncaptured_temp_borrows(
                             temp_borrows.end(), nested.temp_borrows.begin(),
                             nested.temp_borrows.end());
                     }
+                    if (value->ty.is_ref()) {
+                        current.release_temp_borrows(temp_borrows);
+                        return failed_probe_ownership({
+                            ConstraintEvalKind::NotConstEvaluable,
+                            "reference-valued calls in decl probes are not modeled yet",
+                            std::nullopt,
+                        });
+                    }
                     current.release_temp_borrows(temp_borrows);
                     return satisfied_probe_ownership();
                 } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {

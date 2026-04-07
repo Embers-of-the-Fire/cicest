@@ -1762,6 +1762,46 @@ fn main() -> num {
         == Symbol::intern("Invalid"));
 }
 
+static void test_decl_generic_ref_returning_call_cannot_be_const_evaluated() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn id_ref<T>(value: T) -> T {
+    value
+}
+
+fn probe<T>(s: T) -> T where decl({ let r: &T = id_ref(&s); s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<num>(1)
+}
+)");
+
+    assert(error.message.find("function 'probe'") != std::string::npos);
+    assert(error.message.find("could not be const-evaluated") != std::string::npos);
+}
+
+static void test_decl_generic_reborrowed_ref_call_cannot_be_const_evaluated() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn id_ref<T>(value: T) -> T {
+    value
+}
+
+fn probe<T>(s: T) -> T where decl({ let r: &T = &s; let rr: &T = id_ref(r); s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<num>(1)
+}
+)");
+
+    assert(error.message.find("function 'probe'") != std::string::npos);
+    assert(error.message.find("could not be const-evaluated") != std::string::npos);
+}
+
 static void test_decl_generic_extern_call_probe_rechecks_after_substitution() {
     SymbolSession session;
     expect_decl_probe_recheck_case({
@@ -2463,6 +2503,8 @@ int main() {
     test_decl_generic_ref_unary_probe_is_immediately_invalid();
     test_decl_generic_ref_condition_probe_is_immediately_invalid();
     test_decl_generic_ref_call_probe_is_immediately_invalid();
+    test_decl_generic_ref_returning_call_cannot_be_const_evaluated();
+    test_decl_generic_reborrowed_ref_call_cannot_be_const_evaluated();
     test_decl_generic_extern_call_probe_rechecks_after_substitution();
     test_decl_generic_call_probe_bad_arity_is_unsatisfied();
     test_decl_generic_call_probe_bad_generic_arity_is_unsatisfied();
