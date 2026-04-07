@@ -1012,6 +1012,15 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                         }
+                        for (const tyir::TyFieldDecl& decl_field : decl_it->second->fields) {
+                            if (seen_fields.count(decl_field.name) == 0) {
+                                return {
+                                    ConstraintEvalKind::Unsatisfied,
+                                    "probed expression is not type-valid",
+                                    std::nullopt,
+                                };
+                            }
+                        }
                         defer_where_clause =
                             generic_args_depend && !decl_it->second->lowered_where_clause.empty();
                     }

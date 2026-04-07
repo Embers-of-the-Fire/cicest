@@ -1764,6 +1764,42 @@ fn probe() -> Constraint {
         == Symbol::intern("Invalid"));
 }
 
+static void test_decl_struct_probe_missing_field_is_invalid() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+struct Foo {
+    a: num
+}
+
+fn probe() -> Constraint {
+    decl(Foo { a: 1 })
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("probe"))
+            continue;
+        const auto& tail_expr = require_tail(*fn);
+        auto* decl_probe = std::get_if<TyDeclProbe>(&tail_expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* init = std::get_if<TyStructInit>(&(*decl_probe->expr)->node);
+        assert(init != nullptr);
+        assert(init->fields.size() == 1);
+        init->fields.clear();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+    assert(
+        require_constraint_variant(require_tail(find_fn(*folded, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
 static void test_decl_generic_struct_probe_bad_generic_arity_is_unsatisfied() {
     SymbolSession session;
     auto program = must_lower_with_constraint_prelude(R"(
@@ -2152,6 +2188,7 @@ int main() {
     test_decl_generic_call_probe_bad_generic_arity_is_unsatisfied();
     test_decl_generic_call_probe_bad_arity_beats_deferred_where_clause();
     test_decl_struct_probe_duplicate_field_is_invalid();
+    test_decl_struct_probe_missing_field_is_invalid();
     test_decl_generic_struct_probe_bad_generic_arity_is_unsatisfied();
     test_decl_generic_struct_probe_duplicate_field_beats_deferred_where_clause();
     test_generic_where_false_reports_constraint_failure();
