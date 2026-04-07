@@ -1631,6 +1631,84 @@ fn main() -> num {
     assert(error.message.find("function 'probe'") != std::string::npos);
 }
 
+static void test_decl_generic_named_actual_to_bare_param_defers_until_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+struct Box<T> {
+    value: T
+}
+
+fn probe<T>() -> Constraint {
+    decl({ let value: T = Box<num> { value: 0 }; value })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+struct Box<T> {
+    value: T
+}
+
+fn probe<T>() -> Constraint {
+    decl({ let value: T = Box<num> { value: 0 }; value })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<bool>()
+}
+)",
+        .failing_function = "wrapper",
+    });
+}
+
+static void test_decl_generic_ref_actual_to_bare_param_defers_until_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>() -> Constraint {
+    decl({ let n: num = 1; let value: T = &n; value })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+fn probe<T>() -> Constraint {
+    decl({ let n: num = 1; let value: T = &n; value })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<bool>()
+}
+)",
+        .failing_function = "wrapper",
+    });
+}
+
 static void test_decl_generic_ref_unary_probe_is_immediately_invalid() {
     SymbolSession session;
     const auto program = must_fold_with_constraint_prelude(R"(
@@ -2380,6 +2458,8 @@ int main() {
     test_decl_generic_if_branch_probe_rechecks_after_substitution();
     test_decl_generic_ref_local_keeps_temp_borrow_after_substitution();
     test_decl_generic_if_ref_local_rechecks_borrow_after_substitution();
+    test_decl_generic_named_actual_to_bare_param_defers_until_substitution();
+    test_decl_generic_ref_actual_to_bare_param_defers_until_substitution();
     test_decl_generic_ref_unary_probe_is_immediately_invalid();
     test_decl_generic_ref_condition_probe_is_immediately_invalid();
     test_decl_generic_ref_call_probe_is_immediately_invalid();

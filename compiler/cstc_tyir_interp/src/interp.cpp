@@ -270,6 +270,10 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
         return true;
     if (!type_shape_depends_on_generic_substitution(actual, expected, generic_params))
         return false;
+    if (type_is_generic_param(actual, generic_params)
+        || type_is_generic_param(expected, generic_params)) {
+        return true;
+    }
     if (actual.is_runtime && !expected.is_runtime)
         return false;
     if (actual.kind == tyir::TyKind::Ref) {
