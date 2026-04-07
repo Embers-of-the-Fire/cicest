@@ -384,6 +384,35 @@ static void test_fn_where_clause_rejects_parameter_references() {
         "function where clauses cannot reference parameter 'value'");
 }
 
+static void test_fn_decl_where_clause_allows_parameter_references_in_decl_probe() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn add<T>(a: T) -> T where decl(a + a) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    assert(fn.lowered_where_clause.size() == 1);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& binary = std::get<TyBinary>((*probe.expr)->node);
+    const auto& lhs = std::get<LocalRef>(binary.lhs->node);
+    const auto& rhs = std::get<LocalRef>(binary.rhs->node);
+    assert(lhs.name == Symbol::intern("a"));
+    assert(rhs.name == Symbol::intern("a"));
+    assert(fn.body->tail.has_value());
+    assert(std::holds_alternative<LocalRef>((*fn.body->tail)->node));
+}
+
+static void test_decl_probe_does_not_relax_matching_body_checks() {
+    must_fail_with_constraint_prelude(
+        "fn bad<T>(value: T) -> num where decl(value) { value }",
+        "function 'bad' body has type 'T' but return type is 'num'");
+}
+
+static void test_decl_probe_inside_disjunction_does_not_relax_matching_body_checks() {
+    must_fail_with_constraint_prelude(
+        "fn bad<T>(a: T) -> T where true || decl(a + a) { a + a }",
+        "arithmetic operator requires 'num' on left, found 'T'");
+}
+
 static void test_struct_where_clause_rejects_return() {
     must_fail_with_message(
         "struct Box<T> where if true { return true; } else { true } { value: T }",
@@ -474,6 +503,147 @@ static void test_decl_probe_preserves_generic_inner_call() {
     assert(call.generic_args[0].name == Symbol::intern("T"));
 }
 
+static void test_decl_probe_defers_generic_parameter_validation() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn probe<T>(a: T) -> T where decl(a + a) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& binary = std::get<TyBinary>((*probe.expr)->node);
+    assert(std::get<LocalRef>(binary.lhs->node).name == Symbol::intern("a"));
+    assert(std::get<LocalRef>(binary.rhs->node).name == Symbol::intern("a"));
+}
+
+static void test_decl_probe_defers_generic_ownership_validation_for_repeated_equality_uses() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn probe<T>(a: T) -> T where decl(a == a) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& binary = std::get<TyBinary>((*probe.expr)->node);
+    assert(std::get<LocalRef>(binary.lhs->node).name == Symbol::intern("a"));
+    assert(std::get<LocalRef>(binary.rhs->node).name == Symbol::intern("a"));
+}
+
+static void test_decl_probe_defers_generic_ownership_validation_for_repeated_block_uses() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn probe<T>(a: T) -> T where decl({ a; a }) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& block = *std::get<TyBlockPtr>((*probe.expr)->node);
+    assert(block.stmts.size() == 1);
+    assert(std::holds_alternative<TyExprStmt>(block.stmts[0]));
+    const auto& stmt = std::get<TyExprStmt>(block.stmts[0]);
+    assert(std::holds_alternative<LocalRef>(stmt.expr->node));
+    assert(block.tail.has_value());
+    assert(std::holds_alternative<LocalRef>((*block.tail)->node));
+}
+
+static void test_decl_probe_keeps_ref_shape_arithmetic_invalid() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn probe<T>(a: &T) where decl(a + a) { () }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(probe.is_invalid);
+    assert(!probe.expr.has_value());
+    assert(probe.invalid_reason.has_value());
+    assert(*probe.invalid_reason == "arithmetic operator requires 'num' on left, found '&T'");
+}
+
+static void test_decl_probe_defers_generic_let_annotation_validation() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn probe<T>(a: T) -> T where decl({ let x: num = a; x }) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& block = *std::get<TyBlockPtr>((*probe.expr)->node);
+    assert(block.stmts.size() == 1);
+    assert(std::holds_alternative<TyLetStmt>(block.stmts[0]));
+}
+
+static void test_decl_probe_defers_generic_if_branch_join_validation() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn probe<T>(a: T) -> T where decl(if true { 1 } else { a }) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    assert(std::holds_alternative<TyIf>((*probe.expr)->node));
+}
+
+static void test_decl_probe_keeps_ref_shape_if_join_invalid() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn probe<T>(a: &T) where decl(if true { 1 } else { a }) { () }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(probe.is_invalid);
+    assert(!probe.expr.has_value());
+    assert(probe.invalid_reason.has_value());
+}
+
+static void test_decl_probe_defers_generic_if_join_during_expected_type_resolution() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn id_num(value: num) -> num { value }"
+        "fn probe<T>(flag: bool, a: T) -> T where decl(id_num(if flag { a } else { 0 })) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& call = std::get<TyCall>((*probe.expr)->node);
+    assert(call.fn_name == Symbol::intern("id_num"));
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty == ty::num());
+    assert(std::holds_alternative<TyIf>(call.args[0]->node));
+}
+
+static void test_decl_probe_reannotates_deferred_generic_if_join_semantics() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "struct Wrapper<T> { value: T }"
+        "fn probe<T>(flag: bool, value: Wrapper<T>) -> Wrapper<T> where decl({ let joined = if "
+        "flag { value } else { Wrapper<num> { value: 0 } }; joined.value; joined.value }) { "
+        "value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& block = *std::get<TyBlockPtr>((*probe.expr)->node);
+    assert(block.stmts.size() == 2);
+    const auto& joined = std::get<TyLetStmt>(block.stmts[0]);
+    assert(
+        joined.ty
+        == ty::named(
+            Symbol::intern("Wrapper"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()}));
+}
+
+static void test_decl_probe_rejects_conflicting_generic_let_annotation_bindings() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "struct Pair<A, B> { left: A, right: B }"
+        "fn probe<T>(a: Pair<T, T>) -> Pair<T, T> where decl({ let x: Pair<num, bool> = a; x }) {"
+        " a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(probe.is_invalid);
+    assert(!probe.expr.has_value());
+    assert(probe.invalid_reason.has_value());
+}
+
+static void test_decl_probe_rejects_conflicting_generic_if_branch_join_bindings() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "struct Pair<A, B> { left: A, right: B }"
+        "fn probe<T>(a: Pair<T, T>) -> Pair<T, T> where decl(if true { a } else { Pair<num, bool>"
+        " { left: 1, right: false } }) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(probe.is_invalid);
+    assert(!probe.expr.has_value());
+    assert(probe.invalid_reason.has_value());
+}
+
 static void test_decl_probe_contains_unresolved_generic_inference_in_let() {
     const auto prog = must_lower_with_constraint_prelude(
         "fn make<T>() -> T { loop {} }"
@@ -487,6 +657,22 @@ static void test_decl_probe_contains_unresolved_generic_inference_in_let() {
     assert(std::holds_alternative<TyDeferredGenericCall>((*probe.expr)->node));
 }
 
+static void test_decl_probe_tentatively_accepts_explicit_outer_generic_call_arguments() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "fn id<T>(value: T) -> T { value }"
+        "fn probe<T>() -> Constraint where decl(id::<T>(0)) { Constraint::Valid }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& call = std::get<TyCall>((*probe.expr)->node);
+    assert(call.fn_name == Symbol::intern("id"));
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0].name == Symbol::intern("T"));
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty == ty::num());
+}
+
 static void test_decl_probe_does_not_drive_if_branch_join_inference() {
     must_fail_with_message(
         "[[lang = \"cstc_constraint\"]] enum Constraint { Valid, Invalid }"
@@ -495,6 +681,11 @@ static void test_decl_probe_does_not_drive_if_branch_join_inference() {
         "fn make<T>() -> T { loop {} }"
         "fn main(cond: bool) { if cond { decl(make()) } else { true }; }",
         "'if' then-branch has type 'Constraint' but else-branch has type 'bool'");
+}
+
+static void test_decl_probe_does_not_relax_unrelated_body_checks() {
+    must_fail_with_message(
+        "fn f<T>(a: T) -> bool where decl(1 + 1) { !a }", "unary '!' requires 'bool', found 'T'");
 }
 
 static void test_decl_runtime_use_is_rejected() {
@@ -697,6 +888,7 @@ int main() {
     test_runtime_fn_return_uses_runtime_sugar();
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();
+    test_fn_decl_where_clause_allows_parameter_references_in_decl_probe();
     test_struct_where_clause_rejects_return();
     test_fn_where_clause_rejects_return();
     test_fn_where_clause_lowers_generic_type_args();
@@ -705,8 +897,23 @@ int main() {
     test_decl_where_clause_lowers_to_constraint_probe();
     test_decl_probe_recovers_invalid_inner_expression();
     test_decl_probe_preserves_generic_inner_call();
+    test_decl_probe_defers_generic_parameter_validation();
+    test_decl_probe_defers_generic_ownership_validation_for_repeated_equality_uses();
+    test_decl_probe_defers_generic_ownership_validation_for_repeated_block_uses();
+    test_decl_probe_keeps_ref_shape_arithmetic_invalid();
+    test_decl_probe_defers_generic_let_annotation_validation();
+    test_decl_probe_defers_generic_if_branch_join_validation();
+    test_decl_probe_keeps_ref_shape_if_join_invalid();
+    test_decl_probe_defers_generic_if_join_during_expected_type_resolution();
+    test_decl_probe_reannotates_deferred_generic_if_join_semantics();
+    test_decl_probe_rejects_conflicting_generic_let_annotation_bindings();
+    test_decl_probe_rejects_conflicting_generic_if_branch_join_bindings();
     test_decl_probe_contains_unresolved_generic_inference_in_let();
+    test_decl_probe_tentatively_accepts_explicit_outer_generic_call_arguments();
     test_decl_probe_does_not_drive_if_branch_join_inference();
+    test_decl_probe_does_not_relax_unrelated_body_checks();
+    test_decl_probe_does_not_relax_matching_body_checks();
+    test_decl_probe_inside_disjunction_does_not_relax_matching_body_checks();
     test_decl_runtime_use_is_rejected();
     test_generic_type_arguments_lower_in_signatures();
     test_runtime_return_annotation_accepts_plain_value();

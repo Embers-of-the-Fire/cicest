@@ -266,6 +266,13 @@ static void test_runtime_arithmetic_prevents_demotion() {
         "body has type 'runtime num' but return type is 'num'");
 }
 
+static void test_runtime_deferred_generic_return_prevents_demotion() {
+    must_fail_with_message(
+        "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn f() -> num { make_default(true) }",
+        "body has type 'runtime num' but return type is 'num'");
+}
+
 static void test_runtime_comparison_preserves_runtime_type() {
     const auto prog =
         must_lower("fn f() -> runtime bool { source() < 2 } runtime fn source() -> num { 1 }");
@@ -420,6 +427,22 @@ static void test_for_loop() {
     assert(for_node.init->ty == ty::num());
     assert(for_node.condition.has_value());
     assert(for_node.step.has_value());
+}
+
+static void test_for_loop_annotation_resolves_direct_deferred_call() {
+    const auto prog = must_lower(
+        "fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn flag() -> bool { true }"
+        "fn f() { for (let x: num = make_default(flag()); ; ) { break; } }");
+    const auto& for_expr = *nth_fn(prog, 2).body->tail;
+    assert(std::holds_alternative<TyFor>(for_expr->node));
+    const auto& for_node = std::get<TyFor>(for_expr->node);
+    assert(for_node.init.has_value());
+    assert(for_node.init->ty == ty::num());
+    assert(for_node.init->init->ty == ty::num());
+    const auto& call = std::get<TyCall>(for_node.init->init->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
 }
 
 static void test_runtime_for_condition_accepted() {
@@ -898,6 +921,13 @@ static void test_return_type_resolves_deferred_call_through_if_branches() {
     assert(call.generic_args[0] == ty::num());
 }
 
+static void test_if_branch_join_keeps_runtime_on_deferred_generic_call() {
+    must_fail_with_message(
+        "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn f(cond: bool) -> num { if cond { make_default(true) } else { 0 } }",
+        "body has type 'runtime num' but return type is 'num'");
+}
+
 static void test_expected_type_resolves_nested_deferred_generic_argument() {
     const auto prog = must_lower(
         "fn make_default<T>(flag: bool) -> T { loop {} }"
@@ -1308,6 +1338,7 @@ int main() {
     test_nominal_ref_argument_mismatch_error();
     test_runtime_arithmetic_preserves_runtime_type();
     test_runtime_arithmetic_prevents_demotion();
+    test_runtime_deferred_generic_return_prevents_demotion();
     test_runtime_comparison_preserves_runtime_type();
     test_runtime_equality_preserves_runtime_type();
     test_runtime_logical_preserves_runtime_type();
@@ -1389,6 +1420,7 @@ int main() {
     test_block_divergence_with_break();
 
     test_fn_call();
+    test_for_loop_annotation_resolves_direct_deferred_call();
     test_call_undefined_fn_error();
     test_call_arg_count_error();
     test_call_arg_type_error();
@@ -1397,6 +1429,7 @@ int main() {
     test_let_annotation_resolves_deferred_call_in_block_tail();
     test_let_annotation_resolves_direct_deferred_call();
     test_return_type_resolves_deferred_call_through_if_branches();
+    test_if_branch_join_keeps_runtime_on_deferred_generic_call();
     test_expected_type_resolves_nested_deferred_generic_argument();
     test_deferred_resolution_uses_specialized_parameter_type();
     test_path_expr_rejects_bare_generic_args();

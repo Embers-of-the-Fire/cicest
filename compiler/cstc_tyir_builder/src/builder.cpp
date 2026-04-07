@@ -1,5 +1,7 @@
 #include <cstc_tyir_builder/builder.hpp>
 
+#include <cstc_tyir/type_compat.hpp>
+
 #include <algorithm>
 #include <cassert>
 #include <cctype>
@@ -16,6 +18,10 @@
 namespace cstc::tyir_builder {
 
 namespace detail {
+
+using tyir::common_type;
+using tyir::compatible;
+using tyir::matches_type_shape;
 
 // ─── Type environment ────────────────────────────────────────────────────────
 
@@ -306,6 +312,9 @@ using TypeSubstitution =
 
 [[nodiscard]] static tyir::Ty annotate_type_semantics(tyir::Ty ty, const TypeEnv& env);
 
+[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params);
+
 [[nodiscard]] static std::expected<TypeSubstitution, LowerError> build_substitution(
     const std::vector<cstc::ast::GenericParam>& generic_params,
     const std::vector<tyir::Ty>& generic_args, cstc::span::SourceSpan span,
@@ -326,7 +335,8 @@ using TypeSubstitution =
 
 [[nodiscard]] static std::expected<void, LowerError> infer_substitution(
     const tyir::Ty& pattern, const tyir::Ty& actual, const GenericParamSet& generic_params,
-    TypeSubstitution& subst, cstc::span::SourceSpan span, std::string_view owner_name) {
+    TypeSubstitution& subst, cstc::span::SourceSpan span, std::string_view owner_name,
+    const GenericParamSet* tentative_generic_params = nullptr) {
     if (is_generic_param_ty(pattern, generic_params)) {
         const auto found = subst.find(pattern.name);
         if (found == subst.end()) {
@@ -335,6 +345,11 @@ using TypeSubstitution =
         }
         if (found->second == actual)
             return {};
+        if (tentative_generic_params != nullptr
+            && type_may_be_compatible_after_generic_substitution(
+                found->second, actual, *tentative_generic_params)) {
+            return {};
+        }
         return make_error(
             span, "conflicting inferred types for generic parameter '"
                       + std::string(pattern.name.as_str()) + "' in '" + std::string(owner_name)
@@ -346,7 +361,8 @@ using TypeSubstitution =
     if (pattern.kind == tyir::TyKind::Ref) {
         if (pattern.pointee != nullptr && actual.pointee != nullptr)
             return infer_substitution(
-                *pattern.pointee, *actual.pointee, generic_params, subst, span, owner_name);
+                *pattern.pointee, *actual.pointee, generic_params, subst, span, owner_name,
+                tentative_generic_params);
         return {};
     }
     if (pattern.kind != tyir::TyKind::Named || pattern.name != actual.name
@@ -356,7 +372,7 @@ using TypeSubstitution =
     for (std::size_t index = 0; index < pattern.generic_args.size(); ++index) {
         auto result = infer_substitution(
             pattern.generic_args[index], actual.generic_args[index], generic_params, subst, span,
-            owner_name);
+            owner_name, tentative_generic_params);
         if (!result)
             return result;
     }
@@ -497,6 +513,7 @@ struct LowerCtx {
     const TypeEnv& env;
     Scope scope;
     GenericParamSet generic_params;
+    bool defer_generic_probe_validation = false;
     /// Return type of the function currently being lowered.
     tyir::Ty current_return_ty;
 
@@ -522,71 +539,279 @@ struct LowerCtx {
     }
 };
 
-// ─── Type compatibility ──────────────────────────────────────────────────────
+[[nodiscard]] static bool type_shapes_may_unify_after_generic_substitution(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params);
 
-/// Returns true when two types share the same non-`runtime` shape.
-[[nodiscard]] static bool same_type_shape(const tyir::Ty& lhs, const tyir::Ty& rhs) {
-    return lhs.same_shape_as(rhs);
+[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params,
+    TypeSubstitution& subst);
+
+[[nodiscard]] static std::optional<tyir::Ty> joined_type_after_generic_substitution(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params);
+
+[[nodiscard]] static std::optional<tyir::Ty> joined_type_after_generic_substitution(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params,
+    TypeSubstitution& subst);
+
+[[nodiscard]] static tyir::Ty resolve_tentative_generic_substitution(
+    const tyir::Ty& ty, const GenericParamSet& generic_params, const TypeSubstitution& subst) {
+    tyir::Ty resolved = ty;
+    while (is_generic_param_ty(resolved, generic_params)) {
+        const auto found = subst.find(resolved.name);
+        if (found == subst.end() || found->second == resolved)
+            break;
+        resolved = found->second;
+    }
+    return resolved;
 }
 
-/// Returns true when `actual` may appear where `expected` is required.
-///
-/// `Never` (bottom type) is compatible with any expected type.  Outside of
-/// `Never`, the only implicit conversion is `T -> runtime T`, applied
-/// structurally to the type tree.
-[[nodiscard]] static bool compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
-    if (actual.is_never())
+[[nodiscard]] static bool bind_tentative_generic_substitution(
+    const tyir::Ty& generic_ty, const tyir::Ty& other, const GenericParamSet& generic_params,
+    TypeSubstitution& subst) {
+    tyir::Ty resolved_generic =
+        resolve_tentative_generic_substitution(generic_ty, generic_params, subst);
+    tyir::Ty resolved_other = resolve_tentative_generic_substitution(other, generic_params, subst);
+
+    if (!is_generic_param_ty(resolved_generic, generic_params))
+        return resolved_generic == resolved_other;
+    if (resolved_other == resolved_generic)
         return true;
-    if (!same_type_shape(actual, expected))
-        return false;
-    if (actual.is_runtime && !expected.is_runtime)
-        return false;
-    if (actual.kind != tyir::TyKind::Ref)
+    if (is_generic_param_ty(resolved_other, generic_params)) {
+        subst[resolved_other.name] = resolved_generic;
         return true;
-    if (actual.pointee == nullptr || expected.pointee == nullptr)
-        return actual.pointee == expected.pointee;
-    return compatible(*actual.pointee, *expected.pointee);
+    }
+    subst[resolved_generic.name] = resolved_other;
+    return true;
 }
 
-/// Returns true when `actual` matches the structural shape expected by an
-/// ordinary expression operator or condition.
-///
-/// Unlike `compatible`, this ignores the `runtime` qualifier and therefore
-/// does not permit expression checks to double as coercion sites.
-[[nodiscard]] static bool matches_type_shape(const tyir::Ty& actual, const tyir::Ty& expected) {
-    return actual.is_never() || same_type_shape(actual, expected);
+[[nodiscard]] static bool should_defer_generic_probe_failure(
+    const tyir::Ty& actual, const tyir::Ty& expected, const LowerCtx& ctx,
+    const bool force_defer_validation) {
+    if (!ctx.defer_generic_probe_validation && !force_defer_validation)
+        return false;
+    if (!type_depends_on_generic_params(actual, ctx.generic_params)
+        && !type_depends_on_generic_params(expected, ctx.generic_params)) {
+        return false;
+    }
+    return type_may_be_compatible_after_generic_substitution(actual, expected, ctx.generic_params);
 }
 
-/// Returns the least common supertype of `lhs` and `rhs`, if one exists.
-///
-/// The runtime qualifier joins by promotion: mixing `T` with `runtime T`
-/// yields `runtime T`.
-[[nodiscard]] static std::optional<tyir::Ty> common_type(const tyir::Ty& lhs, const tyir::Ty& rhs) {
-    if (lhs.is_never())
-        return rhs;
-    if (rhs.is_never())
-        return lhs;
-    if (!same_type_shape(lhs, rhs))
+[[nodiscard]] static bool should_defer_generic_probe_failure(
+    const tyir::Ty& actual, const tyir::Ty& expected, const LowerCtx& ctx) {
+    return should_defer_generic_probe_failure(actual, expected, ctx, false);
+}
+
+[[nodiscard]] static bool
+    should_defer_generic_probe_ownership_validation(const tyir::Ty& ty, const LowerCtx& ctx) {
+    return ctx.defer_generic_probe_validation
+        && type_depends_on_generic_params(ty, ctx.generic_params);
+}
+
+[[nodiscard]] static bool type_shapes_may_unify_after_generic_substitution(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params) {
+    TypeSubstitution subst;
+    return joined_type_after_generic_substitution(lhs, rhs, generic_params, subst).has_value();
+}
+
+[[nodiscard]] static std::optional<tyir::Ty> joined_type_after_generic_substitution(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params) {
+    TypeSubstitution subst;
+    return joined_type_after_generic_substitution(lhs, rhs, generic_params, subst);
+}
+
+[[nodiscard]] static std::optional<tyir::Ty> joined_type_after_generic_substitution(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params,
+    TypeSubstitution& subst) {
+    const tyir::Ty resolved_lhs =
+        resolve_tentative_generic_substitution(lhs, generic_params, subst);
+    const tyir::Ty resolved_rhs =
+        resolve_tentative_generic_substitution(rhs, generic_params, subst);
+
+    if (resolved_lhs.is_never())
+        return tyir::Ty{resolved_rhs};
+    if (resolved_rhs.is_never())
+        return tyir::Ty{resolved_lhs};
+    if (is_generic_param_ty(resolved_lhs, generic_params)) {
+        if (!bind_tentative_generic_substitution(resolved_lhs, resolved_rhs, generic_params, subst))
+            return std::nullopt;
+        tyir::Ty joined =
+            resolve_tentative_generic_substitution(resolved_rhs, generic_params, subst);
+        joined.is_runtime = resolved_lhs.is_runtime || resolved_rhs.is_runtime;
+        if (!joined.display_name.is_valid())
+            joined.display_name = resolved_lhs.display_name;
+        return joined;
+    }
+    if (is_generic_param_ty(resolved_rhs, generic_params)) {
+        if (!bind_tentative_generic_substitution(resolved_rhs, resolved_lhs, generic_params, subst))
+            return std::nullopt;
+        tyir::Ty joined =
+            resolve_tentative_generic_substitution(resolved_lhs, generic_params, subst);
+        joined.is_runtime = resolved_lhs.is_runtime || resolved_rhs.is_runtime;
+        if (!joined.display_name.is_valid())
+            joined.display_name = resolved_rhs.display_name;
+        return joined;
+    }
+    if (resolved_lhs.kind != resolved_rhs.kind)
         return std::nullopt;
 
-    tyir::Ty joined = lhs;
-    joined.is_runtime = lhs.is_runtime || rhs.is_runtime;
+    tyir::Ty joined = resolved_lhs;
+    joined.is_runtime = resolved_lhs.is_runtime || resolved_rhs.is_runtime;
     if (!joined.display_name.is_valid())
-        joined.display_name = rhs.display_name;
+        joined.display_name = resolved_rhs.display_name;
 
-    if (joined.kind == tyir::TyKind::Ref) {
-        if (lhs.pointee == nullptr || rhs.pointee == nullptr) {
-            if (lhs.pointee != rhs.pointee)
-                return std::nullopt;
-        } else {
-            auto pointee = common_type(*lhs.pointee, *rhs.pointee);
-            if (!pointee.has_value())
-                return std::nullopt;
-            joined.pointee = std::make_shared<tyir::Ty>(std::move(*pointee));
+    switch (resolved_lhs.kind) {
+    case tyir::TyKind::Ref:
+        if (resolved_lhs.pointee == nullptr || resolved_rhs.pointee == nullptr) {
+            return resolved_lhs.pointee == resolved_rhs.pointee ? std::optional<tyir::Ty>{joined}
+                                                                : std::nullopt;
         }
+        if (auto pointee = joined_type_after_generic_substitution(
+                *resolved_lhs.pointee, *resolved_rhs.pointee, generic_params, subst);
+            pointee.has_value()) {
+            joined.pointee = std::make_shared<tyir::Ty>(std::move(*pointee));
+            return joined;
+        }
+        return std::nullopt;
+    case tyir::TyKind::Named:
+        if (resolved_lhs.name != resolved_rhs.name
+            || resolved_lhs.generic_args.size() != resolved_rhs.generic_args.size()) {
+            return std::nullopt;
+        }
+        joined.generic_args.clear();
+        joined.generic_args.reserve(resolved_lhs.generic_args.size());
+        for (std::size_t index = 0; index < resolved_lhs.generic_args.size(); ++index) {
+            auto arg = joined_type_after_generic_substitution(
+                resolved_lhs.generic_args[index], resolved_rhs.generic_args[index], generic_params,
+                subst);
+            if (!arg.has_value())
+                return std::nullopt;
+            joined.generic_args.push_back(std::move(*arg));
+        }
+        return joined;
+    case tyir::TyKind::Unit:
+    case tyir::TyKind::Num:
+    case tyir::TyKind::Str:
+    case tyir::TyKind::Bool:
+    case tyir::TyKind::Never: return joined;
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
+    TypeSubstitution subst;
+    return type_may_be_compatible_after_generic_substitution(
+        actual, expected, generic_params, subst);
+}
+
+[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params,
+    TypeSubstitution& subst) {
+    const tyir::Ty resolved_actual =
+        resolve_tentative_generic_substitution(actual, generic_params, subst);
+    const tyir::Ty resolved_expected =
+        resolve_tentative_generic_substitution(expected, generic_params, subst);
+
+    if (resolved_actual.is_never())
+        return true;
+
+    if (is_generic_param_ty(resolved_actual, generic_params)) {
+        if (resolved_actual.is_runtime && !resolved_expected.is_runtime
+            && !is_generic_param_ty(resolved_expected, generic_params)) {
+            return false;
+        }
+        return bind_tentative_generic_substitution(
+            resolved_actual, resolved_expected, generic_params, subst);
+    }
+    if (is_generic_param_ty(resolved_expected, generic_params)) {
+        return bind_tentative_generic_substitution(
+            resolved_expected, resolved_actual, generic_params, subst);
     }
 
-    return joined;
+    if (resolved_actual.kind != resolved_expected.kind)
+        return false;
+    if (resolved_actual.is_runtime && !resolved_expected.is_runtime)
+        return false;
+
+    switch (resolved_actual.kind) {
+    case tyir::TyKind::Ref:
+        if (resolved_actual.pointee == nullptr || resolved_expected.pointee == nullptr)
+            return resolved_actual.pointee == resolved_expected.pointee;
+        return type_may_be_compatible_after_generic_substitution(
+            *resolved_actual.pointee, *resolved_expected.pointee, generic_params, subst);
+    case tyir::TyKind::Named:
+        if (resolved_actual.name != resolved_expected.name
+            || resolved_actual.generic_args.size() != resolved_expected.generic_args.size()) {
+            return false;
+        }
+        for (std::size_t index = 0; index < resolved_actual.generic_args.size(); ++index) {
+            if (!type_may_be_compatible_after_generic_substitution(
+                    resolved_actual.generic_args[index], resolved_expected.generic_args[index],
+                    generic_params, subst)) {
+                return false;
+            }
+        }
+        return true;
+    case tyir::TyKind::Unit:
+    case tyir::TyKind::Num:
+    case tyir::TyKind::Str:
+    case tyir::TyKind::Bool:
+    case tyir::TyKind::Never: return true;
+    }
+    return false;
+}
+
+[[nodiscard]] static bool should_defer_generic_probe_common_type_failure(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const LowerCtx& ctx) {
+    if (!ctx.defer_generic_probe_validation)
+        return false;
+    if (!type_depends_on_generic_params(lhs, ctx.generic_params)
+        && !type_depends_on_generic_params(rhs, ctx.generic_params)) {
+        return false;
+    }
+    return type_shapes_may_unify_after_generic_substitution(lhs, rhs, ctx.generic_params);
+}
+
+[[nodiscard]] static std::optional<cstc::symbol::Symbol> find_unresolved_deferred_generic_call(
+    const tyir::TyExprPtr& expr, const TypeEnv& env, const GenericParamSet& generic_params);
+
+[[nodiscard]] static std::optional<tyir::Ty> deferred_generic_probe_join_type(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const LowerCtx& ctx) {
+    if (!ctx.defer_generic_probe_validation)
+        return std::nullopt;
+    if (!type_depends_on_generic_params(lhs, ctx.generic_params)
+        && !type_depends_on_generic_params(rhs, ctx.generic_params)) {
+        return std::nullopt;
+    }
+
+    auto joined = joined_type_after_generic_substitution(lhs, rhs, ctx.generic_params);
+    if (!joined.has_value())
+        return std::nullopt;
+
+    return annotate_type_semantics(std::move(*joined), ctx.env);
+}
+
+[[nodiscard]] static std::expected<tyir::Ty, LowerError> join_branch_types(
+    const tyir::Ty& then_ty, const tyir::Ty& else_ty, const tyir::TyExprPtr& then_expr,
+    const tyir::TyExprPtr& else_expr, cstc::span::SourceSpan span, const LowerCtx& ctx) {
+    if (const auto joined_ty = common_type(then_ty, else_ty); joined_ty.has_value())
+        return *joined_ty;
+
+    if (auto deferred_ty = deferred_generic_probe_join_type(then_ty, else_ty, ctx);
+        deferred_ty.has_value()) {
+        return *deferred_ty;
+    }
+
+    const bool then_needs_context =
+        find_unresolved_deferred_generic_call(then_expr, ctx.env, ctx.generic_params).has_value();
+    const bool else_needs_context =
+        find_unresolved_deferred_generic_call(else_expr, ctx.env, ctx.generic_params).has_value();
+    if (then_needs_context != else_needs_context)
+        return then_needs_context ? else_ty : then_ty;
+
+    return make_error(
+        span, "'if' then-branch has type '" + then_ty.display() + "' but else-branch has type '"
+                  + else_ty.display() + "'");
 }
 
 [[nodiscard]] static tyir::Ty unary_result_type(const tyir::Ty& operand, tyir::Ty result_shape) {
@@ -997,6 +1222,7 @@ struct LoweredExpr {
     tyir::TyExprPtr expr;
     std::vector<std::size_t> temp_borrows;
     std::optional<std::size_t> persistent_borrow_owner;
+    bool deferred_generic_probe_validation = false;
 };
 
 struct LoweredPlace {
@@ -1071,6 +1297,225 @@ static void consume_temp_borrow(std::vector<std::size_t>& borrows, std::size_t o
 
 using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::SymbolHash>;
 
+template <typename Result>
+struct WhereWalkResultTraits;
+
+template <>
+struct WhereWalkResultTraits<bool> {
+    [[nodiscard]] static constexpr bool empty() { return false; }
+    [[nodiscard]] static constexpr bool found(const bool value) { return value; }
+};
+
+template <typename T>
+struct WhereWalkResultTraits<std::optional<T>> {
+    [[nodiscard]] static std::optional<T> empty() { return std::nullopt; }
+    [[nodiscard]] static bool found(const std::optional<T>& value) { return value.has_value(); }
+};
+
+struct WhereWalkContext {
+    bool allow_call_position_path = false;
+};
+
+template <typename Visitor>
+[[nodiscard]] static typename Visitor::Result walk_where_expr(
+    const ast::ExprPtr& expr, Visitor& visitor, WhereWalkContext ctx = WhereWalkContext{});
+
+template <typename Visitor>
+[[nodiscard]] static typename Visitor::Result
+    walk_where_block(const ast::BlockPtr& block, Visitor& visitor);
+
+template <typename Visitor>
+static void walk_where_enter_scope(Visitor& visitor) {
+    if constexpr (requires { visitor.enter_scope(); })
+        visitor.enter_scope();
+}
+
+template <typename Visitor>
+static void walk_where_leave_scope(Visitor& visitor) {
+    if constexpr (requires { visitor.leave_scope(); })
+        visitor.leave_scope();
+}
+
+template <typename Visitor>
+static void walk_where_bind_local(Visitor& visitor, cstc::symbol::Symbol name) {
+    if constexpr (requires { visitor.bind_local(name); })
+        visitor.bind_local(name);
+}
+
+template <typename Visitor, typename Node>
+[[nodiscard]] static bool
+    walk_where_should_descend(Visitor& visitor, const Node& node, const WhereWalkContext& ctx) {
+    if constexpr (requires { visitor.should_descend(node, ctx); })
+        return visitor.should_descend(node, ctx);
+    return true;
+}
+
+template <typename Visitor>
+[[nodiscard]] static typename Visitor::Result
+    walk_where_expr(const ast::ExprPtr& expr, Visitor& visitor, const WhereWalkContext ctx) {
+    using Result = typename Visitor::Result;
+    using Traits = WhereWalkResultTraits<Result>;
+
+    if (expr == nullptr)
+        return Traits::empty();
+
+    return std::visit(
+        [&](const auto& node) -> Result {
+            if (auto result = visitor.inspect(expr, node, ctx); Traits::found(result))
+                return result;
+            if (!walk_where_should_descend(visitor, node, ctx))
+                return Traits::empty();
+
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (
+                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::PathExpr>
+                || std::is_same_v<Node, ast::ContinueExpr>) {
+                return Traits::empty();
+            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
+                for (const ast::StructInitField& field : node.fields) {
+                    auto result = walk_where_expr(field.value, visitor);
+                    if (Traits::found(result))
+                        return result;
+                }
+                return Traits::empty();
+            } else if constexpr (std::is_same_v<Node, ast::GenericAppExpr>) {
+                return walk_where_expr(
+                    node.callee, visitor, WhereWalkContext{.allow_call_position_path = true});
+            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
+                return walk_where_expr(node.rhs, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
+                auto lhs = walk_where_expr(node.lhs, visitor);
+                if (Traits::found(lhs))
+                    return lhs;
+                return walk_where_expr(node.rhs, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
+                return walk_where_expr(node.base, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
+                auto callee = walk_where_expr(
+                    node.callee, visitor, WhereWalkContext{.allow_call_position_path = true});
+                if (Traits::found(callee))
+                    return callee;
+                for (const ast::ExprPtr& arg : node.args) {
+                    auto result = walk_where_expr(arg, visitor);
+                    if (Traits::found(result))
+                        return result;
+                }
+                return Traits::empty();
+            } else if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
+                return walk_where_expr(node.expr, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
+                return walk_where_block(node, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
+                auto condition = walk_where_expr(node.condition, visitor);
+                if (Traits::found(condition))
+                    return condition;
+                auto then_block = walk_where_block(node.then_block, visitor);
+                if (Traits::found(then_block))
+                    return then_block;
+                if (node.else_branch.has_value())
+                    return walk_where_expr(*node.else_branch, visitor);
+                return Traits::empty();
+            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
+                return walk_where_block(node.body, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
+                auto condition = walk_where_expr(node.condition, visitor);
+                if (Traits::found(condition))
+                    return condition;
+                return walk_where_block(node.body, visitor);
+            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
+                walk_where_enter_scope(visitor);
+                if (node.init.has_value()) {
+                    auto init = std::visit(
+                        [&](const auto& init_node) -> Result {
+                            using InitNode = std::decay_t<decltype(init_node)>;
+                            if constexpr (std::is_same_v<InitNode, ast::ForInitLet>) {
+                                auto result = walk_where_expr(init_node.initializer, visitor);
+                                if (Traits::found(result))
+                                    return result;
+                                if (!init_node.discard && init_node.name.is_valid())
+                                    walk_where_bind_local(visitor, init_node.name);
+                                return Traits::empty();
+                            } else {
+                                return walk_where_expr(init_node, visitor);
+                            }
+                        },
+                        *node.init);
+                    if (Traits::found(init)) {
+                        walk_where_leave_scope(visitor);
+                        return init;
+                    }
+                }
+                if (node.condition.has_value()) {
+                    auto condition = walk_where_expr(*node.condition, visitor);
+                    if (Traits::found(condition)) {
+                        walk_where_leave_scope(visitor);
+                        return condition;
+                    }
+                }
+                if (node.step.has_value()) {
+                    auto step = walk_where_expr(*node.step, visitor);
+                    if (Traits::found(step)) {
+                        walk_where_leave_scope(visitor);
+                        return step;
+                    }
+                }
+                auto body = walk_where_block(node.body, visitor);
+                walk_where_leave_scope(visitor);
+                return body;
+            } else if constexpr (
+                std::is_same_v<Node, ast::BreakExpr> || std::is_same_v<Node, ast::ReturnExpr>) {
+                if (node.value.has_value())
+                    return walk_where_expr(*node.value, visitor);
+                return Traits::empty();
+            }
+        },
+        expr->node);
+}
+
+template <typename Visitor>
+[[nodiscard]] static typename Visitor::Result
+    walk_where_block(const ast::BlockPtr& block, Visitor& visitor) {
+    using Result = typename Visitor::Result;
+    using Traits = WhereWalkResultTraits<Result>;
+
+    if (block == nullptr)
+        return Traits::empty();
+
+    walk_where_enter_scope(visitor);
+    for (const ast::Stmt& stmt : block->statements) {
+        auto result = std::visit(
+            [&](const auto& node) -> Result {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<Node, ast::LetStmt>) {
+                    auto init = walk_where_expr(node.initializer, visitor);
+                    if (Traits::found(init))
+                        return init;
+                    if (!node.discard && node.name.is_valid())
+                        walk_where_bind_local(visitor, node.name);
+                    return Traits::empty();
+                } else {
+                    return walk_where_expr(node.expr, visitor);
+                }
+            },
+            stmt);
+        if (Traits::found(result)) {
+            walk_where_leave_scope(visitor);
+            return result;
+        }
+    }
+
+    if (block->tail.has_value()) {
+        auto tail = walk_where_expr(*block->tail, visitor);
+        if (Traits::found(tail)) {
+            walk_where_leave_scope(visitor);
+            return tail;
+        }
+    }
+
+    walk_where_leave_scope(visitor);
+    return Traits::empty();
+}
+
 [[nodiscard]] static bool
     has_local_binding(const std::vector<LocalNameSet>& scopes, cstc::symbol::Symbol name) {
     for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
@@ -1080,298 +1525,74 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
     return false;
 }
 
+struct ReturnInWhereVisitor {
+    using Result = std::optional<LowerError>;
+
+    template <typename Node>
+    [[nodiscard]] Result
+        inspect(const ast::ExprPtr& expr, const Node& node, const WhereWalkContext& ctx) const {
+        (void)node;
+        (void)ctx;
+        if constexpr (std::is_same_v<Node, ast::ReturnExpr>) {
+            return LowerError{expr->span, "where clauses cannot contain 'return'", std::nullopt};
+        }
+        return std::nullopt;
+    }
+};
+
+struct ParamReferenceVisitor {
+    using Result = std::optional<LowerError>;
+
+    const LocalNameSet& param_names;
+    std::vector<LocalNameSet>& scopes;
+
+    template <typename Node>
+    [[nodiscard]] Result
+        inspect(const ast::ExprPtr& expr, const Node& node, const WhereWalkContext& ctx) const {
+        if constexpr (std::is_same_v<Node, ast::PathExpr>) {
+            if (!ctx.allow_call_position_path && !node.tail.has_value()
+                && param_names.contains(node.head) && !has_local_binding(scopes, node.head)) {
+                return LowerError{
+                    expr->span,
+                    "function where clauses cannot reference parameter '"
+                        + display_symbol(node.display_head, node.head) + "'",
+                    std::nullopt,
+                };
+            }
+        }
+        return std::nullopt;
+    }
+
+    void enter_scope() { scopes.emplace_back(); }
+    void leave_scope() { scopes.pop_back(); }
+    void bind_local(const cstc::symbol::Symbol name) { scopes.back().insert(name); }
+
+    template <typename Node>
+    [[nodiscard]] static constexpr bool
+        should_descend(const Node& node, const WhereWalkContext& ctx) {
+        (void)node;
+        (void)ctx;
+        return !std::is_same_v<Node, ast::DeclExpr>;
+    }
+};
+
 [[nodiscard]] static std::optional<LowerError> find_param_reference_in_expr(
     const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes,
     bool allow_call_position_path = false);
 
 [[nodiscard]] static std::optional<LowerError> find_return_in_where_expr(const ast::ExprPtr& expr);
 
-[[nodiscard]] static std::optional<LowerError>
-    find_return_in_where_block(const ast::BlockPtr& block) {
-    if (block == nullptr)
-        return std::nullopt;
-
-    for (const ast::Stmt& stmt : block->statements) {
-        auto result = std::visit(
-            [&](const auto& node) -> std::optional<LowerError> {
-                using Node = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<Node, ast::LetStmt>)
-                    return find_return_in_where_expr(node.initializer);
-                else
-                    return find_return_in_where_expr(node.expr);
-            },
-            stmt);
-        if (result.has_value())
-            return result;
-    }
-
-    if (block->tail.has_value())
-        return find_return_in_where_expr(*block->tail);
-
-    return std::nullopt;
-}
-
-[[nodiscard]] static std::optional<LowerError> find_param_reference_in_block(
-    const ast::BlockPtr& block, const LocalNameSet& param_names,
-    std::vector<LocalNameSet>& scopes) {
-    if (block == nullptr)
-        return std::nullopt;
-
-    scopes.emplace_back();
-    for (const ast::Stmt& stmt : block->statements) {
-        auto result = std::visit(
-            [&](const auto& node) -> std::optional<LowerError> {
-                using Node = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<Node, ast::LetStmt>) {
-                    auto init = find_param_reference_in_expr(node.initializer, param_names, scopes);
-                    if (init.has_value())
-                        return init;
-                    if (!node.discard && node.name.is_valid())
-                        scopes.back().insert(node.name);
-                    return std::nullopt;
-                } else {
-                    return find_param_reference_in_expr(node.expr, param_names, scopes);
-                }
-            },
-            stmt);
-        if (result.has_value()) {
-            scopes.pop_back();
-            return result;
-        }
-    }
-
-    if (block->tail.has_value()) {
-        auto tail = find_param_reference_in_expr(*block->tail, param_names, scopes);
-        if (tail.has_value()) {
-            scopes.pop_back();
-            return tail;
-        }
-    }
-
-    scopes.pop_back();
-    return std::nullopt;
-}
-
 [[nodiscard]] static std::optional<LowerError> find_param_reference_in_expr(
     const ast::ExprPtr& expr, const LocalNameSet& param_names, std::vector<LocalNameSet>& scopes,
     const bool allow_call_position_path) {
-    if (expr == nullptr)
-        return std::nullopt;
-
-    return std::visit(
-        [&](const auto& node) -> std::optional<LowerError> {
-            using Node = std::decay_t<decltype(node)>;
-            if constexpr (
-                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::ContinueExpr>) {
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::PathExpr>) {
-                if (!allow_call_position_path && !node.tail.has_value()
-                    && param_names.contains(node.head) && !has_local_binding(scopes, node.head)) {
-                    return LowerError{
-                        expr->span,
-                        "function where clauses cannot reference parameter '"
-                            + display_symbol(node.display_head, node.head) + "'",
-                        std::nullopt,
-                    };
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
-                for (const ast::StructInitField& field : node.fields) {
-                    auto result = find_param_reference_in_expr(field.value, param_names, scopes);
-                    if (result.has_value())
-                        return result;
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::GenericAppExpr>) {
-                return find_param_reference_in_expr(node.callee, param_names, scopes, true);
-            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
-                return find_param_reference_in_expr(node.rhs, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
-                auto lhs = find_param_reference_in_expr(node.lhs, param_names, scopes);
-                if (lhs.has_value())
-                    return lhs;
-                return find_param_reference_in_expr(node.rhs, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
-                return find_param_reference_in_expr(node.base, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
-                auto callee = find_param_reference_in_expr(node.callee, param_names, scopes, true);
-                if (callee.has_value())
-                    return callee;
-                for (const ast::ExprPtr& arg : node.args) {
-                    auto result = find_param_reference_in_expr(arg, param_names, scopes);
-                    if (result.has_value())
-                        return result;
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
-                return find_param_reference_in_expr(node.expr, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
-                return find_param_reference_in_block(node, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
-                auto condition = find_param_reference_in_expr(node.condition, param_names, scopes);
-                if (condition.has_value())
-                    return condition;
-                auto then_block =
-                    find_param_reference_in_block(node.then_block, param_names, scopes);
-                if (then_block.has_value())
-                    return then_block;
-                if (node.else_branch.has_value())
-                    return find_param_reference_in_expr(*node.else_branch, param_names, scopes);
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
-                return find_param_reference_in_block(node.body, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
-                auto condition = find_param_reference_in_expr(node.condition, param_names, scopes);
-                if (condition.has_value())
-                    return condition;
-                return find_param_reference_in_block(node.body, param_names, scopes);
-            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
-                scopes.emplace_back();
-                if (node.init.has_value()) {
-                    auto init = std::visit(
-                        [&](const auto& init_node) -> std::optional<LowerError> {
-                            using InitNode = std::decay_t<decltype(init_node)>;
-                            if constexpr (std::is_same_v<InitNode, ast::ForInitLet>) {
-                                auto result = find_param_reference_in_expr(
-                                    init_node.initializer, param_names, scopes);
-                                if (result.has_value())
-                                    return result;
-                                if (!init_node.discard && init_node.name.is_valid())
-                                    scopes.back().insert(init_node.name);
-                                return std::nullopt;
-                            } else {
-                                return find_param_reference_in_expr(init_node, param_names, scopes);
-                            }
-                        },
-                        *node.init);
-                    if (init.has_value()) {
-                        scopes.pop_back();
-                        return init;
-                    }
-                }
-                if (node.condition.has_value()) {
-                    auto condition =
-                        find_param_reference_in_expr(*node.condition, param_names, scopes);
-                    if (condition.has_value()) {
-                        scopes.pop_back();
-                        return condition;
-                    }
-                }
-                if (node.step.has_value()) {
-                    auto step = find_param_reference_in_expr(*node.step, param_names, scopes);
-                    if (step.has_value()) {
-                        scopes.pop_back();
-                        return step;
-                    }
-                }
-                auto body = find_param_reference_in_block(node.body, param_names, scopes);
-                scopes.pop_back();
-                return body;
-            } else if constexpr (
-                std::is_same_v<Node, ast::BreakExpr> || std::is_same_v<Node, ast::ReturnExpr>) {
-                if (node.value.has_value())
-                    return find_param_reference_in_expr(*node.value, param_names, scopes);
-                return std::nullopt;
-            }
-        },
-        expr->node);
+    ParamReferenceVisitor visitor{param_names, scopes};
+    return walk_where_expr(
+        expr, visitor, WhereWalkContext{.allow_call_position_path = allow_call_position_path});
 }
 
 [[nodiscard]] static std::optional<LowerError> find_return_in_where_expr(const ast::ExprPtr& expr) {
-    if (expr == nullptr)
-        return std::nullopt;
-
-    return std::visit(
-        [&](const auto& node) -> std::optional<LowerError> {
-            using Node = std::decay_t<decltype(node)>;
-            if constexpr (
-                std::is_same_v<Node, ast::LiteralExpr> || std::is_same_v<Node, ast::PathExpr>
-                || std::is_same_v<Node, ast::ContinueExpr>) {
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::StructInitExpr>) {
-                for (const ast::StructInitField& field : node.fields) {
-                    auto result = find_return_in_where_expr(field.value);
-                    if (result.has_value())
-                        return result;
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::GenericAppExpr>) {
-                return find_return_in_where_expr(node.callee);
-            } else if constexpr (std::is_same_v<Node, ast::UnaryExpr>) {
-                return find_return_in_where_expr(node.rhs);
-            } else if constexpr (std::is_same_v<Node, ast::BinaryExpr>) {
-                auto lhs = find_return_in_where_expr(node.lhs);
-                if (lhs.has_value())
-                    return lhs;
-                return find_return_in_where_expr(node.rhs);
-            } else if constexpr (std::is_same_v<Node, ast::FieldAccessExpr>) {
-                return find_return_in_where_expr(node.base);
-            } else if constexpr (std::is_same_v<Node, ast::CallExpr>) {
-                auto callee = find_return_in_where_expr(node.callee);
-                if (callee.has_value())
-                    return callee;
-                for (const ast::ExprPtr& arg : node.args) {
-                    auto result = find_return_in_where_expr(arg);
-                    if (result.has_value())
-                        return result;
-                }
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::DeclExpr>) {
-                return find_return_in_where_expr(node.expr);
-            } else if constexpr (std::is_same_v<Node, ast::BlockPtr>) {
-                return find_return_in_where_block(node);
-            } else if constexpr (std::is_same_v<Node, ast::IfExpr>) {
-                auto condition = find_return_in_where_expr(node.condition);
-                if (condition.has_value())
-                    return condition;
-                auto then_block = find_return_in_where_block(node.then_block);
-                if (then_block.has_value())
-                    return then_block;
-                if (node.else_branch.has_value())
-                    return find_return_in_where_expr(*node.else_branch);
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
-                return find_return_in_where_block(node.body);
-            } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
-                auto condition = find_return_in_where_expr(node.condition);
-                if (condition.has_value())
-                    return condition;
-                return find_return_in_where_block(node.body);
-            } else if constexpr (std::is_same_v<Node, ast::ForExpr>) {
-                if (node.init.has_value()) {
-                    auto init = std::visit(
-                        [&](const auto& init_node) -> std::optional<LowerError> {
-                            using InitNode = std::decay_t<decltype(init_node)>;
-                            if constexpr (std::is_same_v<InitNode, ast::ForInitLet>)
-                                return find_return_in_where_expr(init_node.initializer);
-                            else
-                                return find_return_in_where_expr(init_node);
-                        },
-                        *node.init);
-                    if (init.has_value())
-                        return init;
-                }
-                if (node.condition.has_value()) {
-                    auto condition = find_return_in_where_expr(*node.condition);
-                    if (condition.has_value())
-                        return condition;
-                }
-                if (node.step.has_value()) {
-                    auto step = find_return_in_where_expr(*node.step);
-                    if (step.has_value())
-                        return step;
-                }
-                return find_return_in_where_block(node.body);
-            } else if constexpr (std::is_same_v<Node, ast::BreakExpr>) {
-                if (node.value.has_value())
-                    return find_return_in_where_expr(*node.value);
-                return std::nullopt;
-            } else if constexpr (std::is_same_v<Node, ast::ReturnExpr>) {
-                return LowerError{
-                    expr->span, "where clauses cannot contain 'return'", std::nullopt};
-            }
-        },
-        expr->node);
+    ReturnInWhereVisitor visitor;
+    return walk_where_expr(expr, visitor);
 }
 
 [[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
@@ -1423,12 +1644,11 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
 
         if (if_expr->else_branch.has_value()) {
             const tyir::Ty else_ty = (*if_expr->else_branch)->ty;
-            const auto joined_ty = common_type(if_expr->then_block->ty, else_ty);
-            if (!joined_ty.has_value()) {
-                return make_error(
-                    expr->span, "'if' then-branch has type '" + if_expr->then_block->ty.display()
-                                    + "' but else-branch has type '" + else_ty.display() + "'");
-            }
+            auto joined_ty = join_branch_types(
+                if_expr->then_block->ty, else_ty, if_expr->then_block->tail.value_or(nullptr),
+                *if_expr->else_branch, expr->span, ctx);
+            if (!joined_ty)
+                return std::unexpected(std::move(joined_ty.error()));
             expr->ty = *joined_ty;
         }
         return expr;
@@ -1452,7 +1672,8 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
 
     auto inferred = infer_substitution(
         sig.return_ty, expected_ty, generic_param_set, substitution, expr->span,
-        std::string_view{deferred->fn_name.as_str()});
+        std::string_view{deferred->fn_name.as_str()},
+        ctx.defer_generic_probe_validation ? &ctx.generic_params : nullptr);
     if (!inferred)
         return std::unexpected(std::move(inferred.error()));
 
@@ -1543,6 +1764,7 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
     }
 
     LowerCtx probe_ctx = ctx;
+    probe_ctx.defer_generic_probe_validation = true;
     auto lowered = lower_expr(expr, probe_ctx);
     if (!lowered) {
         return tyir::make_ty_expr(
@@ -1583,7 +1805,7 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
         const std::vector<cstc::ast::GenericParam>& generic_params = {},
         const std::vector<tyir::TyParam>* params = nullptr,
         const tyir::Ty& current_return_ty = tyir::ty::unit()) {
-    LowerCtx ctx{env, {}, make_generic_param_set(generic_params), current_return_ty, {}};
+    LowerCtx ctx{env, {}, make_generic_param_set(generic_params), false, current_return_ty, {}};
     ctx.scope.push();
     for (const cstc::ast::GenericConstraint& constraint : constraints) {
         auto invalid_return = find_return_in_where_expr(constraint.expr);
@@ -1605,6 +1827,14 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
             if (param_ref.has_value()) {
                 ctx.scope.pop();
                 return std::unexpected(std::move(*param_ref));
+            }
+        }
+
+        for (const tyir::TyParam& param : *params) {
+            if (!ctx.scope.insert(param.name, param.ty)) {
+                ctx.scope.pop();
+                return make_error(
+                    param.span, "duplicate parameter '" + std::string(param.name.as_str()) + "'");
             }
         }
     }
@@ -1783,7 +2013,9 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
                     if (!resolved_init)
                         return std::unexpected(std::move(resolved_init.error()));
                     init->expr = std::move(*resolved_init);
-                    if (!compatible(init->expr->ty, *ann))
+                    if (!compatible(init->expr->ty, *ann)
+                        && !should_defer_generic_probe_failure(
+                            init->expr->ty, *ann, ctx, init->deferred_generic_probe_validation))
                         return make_error(
                             s.span, "type mismatch in let binding: expected '" + ann->display()
                                         + "', found '" + init->expr->ty.display() + "'");
@@ -1968,8 +2200,25 @@ using LocalNameSet = std::unordered_set<cstc::symbol::Symbol, cstc::symbol::Symb
 
 // ─── Expression lowering ─────────────────────────────────────────────────────
 
+[[nodiscard]] static std::expected<tyir::Ty, LowerError> join_loop_break_types(
+    const tyir::Ty& existing, const tyir::Ty& incoming, cstc::span::SourceSpan span,
+    const LowerCtx& ctx) {
+    if (const auto joined = common_type(existing, incoming); joined.has_value())
+        return *joined;
+
+    if (auto deferred_ty = deferred_generic_probe_join_type(existing, incoming, ctx);
+        deferred_ty.has_value()) {
+        return *deferred_ty;
+    }
+
+    return make_error(
+        span, "'break' value type mismatch: expected '" + existing.display() + "', found '"
+                  + incoming.display() + "'");
+}
+
 static std::expected<void, LowerError> merge_loop_break_types(
-    std::vector<LoopCtx>& target, const std::vector<LoopCtx>& source, cstc::span::SourceSpan span) {
+    std::vector<LoopCtx>& target, const std::vector<LoopCtx>& source, cstc::span::SourceSpan span,
+    const LowerCtx& ctx) {
     assert(target.size() == source.size());
     for (std::size_t i = 0; i < target.size(); ++i) {
         if (!source[i].break_ty.has_value())
@@ -1981,11 +2230,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
         const tyir::Ty& existing = *target[i].break_ty;
         const tyir::Ty& incoming = *source[i].break_ty;
-        const auto joined = common_type(existing, incoming);
-        if (!joined.has_value())
-            return make_error(
-                span, "'break' value type mismatch: expected '" + existing.display() + "', found '"
-                          + incoming.display() + "'");
+        auto joined = join_loop_break_types(existing, incoming, span, ctx);
+        if (!joined)
+            return std::unexpected(std::move(joined.error()));
         target[i].break_ty = *joined;
     }
     return {};
@@ -2069,10 +2316,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
 }
 
 [[nodiscard]] static std::expected<LoweredExpr, LowerError>
-    lower_expr(const ast::ExprPtr& expr, LowerCtx& ctx) {
+    lower_expr(const ast::ExprPtr& expr, LowerCtx& outer_ctx) {
     assert(expr != nullptr);
 
-    return std::visit(
+    LowerCtx& ctx = outer_ctx;
+
+    auto lowered = std::visit(
         [&](const auto& node) -> std::expected<LoweredExpr, LowerError> {
             using N = std::decay_t<decltype(node)>;
 
@@ -2143,7 +2392,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return make_error(expr->span, "use of moved value '" + display_head + "'");
 
                     tyir::ValueUseKind use_kind = tyir::ValueUseKind::Copy;
-                    if (local.ty.is_move_only()) {
+                    if (local.ty.is_move_only()
+                        && !should_defer_generic_probe_ownership_validation(local.ty, ctx)) {
                         if (local.active_borrows > 0)
                             return make_error(
                                 expr->span,
@@ -2240,7 +2490,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(resolved_val.error()));
                     val->expr = std::move(*resolved_val);
 
-                    if (!compatible(val->expr->ty, *expected_ty))
+                    if (!compatible(val->expr->ty, *expected_ty)
+                        && !should_defer_generic_probe_failure(val->expr->ty, *expected_ty, ctx))
                         return make_error(
                             field.span, "field '" + std::string(field.name.as_str())
                                             + "': expected '" + expected_ty->display()
@@ -2334,13 +2585,17 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                     tyir::Ty result_ty;
                     if (node.op == ast::UnaryOp::Negate) {
-                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
+                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::num())
+                            && !should_defer_generic_probe_failure(
+                                rhs->expr->ty, tyir::ty::num(), ctx))
                             return make_error(
                                 expr->span, "unary '-' requires 'num', found '"
                                                 + rhs->expr->ty.display() + "'");
                         result_ty = unary_result_type(rhs->expr->ty, tyir::ty::num());
                     } else {
-                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_()))
+                        if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_())
+                            && !should_defer_generic_probe_failure(
+                                rhs->expr->ty, tyir::ty::bool_(), ctx))
                             return make_error(
                                 expr->span, "unary '!' requires 'bool', found '"
                                                 + rhs->expr->ty.display() + "'");
@@ -2376,11 +2631,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 case Op::Mul:
                 case Op::Div:
                 case Op::Mod:
-                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num())
+                        && !should_defer_generic_probe_failure(lhs->expr->ty, tyir::ty::num(), ctx))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num())
+                        && !should_defer_generic_probe_failure(rhs->expr->ty, tyir::ty::num(), ctx))
                         return make_error(
                             expr->span, "arithmetic operator requires 'num' on right, found '"
                                             + rhs->expr->ty.display() + "'");
@@ -2391,11 +2648,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 case Op::Le:
                 case Op::Gt:
                 case Op::Ge:
-                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::num())
+                        && !should_defer_generic_probe_failure(lhs->expr->ty, tyir::ty::num(), ctx))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::num())
+                        && !should_defer_generic_probe_failure(rhs->expr->ty, tyir::ty::num(), ctx))
                         return make_error(
                             expr->span, "comparison operator requires 'num' on right, found '"
                                             + rhs->expr->ty.display() + "'");
@@ -2406,7 +2665,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 case Op::Ne: {
                     const tyir::Ty& lty = lhs->expr->ty;
                     const tyir::Ty& rty = rhs->expr->ty;
-                    if (!common_type(lty, rty).has_value())
+                    if (!common_type(lty, rty).has_value()
+                        && !should_defer_generic_probe_common_type_failure(lty, rty, ctx))
                         return make_error(
                             expr->span,
                             "equality operator requires same types on both sides, found '"
@@ -2417,11 +2677,15 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 case Op::And:
                 case Op::Or:
-                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::bool_()))
+                    if (!matches_type_shape(lhs->expr->ty, tyir::ty::bool_())
+                        && !should_defer_generic_probe_failure(
+                            lhs->expr->ty, tyir::ty::bool_(), ctx))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on left, found '"
                                             + lhs->expr->ty.display() + "'");
-                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_()))
+                    if (!matches_type_shape(rhs->expr->ty, tyir::ty::bool_())
+                        && !should_defer_generic_probe_failure(
+                            rhs->expr->ty, tyir::ty::bool_(), ctx))
                         return make_error(
                             expr->span, "logical operator requires 'bool' on right, found '"
                                             + rhs->expr->ty.display() + "'");
@@ -2447,7 +2711,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 if (!place)
                     return std::unexpected(std::move(place.error()));
 
-                if (!place->expr->ty.is_copy())
+                if (!place->expr->ty.is_copy()
+                    && !should_defer_generic_probe_ownership_validation(place->expr->ty, ctx))
                     return make_error(
                         expr->span, "cannot move field '" + std::string(node.field.as_str())
                                         + "' out of '" + place->expr->ty.display()
@@ -2558,7 +2823,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     }
                     auto inferred = infer_substitution(
                         sig.param_types[i], lowered_args[i]->ty, generic_param_set, substitution,
-                        node.args[i]->span, display_fn_name);
+                        node.args[i]->span, display_fn_name,
+                        ctx.defer_generic_probe_validation ? &ctx.generic_params : nullptr);
                     if (!inferred)
                         return std::unexpected(std::move(inferred.error()));
                 }
@@ -2596,7 +2862,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         if (!resolved_arg)
                             return std::unexpected(std::move(resolved_arg.error()));
                         lowered_args[i] = std::move(*resolved_arg);
-                        if (!compatible(lowered_args[i]->ty, expected_param_ty))
+                        if (!compatible(lowered_args[i]->ty, expected_param_ty)
+                            && !should_defer_generic_probe_failure(
+                                lowered_args[i]->ty, expected_param_ty, ctx))
                             return make_error(
                                 node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
                                                         + display_fn_name + "': expected '"
@@ -2653,7 +2921,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 auto cond = lower_expr(node.condition, ctx);
                 if (!cond)
                     return std::unexpected(std::move(cond.error()));
-                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_()))
+                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())
+                    && !should_defer_generic_probe_failure(cond->expr->ty, tyir::ty::bool_(), ctx))
                     return make_error(
                         node.condition->span, "'if' condition must have type 'bool', found '"
                                                   + cond->expr->ty.display() + "'");
@@ -2677,34 +2946,20 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(else_val.error()));
 
                     const tyir::Ty& else_ty = else_val->expr->ty;
-                    const auto joined_ty = common_type(then_ptr->ty, else_ty);
-                    if (!joined_ty.has_value()) {
-                        const bool then_needs_context =
-                            find_unresolved_deferred_generic_call(
-                                then_ptr->tail.value_or(nullptr), ctx.env, ctx.generic_params)
-                                .has_value();
-                        const bool else_needs_context =
-                            find_unresolved_deferred_generic_call(
-                                else_val->expr, ctx.env, ctx.generic_params)
-                                .has_value();
-                        if (then_needs_context != else_needs_context)
-                            result_ty = then_needs_context ? else_ty : then_ptr->ty;
-                        else
-                            return make_error(
-                                expr->span, "'if' then-branch has type '" + then_ptr->ty.display()
-                                                + "' but else-branch has type '" + else_ty.display()
-                                                + "'");
-                    } else {
-                        result_ty = *joined_ty;
-                    }
+                    auto joined_ty = join_branch_types(
+                        then_ptr->ty, else_ty, then_ptr->tail.value_or(nullptr), else_val->expr,
+                        expr->span, ctx);
+                    if (!joined_ty)
+                        return std::unexpected(std::move(joined_ty.error()));
+                    result_ty = *joined_ty;
 
-                    if (auto merged =
-                            merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
+                    if (auto merged = merge_loop_break_types(
+                            ctx.loop_stack, then_ctx.loop_stack, expr->span, ctx);
                         !merged) {
                         return std::unexpected(std::move(merged.error()));
                     }
-                    if (auto merged =
-                            merge_loop_break_types(ctx.loop_stack, else_ctx.loop_stack, expr->span);
+                    if (auto merged = merge_loop_break_types(
+                            ctx.loop_stack, else_ctx.loop_stack, expr->span, ctx);
                         !merged) {
                         return std::unexpected(std::move(merged.error()));
                     }
@@ -2719,8 +2974,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 } else {
                     // No else branch: result type is Unit
                     result_ty = tyir::ty::unit();
-                    if (auto merged =
-                            merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
+                    if (auto merged = merge_loop_break_types(
+                            ctx.loop_stack, then_ctx.loop_stack, expr->span, ctx);
                         !merged) {
                         return std::unexpected(std::move(merged.error()));
                     }
@@ -2774,7 +3029,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 if (!cond) {
                     return std::unexpected(std::move(cond.error()));
                 }
-                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
+                if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())
+                    && !should_defer_generic_probe_failure(
+                        cond->expr->ty, tyir::ty::bool_(), ctx)) {
                     return make_error(
                         node.condition->span, "'while' condition must have type 'bool', found '"
                                                   + cond->expr->ty.display() + "'");
@@ -2823,7 +3080,16 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 ctx.scope.pop();
                                 return std::unexpected(std::move(ann.error()));
                             }
-                            if (!compatible(init_expr->expr->ty, *ann)) {
+                            auto resolved_init =
+                                resolve_expr_against_type(init_expr->expr, *ann, ctx);
+                            if (!resolved_init) {
+                                ctx.scope.pop();
+                                return std::unexpected(std::move(resolved_init.error()));
+                            }
+                            init_expr->expr = std::move(*resolved_init);
+                            if (!compatible(init_expr->expr->ty, *ann)
+                                && !should_defer_generic_probe_failure(
+                                    init_expr->expr->ty, *ann, ctx)) {
                                 ctx.scope.pop();
                                 return make_error(
                                     init_let->span, "for-init type mismatch: expected '"
@@ -2874,7 +3140,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         ctx.scope.pop();
                         return std::unexpected(std::move(cond.error()));
                     }
-                    if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())) {
+                    if (!matches_type_shape(cond->expr->ty, tyir::ty::bool_())
+                        && !should_defer_generic_probe_failure(
+                            cond->expr->ty, tyir::ty::bool_(), ctx)) {
                         ctx.scope.pop();
                         return make_error(
                             (*node.condition)->span,
@@ -2953,13 +3221,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         loop_ctx.break_ty = val_ty;
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
-                        const auto joined = common_type(prev, val_ty);
-                        if (!joined.has_value()) {
-                            return make_error(
-                                expr->span, "'break' value type mismatch: expected '"
-                                                + prev.display() + "', found '" + val_ty.display()
-                                                + "'");
-                        }
+                        auto joined = join_loop_break_types(prev, val_ty, expr->span, ctx);
+                        if (!joined)
+                            return std::unexpected(std::move(joined.error()));
                         loop_ctx.break_ty = *joined;
                     }
 
@@ -2980,12 +3244,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         loop_ctx.break_ty = tyir::ty::unit();
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
-                        const auto joined = common_type(prev, tyir::ty::unit());
-                        if (!joined.has_value()) {
-                            return make_error(
-                                expr->span, "'break' value type mismatch: expected '"
-                                                + prev.display() + "', found 'Unit'");
-                        }
+                        auto joined =
+                            join_loop_break_types(prev, tyir::ty::unit(), expr->span, ctx);
+                        if (!joined)
+                            return std::unexpected(std::move(joined.error()));
                         loop_ctx.break_ty = *joined;
                     }
                 }
@@ -3021,7 +3283,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (!resolved_val)
                         return std::unexpected(std::move(resolved_val.error()));
                     val->expr = std::move(*resolved_val);
-                    if (!compatible(val->expr->ty, ctx.current_return_ty))
+                    if (!compatible(val->expr->ty, ctx.current_return_ty)
+                        && !should_defer_generic_probe_failure(
+                            val->expr->ty, ctx.current_return_ty, ctx,
+                            val->deferred_generic_probe_validation))
                         return make_error(
                             expr->span, "return type mismatch: expected '"
                                             + ctx.current_return_ty.display() + "', found '"
@@ -3047,6 +3312,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
             return make_error(expr->span, "unsupported expression kind");
         },
         expr->node);
+    if (lowered.has_value())
+        lowered->deferred_generic_probe_validation = ctx.defer_generic_probe_validation;
+    return lowered;
 }
 
 // ─── Item lowering ────────────────────────────────────────────────────────────
@@ -3063,8 +3331,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
         ty_params.push_back(
             tyir::TyParam{fn.params[i].name, sig.param_types[i], fn.params[i].span});
 
-    // Set up lowering context with params in scope
-    LowerCtx ctx{env, {}, make_generic_param_set(fn.generic_params), sig.return_ty, {}};
+    LowerCtx ctx{
+        env, {}, make_generic_param_set(fn.generic_params), false, sig.return_ty, {},
+    };
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params) {
         if (!ctx.scope.insert(p.name, p.ty))
@@ -3085,7 +3354,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
     }
 
     // Check that body type matches declared return type (when a tail is present)
-    if (body->tail.has_value() && !compatible(body->ty, sig.return_ty))
+    if (body->tail.has_value() && !compatible(body->ty, sig.return_ty)
+        && !should_defer_generic_probe_failure(body->ty, sig.return_ty, ctx))
         return make_error(
             fn.body->span, "function '" + display_decl_name(fn) + "' body has type '"
                                + body->ty.display() + "' but return type is '"

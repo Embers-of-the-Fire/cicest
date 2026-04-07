@@ -152,6 +152,8 @@ Notes:
   is type-valid in the current substituted environment.
 - `decl(expr)` is compile-time only, always yields `Constraint`, and is intended
   for `where` clauses and other staged validation sites.
+- In function `where` clauses, ordinary parameter references remain invalid, but
+  `decl(expr)` may probe expressions that mention those parameters.
 - Enums are fieldless (C++ enum-class-like), i.e., no payload variants.
 - `extern` declarations use a string literal for the ABI (e.g., `"lang"`, `"c"`).
 - `extern` functions have no body; `extern` structs are opaque (no fields).

@@ -1,0 +1,8 @@
+fn add<T>(a: T) -> T where decl(a + a) {
+    a
+}
+
+fn main() -> num {
+    add::<num>(3);
+    0
+}

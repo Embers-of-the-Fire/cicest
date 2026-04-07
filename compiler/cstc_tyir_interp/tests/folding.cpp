@@ -141,6 +141,28 @@ static const EnumVariantRef& require_constraint_variant(const TyExprPtr& expr) {
     return std::get<EnumVariantRef>(expr->node);
 }
 
+struct DeclProbeRecheckCase {
+    const char* folded_source;
+    TyLiteral::Kind literal_kind;
+    std::string_view literal_symbol;
+    const char* failing_source;
+    std::string_view failing_function;
+};
+
+static void expect_decl_probe_recheck_case(const DeclProbeRecheckCase& test_case) {
+    const auto program = must_fold_with_constraint_prelude(test_case.folded_source);
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == test_case.literal_kind);
+    assert(literal.symbol.as_str() == test_case.literal_symbol);
+
+    const auto error = must_fail_to_fold_with_constraint_prelude(test_case.failing_source);
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(
+        error.message.find(
+            std::string("function '") + std::string(test_case.failing_function) + "'")
+        != std::string::npos);
+}
+
 static void test_const_function_call_folds_to_literal() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -1087,6 +1109,23 @@ fn probe() -> Constraint {
         == Symbol::intern("Invalid"));
 }
 
+static void test_decl_where_clause_accepts_parameter_references() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn add(a: num) -> num where decl(a + a) {
+    a + a
+}
+
+fn main() -> num {
+    add(3)
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"6"});
+}
+
 static void test_decl_probe_defers_nested_function_constraint_failures() {
     SymbolSession session;
     const auto program = must_fold_with_constraint_prelude(R"(
@@ -1254,6 +1293,1097 @@ fn main() -> num {
     assert(error.instantiation_limit.has_value());
     assert(!error.instantiation_limit->stack.empty());
     assert(error.instantiation_limit->stack.back().item_name == Symbol::intern("expand"));
+}
+
+static void test_decl_generic_parameter_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(a: T) -> T where decl(a + a) {
+    a
+}
+
+fn main() -> num {
+    probe::<num>(3)
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "3",
+        .failing_source = R"(
+fn probe<T>(a: T) -> T where decl(a + a) {
+    a
+}
+
+fn main() -> num {
+    probe::<bool>(true);
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
+static void test_decl_generic_ownership_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(a: T) -> T where decl(a == a) {
+    a
+}
+
+fn main() -> num {
+    probe::<num>(3)
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "3",
+        .failing_source = R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn probe<T>(a: T) -> T where decl(a == a) {
+    a
+}
+
+fn main() -> num {
+    probe::<str>(to_str(3));
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
+static void test_decl_generic_block_ownership_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(a: T) -> T where decl({ a; a }) {
+    a
+}
+
+fn main() -> num {
+    probe::<num>(3)
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "3",
+        .failing_source = R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn probe<T>(a: T) -> T where decl({ a; a }) {
+    a
+}
+
+fn main() -> num {
+    probe::<str>(to_str(3));
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
+static void test_decl_generic_call_argument_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn id<T>(value: T) -> T {
+    value
+}
+
+fn probe<T>() -> Constraint {
+    decl(id::<T>(0))
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+fn id<T>(value: T) -> T {
+    value
+}
+
+fn probe<T>() -> Constraint {
+    decl(id::<T>(0))
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<bool>()
+}
+)",
+        .failing_function = "wrapper",
+    });
+}
+
+static void test_decl_generic_struct_field_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+struct Box<T> {
+    value: T
+}
+
+fn probe<T>() -> Constraint {
+    decl(Box<T> { value: 0 })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+struct Box<T> {
+    value: T
+}
+
+fn probe<T>() -> Constraint {
+    decl(Box<T> { value: 0 })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<bool>()
+}
+)",
+        .failing_function = "wrapper",
+    });
+}
+
+static void test_decl_generic_unary_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(value: T) -> T where decl(-value) {
+    value
+}
+
+fn main() -> num {
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+fn probe<T>(value: T) -> T where decl(-value) {
+    value
+}
+
+fn main() -> num {
+    probe::<bool>(true);
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
+static void test_decl_generic_if_condition_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(value: T) -> T where decl(if value { 0 } else { 1 }) {
+    value
+}
+
+fn main() -> num {
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+fn probe<T>(value: T) -> T where decl(if value { 0 } else { 1 }) {
+    value
+}
+
+fn main() -> num {
+    probe::<num>(1);
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
+static void test_decl_generic_let_annotation_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(value: T) -> T where decl({ let x: num = value; x }) {
+    value
+}
+
+fn main() -> num {
+    probe::<num>(1);
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+fn probe<T>(value: T) -> T where decl({ let x: num = value; x }) {
+    value
+}
+
+fn main() -> num {
+    probe::<bool>(true);
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
+static void test_decl_generic_if_branch_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(value: T) -> T where decl(if true { 1 } else { value }) {
+    value
+}
+
+fn main() -> num {
+    probe::<num>(1);
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+fn probe<T>(value: T) -> T where decl(if true { 1 } else { value }) {
+    value
+}
+
+fn main() -> num {
+    probe::<bool>(true);
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
+static void test_decl_block_cannot_return_borrow_of_inner_local() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe() -> Constraint {
+    decl({ let x: num = 1; &x })
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_block_borrow_escape_stays_invalid_through_outer_let() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe() -> Constraint {
+    decl({ let r: &num = { let x: num = 1; &x }; 0 })
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_generic_ref_local_keeps_temp_borrow_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(s: T) -> T where decl({ let r: &T = &s; s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<num>(1)
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "1",
+        .failing_source = R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn probe<T>(s: T) -> T where decl({ let r: &T = &s; s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<str>(to_str(1));
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
+static void test_decl_generic_if_ref_local_rechecks_borrow_after_substitution() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn probe<T>(s: T) -> T where decl({ let r: &T = if true { &s } else { &s }; s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<str>(to_str(1));
+    0
+}
+)");
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'probe'") != std::string::npos);
+}
+
+static void test_decl_inner_ref_binding_releases_temp_borrow_on_scope_exit() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(s: T) -> num where decl({ { let r: &T = &s; 0 }; s }) {
+    0
+}
+
+fn main() -> num {
+    wrapper::<str>(to_str(1));
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
+static void test_decl_discarded_ref_binding_releases_temp_borrow() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(s: T) -> num where decl({ let _: &T = &s; s }) {
+    0
+}
+
+fn main() -> num {
+    wrapper::<str>(to_str(1));
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
+static void test_decl_for_ref_init_releases_temp_borrow_after_loop_scope() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(s: T) -> num where decl({ for (let r: &T = &s; false; 0) { }; s }) {
+    0
+}
+
+fn main() -> num {
+    wrapper::<str>(to_str(1));
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
+static void test_decl_for_discarded_ref_init_releases_temp_borrow() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(s: T) -> num where decl({ for (let _: &T = &s; false; 0) { }; s }) {
+    0
+}
+
+fn main() -> num {
+    wrapper::<str>(to_str(1));
+    0
+}
+)");
+
+    const TyLiteral& literal = require_literal(require_tail(find_fn(program, "main")));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
+static void test_decl_generic_named_actual_to_bare_param_defers_until_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+struct Box<T> {
+    value: T
+}
+
+fn probe<T>() -> Constraint {
+    decl({ let value: T = Box<num> { value: 0 }; value })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+struct Box<T> {
+    value: T
+}
+
+fn probe<T>() -> Constraint {
+    decl({ let value: T = Box<num> { value: 0 }; value })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<bool>()
+}
+)",
+        .failing_function = "wrapper",
+    });
+}
+
+static void test_decl_generic_ref_actual_to_bare_param_defers_until_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>() -> Constraint {
+    decl({ let n: num = 1; let value: T = &n; value })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    0
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "0",
+        .failing_source = R"(
+fn probe<T>() -> Constraint {
+    decl({ let n: num = 1; let value: T = &n; value })
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<bool>()
+}
+)",
+        .failing_function = "wrapper",
+    });
+}
+
+static void test_decl_generic_ref_unary_probe_is_immediately_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe<T>(value: &T) -> Constraint {
+    decl(-value)
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_generic_ref_condition_probe_is_immediately_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe<T>(value: &T) -> Constraint {
+    decl(if value { 0 } else { 1 })
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_generic_ref_call_probe_is_immediately_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn take_num(value: num) -> num;
+
+fn probe<T>(value: &T) -> Constraint {
+    decl(take_num(value))
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_generic_ref_returning_call_cannot_be_const_evaluated() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn id_ref<T>(value: T) -> T {
+    value
+}
+
+fn probe<T>(s: T) -> T where decl({ let r: &T = id_ref(&s); s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<num>(1)
+}
+)");
+
+    assert(error.message.find("function 'probe'") != std::string::npos);
+    assert(error.message.find("could not be const-evaluated") != std::string::npos);
+}
+
+static void test_decl_generic_reborrowed_ref_call_cannot_be_const_evaluated() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn id_ref<T>(value: T) -> T {
+    value
+}
+
+fn probe<T>(s: T) -> T where decl({ let r: &T = &s; let rr: &T = id_ref(r); s }) {
+    s
+}
+
+fn main() -> num {
+    probe::<num>(1)
+}
+)");
+
+    assert(error.message.find("function 'probe'") != std::string::npos);
+    assert(error.message.find("could not be const-evaluated") != std::string::npos);
+}
+
+static void test_decl_generic_extern_call_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(value: T) -> num where decl(to_str(value)) {
+    1
+}
+
+fn main() -> num {
+    wrapper::<num>(1)
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "1",
+        .failing_source = R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn wrapper<T>(value: T) -> num where decl(to_str(value)) {
+    1
+}
+
+fn main() -> num {
+    wrapper::<bool>(true)
+}
+)",
+        .failing_function = "wrapper",
+    });
+}
+
+static void test_decl_generic_call_probe_bad_arity_is_unsatisfied() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+fn id(value: num) -> num {
+    value
+}
+
+fn wrapper() -> num where decl(id(0)) {
+    1
+}
+
+fn main() -> num {
+    wrapper()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* call = std::get_if<TyCall>(&(*decl_probe->expr)->node);
+        assert(call != nullptr);
+        assert(call->args.size() == 1);
+        call->args.clear();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_generic_call_probe_bad_generic_arity_is_unsatisfied() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+fn id<T>(value: T) -> T {
+    value
+}
+
+fn wrapper() -> num where decl(id::<num>(0)) {
+    1
+}
+
+fn main() -> num {
+    wrapper()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* call = std::get_if<TyCall>(&(*decl_probe->expr)->node);
+        assert(call != nullptr);
+        assert(call->generic_args.size() == 1);
+        call->generic_args.clear();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_generic_call_probe_bad_arity_beats_deferred_where_clause() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+fn id<T>(value: T) -> T where always_false::<T>() {
+    value
+}
+
+fn wrapper<T>() -> num where decl(id::<T>(0)) {
+    1
+}
+
+fn main() -> num {
+    wrapper::<num>()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* call = std::get_if<TyCall>(&(*decl_probe->expr)->node);
+        assert(call != nullptr);
+        assert(call->args.size() == 1);
+        call->args.clear();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_generic_call_probe_bad_generic_arity_beats_deferred_where_clause() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+fn id<T>(value: T) -> T where always_false::<T>() {
+    value
+}
+
+fn wrapper<T>() -> num where decl(id::<T>(0)) {
+    1
+}
+
+fn main() -> num {
+    wrapper::<num>()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* call = std::get_if<TyCall>(&(*decl_probe->expr)->node);
+        assert(call != nullptr);
+        assert(call->generic_args.size() == 1);
+        call->generic_args.clear();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_generic_call_probe_bad_argument_type_beats_deferred_where_clause() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+fn takes_num<T>(value: num) -> num where always_false::<T>() {
+    value
+}
+
+fn wrapper<T>() -> num where decl(takes_num::<T>(0)) {
+    1
+}
+
+fn main() -> num {
+    wrapper::<num>()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* call = std::get_if<TyCall>(&(*decl_probe->expr)->node);
+        assert(call != nullptr);
+        assert(call->args.size() == 1);
+        call->args.front() = make_ty_expr(
+            call->args.front()->span,
+            TyLiteral{TyLiteral::Kind::Bool, Symbol::intern("true"), false}, ty::bool_());
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_call_probe_missing_function_is_unsatisfied() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+fn id(value: num) -> num {
+    value
+}
+
+fn wrapper() -> num where decl(id(0)) {
+    1
+}
+
+fn main() -> num {
+    wrapper()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* call = std::get_if<TyCall>(&(*decl_probe->expr)->node);
+        assert(call != nullptr);
+        call->fn_name = Symbol::intern("missing");
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_struct_probe_duplicate_field_is_invalid() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+struct Foo {
+    a: num
+}
+
+fn probe() -> Constraint {
+    decl(Foo { a: 1 })
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("probe"))
+            continue;
+        const auto& tail_expr = require_tail(*fn);
+        auto* decl_probe = std::get_if<TyDeclProbe>(&tail_expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* init = std::get_if<TyStructInit>(&(*decl_probe->expr)->node);
+        assert(init != nullptr);
+        assert(init->fields.size() == 1);
+        init->fields.push_back(init->fields.front());
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+    assert(
+        require_constraint_variant(require_tail(find_fn(*folded, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_struct_probe_missing_field_is_invalid() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+struct Foo {
+    a: num
+}
+
+fn probe() -> Constraint {
+    decl(Foo { a: 1 })
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("probe"))
+            continue;
+        const auto& tail_expr = require_tail(*fn);
+        auto* decl_probe = std::get_if<TyDeclProbe>(&tail_expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* init = std::get_if<TyStructInit>(&(*decl_probe->expr)->node);
+        assert(init != nullptr);
+        assert(init->fields.size() == 1);
+        init->fields.clear();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+    assert(
+        require_constraint_variant(require_tail(find_fn(*folded, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_generic_struct_probe_bad_generic_arity_is_unsatisfied() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+struct Box<T> {
+    value: T
+}
+
+fn wrapper() -> num where decl(Box<num> { value: 0 }) {
+    1
+}
+
+fn main() -> num {
+    wrapper()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* init = std::get_if<TyStructInit>(&(*decl_probe->expr)->node);
+        assert(init != nullptr);
+        assert(init->generic_args.size() == 1);
+        init->generic_args.clear();
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_struct_probe_missing_type_is_unsatisfied() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+struct Foo {
+    a: num
+}
+
+fn wrapper() -> num where decl(Foo { a: 1 }) {
+    1
+}
+
+fn main() -> num {
+    wrapper()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* init = std::get_if<TyStructInit>(&(*decl_probe->expr)->node);
+        assert(init != nullptr);
+        init->type_name = Symbol::intern("Missing");
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_decl_generic_struct_probe_duplicate_field_beats_deferred_where_clause() {
+    SymbolSession session;
+    auto program = must_lower_with_constraint_prelude(R"(
+fn always_false<T>() -> bool {
+    false
+}
+
+struct Box<T> where always_false::<T>() {
+    value: num
+}
+
+fn wrapper<T>() -> num where decl(Box<T> { value: 0 }) {
+    1
+}
+
+fn main() -> num {
+    wrapper::<num>()
+}
+)");
+
+    bool mutated = false;
+    for (TyItem& item : program.items) {
+        auto* fn = std::get_if<TyFnDecl>(&item);
+        if (fn == nullptr || fn->name != Symbol::intern("wrapper"))
+            continue;
+        assert(!fn->lowered_where_clause.empty());
+        auto* decl_probe = std::get_if<TyDeclProbe>(&fn->lowered_where_clause.front().expr->node);
+        assert(decl_probe != nullptr);
+        assert(decl_probe->expr.has_value());
+        auto* init = std::get_if<TyStructInit>(&(*decl_probe->expr)->node);
+        assert(init != nullptr);
+        assert(init->fields.size() == 1);
+        init->fields.push_back(init->fields.front());
+        mutated = true;
+    }
+    assert(mutated);
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("generic constraint failed") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
 }
 
 static void test_generic_where_false_reports_constraint_failure() {
@@ -1541,11 +2671,48 @@ int main() {
     test_decl_valid_probe_folds_to_constraint_valid();
     test_decl_invalid_probe_folds_to_constraint_invalid();
     test_decl_runtime_probe_folds_to_constraint_invalid();
+    test_decl_where_clause_accepts_parameter_references();
     test_decl_probe_defers_nested_function_constraint_failures();
     test_decl_probe_defers_nested_struct_constraint_failures();
     test_decl_generic_call_probe_is_deferred_inside_generic_body();
     test_decl_generic_struct_probe_is_deferred_inside_generic_body();
     test_decl_recursive_constraint_probe_reports_instantiation_limit();
+    test_decl_generic_parameter_probe_rechecks_after_substitution();
+    test_decl_generic_ownership_probe_rechecks_after_substitution();
+    test_decl_generic_block_ownership_probe_rechecks_after_substitution();
+    test_decl_generic_call_argument_probe_rechecks_after_substitution();
+    test_decl_generic_struct_field_probe_rechecks_after_substitution();
+    test_decl_generic_unary_probe_rechecks_after_substitution();
+    test_decl_generic_if_condition_probe_rechecks_after_substitution();
+    test_decl_generic_let_annotation_probe_rechecks_after_substitution();
+    test_decl_generic_if_branch_probe_rechecks_after_substitution();
+    test_decl_block_cannot_return_borrow_of_inner_local();
+    test_decl_block_borrow_escape_stays_invalid_through_outer_let();
+    test_decl_generic_ref_local_keeps_temp_borrow_after_substitution();
+    test_decl_generic_if_ref_local_rechecks_borrow_after_substitution();
+    test_decl_inner_ref_binding_releases_temp_borrow_on_scope_exit();
+    test_decl_discarded_ref_binding_releases_temp_borrow();
+    test_decl_for_ref_init_releases_temp_borrow_after_loop_scope();
+    test_decl_for_discarded_ref_init_releases_temp_borrow();
+    test_decl_generic_named_actual_to_bare_param_defers_until_substitution();
+    test_decl_generic_ref_actual_to_bare_param_defers_until_substitution();
+    test_decl_generic_ref_unary_probe_is_immediately_invalid();
+    test_decl_generic_ref_condition_probe_is_immediately_invalid();
+    test_decl_generic_ref_call_probe_is_immediately_invalid();
+    test_decl_generic_ref_returning_call_cannot_be_const_evaluated();
+    test_decl_generic_reborrowed_ref_call_cannot_be_const_evaluated();
+    test_decl_generic_extern_call_probe_rechecks_after_substitution();
+    test_decl_generic_call_probe_bad_arity_is_unsatisfied();
+    test_decl_generic_call_probe_bad_generic_arity_is_unsatisfied();
+    test_decl_generic_call_probe_bad_arity_beats_deferred_where_clause();
+    test_decl_generic_call_probe_bad_generic_arity_beats_deferred_where_clause();
+    test_decl_generic_call_probe_bad_argument_type_beats_deferred_where_clause();
+    test_decl_call_probe_missing_function_is_unsatisfied();
+    test_decl_struct_probe_duplicate_field_is_invalid();
+    test_decl_struct_probe_missing_field_is_invalid();
+    test_decl_generic_struct_probe_bad_generic_arity_is_unsatisfied();
+    test_decl_struct_probe_missing_type_is_unsatisfied();
+    test_decl_generic_struct_probe_duplicate_field_beats_deferred_where_clause();
     test_generic_where_false_reports_constraint_failure();
     test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();
