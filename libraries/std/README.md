@@ -23,6 +23,11 @@ can be loaded explicitly through `@std/...` import paths.
 | ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `print`      | `runtime fn print(value: &str)`        | Prints a borrowed string to standard output.                                                            |
 | `println`    | `runtime fn println(value: &str)`      | Prints a borrowed string followed by a newline.                                                         |
+| `read_file`  | `runtime fn read_file(path: &str) -> str` | Reads a file from disk and returns its bytes as an owned string, or an empty string on failure.     |
+| `read_line`  | `runtime fn read_line() -> str`        | Reads one line from standard input, strips the trailing newline, and returns an owned string.          |
+| `rand`       | `runtime fn rand() -> num`             | Returns a pseudo-random number in the half-open range `[0, 1)`.                                        |
+| `time`       | `runtime fn time() -> num`             | Returns the current Unix timestamp in seconds.                                                          |
+| `env`        | `runtime fn env(name: &str) -> str`    | Returns a copy of an environment variable value, or an empty string when it is unset.                  |
 | `to_str`     | `fn to_str(value: num) -> str`         | Converts a number to its string representation.                                                         |
 | `str_concat` | `fn str_concat(a: &str, b: &str) -> str` | Concatenates two borrowed strings.                                                                    |
 | `str_len`    | `fn str_len(value: &str) -> num`       | Returns the length of a borrowed string.                                                                |
@@ -85,6 +90,11 @@ including macOS.
 | -------------------------------------- | ----------------------------------------------------- |
 | `runtime fn print(value: &str)`        | `void cstc_std_print(const cstc_rt_str*)`             |
 | `runtime fn println(value: &str)`      | `void cstc_std_println(const cstc_rt_str*)`           |
+| `runtime fn read_file(path: &str) -> str` | `void cstc_std_read_file(cstc_rt_str*, const cstc_rt_str*)` |
+| `runtime fn read_line() -> str`        | `void cstc_std_read_line(cstc_rt_str*)`               |
+| `runtime fn rand() -> num`             | `double cstc_std_rand(void)`                          |
+| `runtime fn time() -> num`             | `double cstc_std_time(void)`                          |
+| `runtime fn env(name: &str) -> str`    | `void cstc_std_env(cstc_rt_str*, const cstc_rt_str*)` |
 | `fn to_str(value: num) -> str`         | `void cstc_std_to_str(cstc_rt_str*, double)`          |
 | `fn str_concat(a: &str, b: &str) -> str` | `void cstc_std_str_concat(cstc_rt_str*, const cstc_rt_str*, const cstc_rt_str*)` |
 | `fn str_len(value: &str) -> num`       | `double cstc_std_str_len(const cstc_rt_str*)`         |
