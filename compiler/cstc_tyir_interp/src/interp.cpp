@@ -940,6 +940,7 @@ ConstraintEvalResult evaluate_constraint(
                     return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                 } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                     const auto decl_it = program.structs.find(node.type_name);
+                    bool defer_where_clause = false;
                     if (decl_it != program.structs.end()) {
                         if (node.generic_args.size() != decl_it->second->generic_params.size()) {
                             return {
@@ -952,9 +953,6 @@ ConstraintEvalResult evaluate_constraint(
                             node.generic_args, generic_params);
                         const auto substitution =
                             build_substitution(decl_it->second->generic_params, node.generic_args);
-                        if (generic_args_depend && !decl_it->second->lowered_where_clause.empty()) {
-                            return generic_substitution_dependency_result();
-                        }
                         if (!generic_args_depend) {
                             auto status = enforce_constraints(
                                 program, decl_it->second->lowered_where_clause, substitution,
@@ -1014,12 +1012,16 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                         }
+                        defer_where_clause =
+                            generic_args_depend && !decl_it->second->lowered_where_clause.empty();
                     }
                     for (const tyir::TyStructInitField& field : node.fields) {
                         auto nested = self(self, field.value);
                         if (nested.kind != ConstraintEvalKind::Satisfied)
                             return nested;
                     }
+                    if (defer_where_clause)
+                        return generic_substitution_dependency_result();
                     return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                 } else if constexpr (
                     std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
@@ -1128,6 +1130,7 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
                     return self(self, node.base);
                 } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                    bool defer_where_clause = false;
                     if (const auto fn_it = program.fns.find(node.fn_name);
                         fn_it != program.fns.end()) {
                         const tyir::TyFnDecl& fn = *fn_it->second;
@@ -1137,10 +1140,6 @@ ConstraintEvalResult evaluate_constraint(
                                 "probed expression uses runtime-only behavior",
                                 std::nullopt,
                             };
-                        }
-                        if (generic_args_depend_on_generic_params(node.generic_args, generic_params)
-                            && !fn.lowered_where_clause.empty()) {
-                            return generic_substitution_dependency_result();
                         }
                         const bool generic_args_depend = generic_args_depend_on_generic_params(
                             node.generic_args, generic_params);
@@ -1195,6 +1194,8 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                         }
+                        defer_where_clause =
+                            generic_args_depend && !fn.lowered_where_clause.empty();
                     } else if (const auto ext_it = program.extern_fns.find(node.fn_name);
                                ext_it != program.extern_fns.end()) {
                         const tyir::TyExternFnDecl& decl = *ext_it->second;
@@ -1233,6 +1234,8 @@ ConstraintEvalResult evaluate_constraint(
                         if (nested.kind != ConstraintEvalKind::Satisfied)
                             return nested;
                     }
+                    if (defer_where_clause)
+                        return generic_substitution_dependency_result();
                     return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                 } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
                     return validate_decl_probe(node, program, generic_params, constraint_state);
