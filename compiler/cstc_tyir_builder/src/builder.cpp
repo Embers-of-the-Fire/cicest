@@ -2200,8 +2200,25 @@ struct ParamReferenceVisitor {
 
 // ─── Expression lowering ─────────────────────────────────────────────────────
 
+[[nodiscard]] static std::expected<tyir::Ty, LowerError> join_loop_break_types(
+    const tyir::Ty& existing, const tyir::Ty& incoming, cstc::span::SourceSpan span,
+    const LowerCtx& ctx) {
+    if (const auto joined = common_type(existing, incoming); joined.has_value())
+        return *joined;
+
+    if (auto deferred_ty = deferred_generic_probe_join_type(existing, incoming, ctx);
+        deferred_ty.has_value()) {
+        return *deferred_ty;
+    }
+
+    return make_error(
+        span, "'break' value type mismatch: expected '" + existing.display() + "', found '"
+                  + incoming.display() + "'");
+}
+
 static std::expected<void, LowerError> merge_loop_break_types(
-    std::vector<LoopCtx>& target, const std::vector<LoopCtx>& source, cstc::span::SourceSpan span) {
+    std::vector<LoopCtx>& target, const std::vector<LoopCtx>& source, cstc::span::SourceSpan span,
+    const LowerCtx& ctx) {
     assert(target.size() == source.size());
     for (std::size_t i = 0; i < target.size(); ++i) {
         if (!source[i].break_ty.has_value())
@@ -2213,11 +2230,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
         const tyir::Ty& existing = *target[i].break_ty;
         const tyir::Ty& incoming = *source[i].break_ty;
-        const auto joined = common_type(existing, incoming);
-        if (!joined.has_value())
-            return make_error(
-                span, "'break' value type mismatch: expected '" + existing.display() + "', found '"
-                          + incoming.display() + "'");
+        auto joined = join_loop_break_types(existing, incoming, span, ctx);
+        if (!joined)
+            return std::unexpected(std::move(joined.error()));
         target[i].break_ty = *joined;
     }
     return {};
@@ -2938,13 +2953,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(joined_ty.error()));
                     result_ty = *joined_ty;
 
-                    if (auto merged =
-                            merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
+                    if (auto merged = merge_loop_break_types(
+                            ctx.loop_stack, then_ctx.loop_stack, expr->span, ctx);
                         !merged) {
                         return std::unexpected(std::move(merged.error()));
                     }
-                    if (auto merged =
-                            merge_loop_break_types(ctx.loop_stack, else_ctx.loop_stack, expr->span);
+                    if (auto merged = merge_loop_break_types(
+                            ctx.loop_stack, else_ctx.loop_stack, expr->span, ctx);
                         !merged) {
                         return std::unexpected(std::move(merged.error()));
                     }
@@ -2959,8 +2974,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 } else {
                     // No else branch: result type is Unit
                     result_ty = tyir::ty::unit();
-                    if (auto merged =
-                            merge_loop_break_types(ctx.loop_stack, then_ctx.loop_stack, expr->span);
+                    if (auto merged = merge_loop_break_types(
+                            ctx.loop_stack, then_ctx.loop_stack, expr->span, ctx);
                         !merged) {
                         return std::unexpected(std::move(merged.error()));
                     }
@@ -3206,13 +3221,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         loop_ctx.break_ty = val_ty;
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
-                        const auto joined = common_type(prev, val_ty);
-                        if (!joined.has_value()) {
-                            return make_error(
-                                expr->span, "'break' value type mismatch: expected '"
-                                                + prev.display() + "', found '" + val_ty.display()
-                                                + "'");
-                        }
+                        auto joined = join_loop_break_types(prev, val_ty, expr->span, ctx);
+                        if (!joined)
+                            return std::unexpected(std::move(joined.error()));
                         loop_ctx.break_ty = *joined;
                     }
 
@@ -3233,12 +3244,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         loop_ctx.break_ty = tyir::ty::unit();
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
-                        const auto joined = common_type(prev, tyir::ty::unit());
-                        if (!joined.has_value()) {
-                            return make_error(
-                                expr->span, "'break' value type mismatch: expected '"
-                                                + prev.display() + "', found 'Unit'");
-                        }
+                        auto joined =
+                            join_loop_break_types(prev, tyir::ty::unit(), expr->span, ctx);
+                        if (!joined)
+                            return std::unexpected(std::move(joined.error()));
                         loop_ctx.break_ty = *joined;
                     }
                 }
