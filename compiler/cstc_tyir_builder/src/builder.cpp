@@ -784,7 +784,11 @@ struct LowerCtx {
         return std::nullopt;
     }
 
-    return joined_type_after_generic_substitution(lhs, rhs, ctx.generic_params);
+    auto joined = joined_type_after_generic_substitution(lhs, rhs, ctx.generic_params);
+    if (!joined.has_value())
+        return std::nullopt;
+
+    return annotate_type_semantics(std::move(*joined), ctx.env);
 }
 
 [[nodiscard]] static std::expected<tyir::Ty, LowerError> join_branch_types(

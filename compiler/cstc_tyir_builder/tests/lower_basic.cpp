@@ -601,6 +601,25 @@ static void test_decl_probe_defers_generic_if_join_during_expected_type_resoluti
     assert(std::holds_alternative<TyIf>(call.args[0]->node));
 }
 
+static void test_decl_probe_reannotates_deferred_generic_if_join_semantics() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "struct Wrapper<T> { value: T }"
+        "fn probe<T>(flag: bool, value: Wrapper<T>) -> Wrapper<T> where decl({ let joined = if "
+        "flag { value } else { Wrapper<num> { value: 0 } }; joined.value; joined.value }) { "
+        "value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[3]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& block = *std::get<TyBlockPtr>((*probe.expr)->node);
+    assert(block.stmts.size() == 2);
+    const auto& joined = std::get<TyLetStmt>(block.stmts[0]);
+    assert(
+        joined.ty
+        == ty::named(
+            Symbol::intern("Wrapper"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()}));
+}
+
 static void test_decl_probe_rejects_conflicting_generic_let_annotation_bindings() {
     const auto prog = must_lower_with_constraint_prelude(
         "struct Pair<A, B> { left: A, right: B }"
@@ -886,6 +905,7 @@ int main() {
     test_decl_probe_defers_generic_if_branch_join_validation();
     test_decl_probe_keeps_ref_shape_if_join_invalid();
     test_decl_probe_defers_generic_if_join_during_expected_type_resolution();
+    test_decl_probe_reannotates_deferred_generic_if_join_semantics();
     test_decl_probe_rejects_conflicting_generic_let_annotation_bindings();
     test_decl_probe_rejects_conflicting_generic_if_branch_join_bindings();
     test_decl_probe_contains_unresolved_generic_inference_in_let();
