@@ -8,6 +8,16 @@ pub enum Constraint {
 pub runtime extern "lang" fn print(value: &str);
 [[lang = "cstc_std_println"]]
 pub runtime extern "lang" fn println(value: &str);
+[[lang = "cstc_std_read_file"]]
+pub runtime extern "lang" fn read_file(path: &str) -> str;
+[[lang = "cstc_std_read_line"]]
+pub runtime extern "lang" fn read_line() -> str;
+[[lang = "cstc_std_rand"]]
+pub runtime extern "lang" fn rand() -> num;
+[[lang = "cstc_std_time"]]
+pub runtime extern "lang" fn time() -> num;
+[[lang = "cstc_std_env"]]
+pub runtime extern "lang" fn env(name: &str) -> str;
 [[lang = "cstc_std_to_str"]]
 pub extern "lang" fn to_str(value: num) -> str;
 [[lang = "cstc_std_str_concat"]]

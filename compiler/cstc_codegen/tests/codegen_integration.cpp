@@ -256,6 +256,51 @@ fn main() {
     assert(ir_contains(ir, "call void @cstc_std_print(ptr"));
 }
 
+static void test_runtime_io_intrinsics_use_lang_link_names() {
+    SymbolSession session;
+    const auto ir = must_codegen(R"(
+[[lang = "cstc_std_read_file"]]
+runtime extern "lang" fn read_file(path: &str) -> str;
+[[lang = "cstc_std_read_line"]]
+runtime extern "lang" fn read_line() -> str;
+[[lang = "cstc_std_rand"]]
+runtime extern "lang" fn rand() -> num;
+[[lang = "cstc_std_time"]]
+runtime extern "lang" fn time() -> num;
+[[lang = "cstc_std_env"]]
+runtime extern "lang" fn env(name: &str) -> str;
+
+runtime fn read_probe(path: &str) -> str {
+    read_file(path)
+}
+
+runtime fn line_probe() -> str {
+    read_line()
+}
+
+runtime fn env_probe(name: &str) -> str {
+    env(name)
+}
+
+runtime fn numeric_probe() -> num {
+    rand() + time()
+}
+
+fn main() {}
+)");
+
+    assert(ir_contains(ir, "declare void @cstc_std_read_file(ptr, ptr)"));
+    assert(ir_contains(ir, "declare void @cstc_std_read_line(ptr)"));
+    assert(ir_contains(ir, "declare double @cstc_std_rand()"));
+    assert(ir_contains(ir, "declare double @cstc_std_time()"));
+    assert(ir_contains(ir, "declare void @cstc_std_env(ptr, ptr)"));
+    assert(ir_contains(ir, "call void @cstc_std_read_file(ptr"));
+    assert(ir_contains(ir, "call void @cstc_std_read_line(ptr"));
+    assert(ir_contains(ir, "call double @cstc_std_rand()"));
+    assert(ir_contains(ir, "call double @cstc_std_time()"));
+    assert(ir_contains(ir, "call void @cstc_std_env(ptr"));
+}
+
 int main() {
     test_program_with_full_prelude();
     test_user_fn_calling_extern();
@@ -266,5 +311,6 @@ int main() {
     test_auto_drop_recurses_through_struct_fields();
     test_nested_field_borrow_uses_projected_geps();
     test_folded_owned_str_avoids_runtime_to_str_call();
+    test_runtime_io_intrinsics_use_lang_link_names();
     return 0;
 }
