@@ -230,6 +230,70 @@ struct EvalState {
 
 using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
 
+[[nodiscard]] static bool
+    type_is_generic_param(const tyir::Ty& ty, const GenericParamSet& generic_params) {
+    return ty.kind == tyir::TyKind::Named && ty.generic_args.empty()
+        && generic_params.contains(ty.name);
+}
+
+[[nodiscard]] static bool type_shape_depends_on_generic_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
+    if (type_is_generic_param(actual, generic_params)
+        || type_is_generic_param(expected, generic_params)) {
+        return true;
+    }
+    if (actual.kind != expected.kind)
+        return false;
+    if (actual.kind == tyir::TyKind::Ref) {
+        if (actual.pointee == nullptr || expected.pointee == nullptr)
+            return actual.pointee == expected.pointee;
+        return type_shape_depends_on_generic_substitution(
+            *actual.pointee, *expected.pointee, generic_params);
+    }
+    if (actual.kind != tyir::TyKind::Named)
+        return true;
+    if (actual.name != expected.name || actual.generic_args.size() != expected.generic_args.size())
+        return false;
+    for (std::size_t index = 0; index < actual.generic_args.size(); ++index) {
+        if (!type_shape_depends_on_generic_substitution(
+                actual.generic_args[index], expected.generic_args[index], generic_params)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] static bool types_may_be_compatible_after_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
+    if (actual.is_never())
+        return true;
+    if (!type_shape_depends_on_generic_substitution(actual, expected, generic_params))
+        return false;
+    if (actual.is_runtime && !expected.is_runtime)
+        return false;
+    if (actual.kind == tyir::TyKind::Ref) {
+        if (actual.pointee == nullptr || expected.pointee == nullptr)
+            return actual.pointee == expected.pointee;
+        return types_may_be_compatible_after_substitution(
+            *actual.pointee, *expected.pointee, generic_params);
+    }
+    if (actual.kind != tyir::TyKind::Named)
+        return true;
+    for (std::size_t index = 0; index < actual.generic_args.size(); ++index) {
+        if (!types_may_be_compatible_after_substitution(
+                actual.generic_args[index], expected.generic_args[index], generic_params)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] static bool types_may_have_common_type_after_substitution(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params) {
+    return lhs.is_never() || rhs.is_never()
+        || type_shape_depends_on_generic_substitution(lhs, rhs, generic_params);
+}
+
 [[nodiscard]] static GenericParamSet
     make_generic_param_set(const std::vector<cstc::ast::GenericParam>& generic_params) {
     GenericParamSet params;
@@ -271,10 +335,30 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
     };
 }
 
-[[nodiscard]] static std::optional<ConstraintEvalResult>
-    unresolved_type_check(const tyir::Ty& ty, const GenericParamSet& generic_params) {
-    if (type_depends_on_generic_params(ty, generic_params))
+[[nodiscard]] static std::optional<ConstraintEvalResult> unresolved_shape_check(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
+    if (!matches_type_shape(actual, expected)
+        && type_shape_depends_on_generic_substitution(actual, expected, generic_params)) {
         return generic_substitution_dependency_result();
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] static std::optional<ConstraintEvalResult> unresolved_compatibility_check(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
+    if (!compatible(actual, expected)
+        && types_may_be_compatible_after_substitution(actual, expected, generic_params)) {
+        return generic_substitution_dependency_result();
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] static std::optional<ConstraintEvalResult> unresolved_common_type_check(
+    const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params) {
+    if (!common_type(lhs, rhs).has_value()
+        && types_may_have_common_type_after_substitution(lhs, rhs, generic_params)) {
+        return generic_substitution_dependency_result();
+    }
     return std::nullopt;
 }
 
@@ -917,17 +1001,12 @@ ConstraintEvalResult evaluate_constraint(
 
                             const tyir::Ty expected_ty =
                                 apply_substitution(field_it->ty, substitution);
-                            if (auto unresolved =
-                                    unresolved_type_check(field.value->ty, generic_params);
-                                unresolved.has_value()) {
-                                return *unresolved;
-                            }
-                            if (auto unresolved =
-                                    unresolved_type_check(expected_ty, generic_params);
-                                unresolved.has_value()) {
-                                return *unresolved;
-                            }
                             if (!compatible(field.value->ty, expected_ty)) {
+                                if (auto unresolved = unresolved_compatibility_check(
+                                        field.value->ty, expected_ty, generic_params);
+                                    unresolved.has_value()) {
+                                    return *unresolved;
+                                }
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",
@@ -945,12 +1024,13 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (
                     std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
                     if constexpr (std::is_same_v<Node, tyir::TyUnary>) {
-                        if (auto unresolved = unresolved_type_check(node.rhs->ty, generic_params);
-                            unresolved.has_value()) {
-                            return *unresolved;
-                        }
                         if (node.op == ast::UnaryOp::Negate
                             && !matches_type_shape(node.rhs->ty, tyir::ty::num())) {
+                            if (auto unresolved = unresolved_shape_check(
+                                    node.rhs->ty, tyir::ty::num(), generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
+                            }
                             return {
                                 ConstraintEvalKind::Unsatisfied,
                                 "probed expression is not type-valid",
@@ -959,6 +1039,11 @@ ConstraintEvalResult evaluate_constraint(
                         }
                         if (node.op == ast::UnaryOp::Not
                             && !matches_type_shape(node.rhs->ty, tyir::ty::bool_())) {
+                            if (auto unresolved = unresolved_shape_check(
+                                    node.rhs->ty, tyir::ty::bool_(), generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
+                            }
                             return {
                                 ConstraintEvalKind::Unsatisfied,
                                 "probed expression is not type-valid",
@@ -970,16 +1055,24 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
                     const auto require_lhs_rhs =
                         [&](const tyir::Ty& expected) -> std::optional<ConstraintEvalResult> {
-                        if (auto unresolved = unresolved_type_check(node.lhs->ty, generic_params);
-                            unresolved.has_value()) {
-                            return unresolved;
+                        if (!matches_type_shape(node.lhs->ty, expected)) {
+                            if (auto unresolved =
+                                    unresolved_shape_check(node.lhs->ty, expected, generic_params);
+                                unresolved.has_value()) {
+                                return unresolved;
+                            }
+                            return ConstraintEvalResult{
+                                ConstraintEvalKind::Unsatisfied,
+                                "probed expression is not type-valid",
+                                std::nullopt,
+                            };
                         }
-                        if (auto unresolved = unresolved_type_check(node.rhs->ty, generic_params);
-                            unresolved.has_value()) {
-                            return unresolved;
-                        }
-                        if (!matches_type_shape(node.lhs->ty, expected)
-                            || !matches_type_shape(node.rhs->ty, expected)) {
+                        if (!matches_type_shape(node.rhs->ty, expected)) {
+                            if (auto unresolved =
+                                    unresolved_shape_check(node.rhs->ty, expected, generic_params);
+                                unresolved.has_value()) {
+                                return unresolved;
+                            }
                             return ConstraintEvalResult{
                                 ConstraintEvalKind::Unsatisfied,
                                 "probed expression is not type-valid",
@@ -1008,16 +1101,18 @@ ConstraintEvalResult evaluate_constraint(
                         break;
                     case ast::BinaryOp::Eq:
                     case ast::BinaryOp::Ne:
-                        if (auto unresolved = unresolved_type_check(node.lhs->ty, generic_params);
-                            unresolved.has_value()) {
-                            return *unresolved;
-                        }
-                        if (auto unresolved = unresolved_type_check(node.rhs->ty, generic_params);
-                            unresolved.has_value()) {
-                            return *unresolved;
-                        }
                         if (!compatible(node.lhs->ty, node.rhs->ty)
                             && !compatible(node.rhs->ty, node.lhs->ty)) {
+                            if (auto unresolved = unresolved_compatibility_check(
+                                    node.lhs->ty, node.rhs->ty, generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
+                            }
+                            if (auto unresolved = unresolved_compatibility_check(
+                                    node.rhs->ty, node.lhs->ty, generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
+                            }
                             return {
                                 ConstraintEvalKind::Unsatisfied,
                                 "probed expression is not type-valid",
@@ -1068,17 +1163,12 @@ ConstraintEvalResult evaluate_constraint(
                         for (std::size_t index = 0; index < node.args.size(); ++index) {
                             const tyir::Ty expected_ty =
                                 apply_substitution(fn.params[index].ty, substitution);
-                            if (auto unresolved =
-                                    unresolved_type_check(node.args[index]->ty, generic_params);
-                                unresolved.has_value()) {
-                                return *unresolved;
-                            }
-                            if (auto unresolved =
-                                    unresolved_type_check(expected_ty, generic_params);
-                                unresolved.has_value()) {
-                                return *unresolved;
-                            }
                             if (!compatible(node.args[index]->ty, expected_ty)) {
+                                if (auto unresolved = unresolved_compatibility_check(
+                                        node.args[index]->ty, expected_ty, generic_params);
+                                    unresolved.has_value()) {
+                                    return *unresolved;
+                                }
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",
@@ -1124,17 +1214,12 @@ ConstraintEvalResult evaluate_constraint(
                         }
                         for (std::size_t index = 0; index < node.args.size(); ++index) {
                             const tyir::Ty& expected_ty = decl.params[index].ty;
-                            if (auto unresolved =
-                                    unresolved_type_check(node.args[index]->ty, generic_params);
-                                unresolved.has_value()) {
-                                return *unresolved;
-                            }
-                            if (auto unresolved =
-                                    unresolved_type_check(expected_ty, generic_params);
-                                unresolved.has_value()) {
-                                return *unresolved;
-                            }
                             if (!compatible(node.args[index]->ty, expected_ty)) {
+                                if (auto unresolved = unresolved_compatibility_check(
+                                        node.args[index]->ty, expected_ty, generic_params);
+                                    unresolved.has_value()) {
+                                    return *unresolved;
+                                }
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",
@@ -1172,17 +1257,12 @@ ConstraintEvalResult evaluate_constraint(
                             [&](const auto& stmt_node) -> ConstraintEvalResult {
                                 using StmtNode = std::decay_t<decltype(stmt_node)>;
                                 if constexpr (std::is_same_v<StmtNode, tyir::TyLetStmt>) {
-                                    if (auto unresolved = unresolved_type_check(
-                                            stmt_node.init->ty, generic_params);
-                                        unresolved.has_value()) {
-                                        return *unresolved;
-                                    }
-                                    if (auto unresolved =
-                                            unresolved_type_check(stmt_node.ty, generic_params);
-                                        unresolved.has_value()) {
-                                        return *unresolved;
-                                    }
                                     if (!compatible(stmt_node.init->ty, stmt_node.ty)) {
+                                        if (auto unresolved = unresolved_compatibility_check(
+                                                stmt_node.init->ty, stmt_node.ty, generic_params);
+                                            unresolved.has_value()) {
+                                            return *unresolved;
+                                        }
                                         return ConstraintEvalResult{
                                             ConstraintEvalKind::Unsatisfied,
                                             "probed expression is not type-valid",
@@ -1201,11 +1281,12 @@ ConstraintEvalResult evaluate_constraint(
                         return self(self, *node->tail);
                     return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                 } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
-                    if (auto unresolved = unresolved_type_check(node.condition->ty, generic_params);
-                        unresolved.has_value()) {
-                        return *unresolved;
-                    }
                     if (!matches_type_shape(node.condition->ty, tyir::ty::bool_())) {
+                        if (auto unresolved = unresolved_shape_check(
+                                node.condition->ty, tyir::ty::bool_(), generic_params);
+                            unresolved.has_value()) {
+                            return *unresolved;
+                        }
                         return {
                             ConstraintEvalKind::Unsatisfied,
                             "probed expression is not type-valid",
@@ -1220,18 +1301,13 @@ ConstraintEvalResult evaluate_constraint(
                     if (then_branch.kind != ConstraintEvalKind::Satisfied)
                         return then_branch;
                     if (node.else_branch.has_value()) {
-                        if (auto unresolved =
-                                unresolved_type_check(node.then_block->ty, generic_params);
-                            unresolved.has_value()) {
-                            return *unresolved;
-                        }
-                        if (auto unresolved =
-                                unresolved_type_check((*node.else_branch)->ty, generic_params);
-                            unresolved.has_value()) {
-                            return *unresolved;
-                        }
                         if (!common_type(node.then_block->ty, (*node.else_branch)->ty)
                                  .has_value()) {
+                            if (auto unresolved = unresolved_common_type_check(
+                                    node.then_block->ty, (*node.else_branch)->ty, generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
+                            }
                             return {
                                 ConstraintEvalKind::Unsatisfied,
                                 "probed expression is not type-valid",
@@ -1244,11 +1320,12 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
                     return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
                 } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
-                    if (auto unresolved = unresolved_type_check(node.condition->ty, generic_params);
-                        unresolved.has_value()) {
-                        return *unresolved;
-                    }
                     if (!matches_type_shape(node.condition->ty, tyir::ty::bool_())) {
+                        if (auto unresolved = unresolved_shape_check(
+                                node.condition->ty, tyir::ty::bool_(), generic_params);
+                            unresolved.has_value()) {
+                            return *unresolved;
+                        }
                         return {
                             ConstraintEvalKind::Unsatisfied,
                             "probed expression is not type-valid",
@@ -1261,16 +1338,12 @@ ConstraintEvalResult evaluate_constraint(
                     return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
                 } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
                     if (node.init.has_value()) {
-                        if (auto unresolved =
-                                unresolved_type_check(node.init->init->ty, generic_params);
-                            unresolved.has_value()) {
-                            return *unresolved;
-                        }
-                        if (auto unresolved = unresolved_type_check(node.init->ty, generic_params);
-                            unresolved.has_value()) {
-                            return *unresolved;
-                        }
                         if (!compatible(node.init->init->ty, node.init->ty)) {
+                            if (auto unresolved = unresolved_compatibility_check(
+                                    node.init->init->ty, node.init->ty, generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
+                            }
                             return {
                                 ConstraintEvalKind::Unsatisfied,
                                 "probed expression is not type-valid",
@@ -1282,12 +1355,12 @@ ConstraintEvalResult evaluate_constraint(
                             return init;
                     }
                     if (node.condition.has_value()) {
-                        if (auto unresolved =
-                                unresolved_type_check((*node.condition)->ty, generic_params);
-                            unresolved.has_value()) {
-                            return *unresolved;
-                        }
                         if (!matches_type_shape((*node.condition)->ty, tyir::ty::bool_())) {
+                            if (auto unresolved = unresolved_shape_check(
+                                    (*node.condition)->ty, tyir::ty::bool_(), generic_params);
+                                unresolved.has_value()) {
+                                return *unresolved;
+                            }
                             return {
                                 ConstraintEvalKind::Unsatisfied,
                                 "probed expression is not type-valid",

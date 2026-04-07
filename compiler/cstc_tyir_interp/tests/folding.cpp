@@ -1523,6 +1523,59 @@ fn main() -> num {
     });
 }
 
+static void test_decl_generic_ref_unary_probe_is_immediately_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe<T>(value: &T) -> Constraint {
+    decl(-value)
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_generic_ref_condition_probe_is_immediately_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe<T>(value: &T) -> Constraint {
+    decl(if value { 0 } else { 1 })
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_generic_ref_call_probe_is_immediately_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+extern "lang" fn take_num(value: num) -> num;
+
+fn probe<T>(value: &T) -> Constraint {
+    decl(take_num(value))
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
 static void test_decl_generic_extern_call_probe_rechecks_after_substitution() {
     SymbolSession session;
     expect_decl_probe_recheck_case({
@@ -2005,6 +2058,9 @@ int main() {
     test_decl_generic_if_condition_probe_rechecks_after_substitution();
     test_decl_generic_let_annotation_probe_rechecks_after_substitution();
     test_decl_generic_if_branch_probe_rechecks_after_substitution();
+    test_decl_generic_ref_unary_probe_is_immediately_invalid();
+    test_decl_generic_ref_condition_probe_is_immediately_invalid();
+    test_decl_generic_ref_call_probe_is_immediately_invalid();
     test_decl_generic_extern_call_probe_rechecks_after_substitution();
     test_decl_generic_call_probe_bad_arity_is_unsatisfied();
     test_decl_generic_call_probe_bad_generic_arity_is_unsatisfied();
