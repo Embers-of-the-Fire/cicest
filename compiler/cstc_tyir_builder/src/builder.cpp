@@ -601,6 +601,12 @@ struct LowerCtx {
     return should_defer_generic_probe_failure(actual, expected, ctx, false);
 }
 
+[[nodiscard]] static bool
+    should_defer_generic_probe_ownership_validation(const tyir::Ty& ty, const LowerCtx& ctx) {
+    return ctx.defer_generic_probe_validation
+        && type_depends_on_generic_params(ty, ctx.generic_params);
+}
+
 [[nodiscard]] static bool type_shapes_may_unify_after_generic_substitution(
     const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params) {
     TypeSubstitution subst;
@@ -2367,7 +2373,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return make_error(expr->span, "use of moved value '" + display_head + "'");
 
                     tyir::ValueUseKind use_kind = tyir::ValueUseKind::Copy;
-                    if (local.ty.is_move_only()) {
+                    if (local.ty.is_move_only()
+                        && !should_defer_generic_probe_ownership_validation(local.ty, ctx)) {
                         if (local.active_borrows > 0)
                             return make_error(
                                 expr->span,
@@ -2685,7 +2692,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 if (!place)
                     return std::unexpected(std::move(place.error()));
 
-                if (!place->expr->ty.is_copy())
+                if (!place->expr->ty.is_copy()
+                    && !should_defer_generic_probe_ownership_validation(place->expr->ty, ctx))
                     return make_error(
                         expr->span, "cannot move field '" + std::string(node.field.as_str())
                                         + "' out of '" + place->expr->ty.display()

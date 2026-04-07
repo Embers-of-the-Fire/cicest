@@ -515,6 +515,34 @@ static void test_decl_probe_defers_generic_parameter_validation() {
     assert(std::get<LocalRef>(binary.rhs->node).name == Symbol::intern("a"));
 }
 
+static void test_decl_probe_defers_generic_ownership_validation_for_repeated_equality_uses() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn probe<T>(a: T) -> T where decl(a == a) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& binary = std::get<TyBinary>((*probe.expr)->node);
+    assert(std::get<LocalRef>(binary.lhs->node).name == Symbol::intern("a"));
+    assert(std::get<LocalRef>(binary.rhs->node).name == Symbol::intern("a"));
+}
+
+static void test_decl_probe_defers_generic_ownership_validation_for_repeated_block_uses() {
+    const auto prog =
+        must_lower_with_constraint_prelude("fn probe<T>(a: T) -> T where decl({ a; a }) { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[2]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    const auto& block = *std::get<TyBlockPtr>((*probe.expr)->node);
+    assert(block.stmts.size() == 1);
+    assert(std::holds_alternative<TyExprStmt>(block.stmts[0]));
+    const auto& stmt = std::get<TyExprStmt>(block.stmts[0]);
+    assert(std::holds_alternative<LocalRef>(stmt.expr->node));
+    assert(block.tail.has_value());
+    assert(std::holds_alternative<LocalRef>((*block.tail)->node));
+}
+
 static void test_decl_probe_keeps_ref_shape_arithmetic_invalid() {
     const auto prog =
         must_lower_with_constraint_prelude("fn probe<T>(a: &T) where decl(a + a) { () }");
@@ -851,6 +879,8 @@ int main() {
     test_decl_probe_recovers_invalid_inner_expression();
     test_decl_probe_preserves_generic_inner_call();
     test_decl_probe_defers_generic_parameter_validation();
+    test_decl_probe_defers_generic_ownership_validation_for_repeated_equality_uses();
+    test_decl_probe_defers_generic_ownership_validation_for_repeated_block_uses();
     test_decl_probe_keeps_ref_shape_arithmetic_invalid();
     test_decl_probe_defers_generic_let_annotation_validation();
     test_decl_probe_defers_generic_if_branch_join_validation();

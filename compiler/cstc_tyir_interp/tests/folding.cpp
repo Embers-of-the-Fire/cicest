@@ -1323,6 +1323,66 @@ fn main() -> num {
     });
 }
 
+static void test_decl_generic_ownership_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(a: T) -> T where decl(a == a) {
+    a
+}
+
+fn main() -> num {
+    probe::<num>(3)
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "3",
+        .failing_source = R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn probe<T>(a: T) -> T where decl(a == a) {
+    a
+}
+
+fn main() -> num {
+    probe::<str>(to_str(3));
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
+static void test_decl_generic_block_ownership_probe_rechecks_after_substitution() {
+    SymbolSession session;
+    expect_decl_probe_recheck_case({
+        .folded_source = R"(
+fn probe<T>(a: T) -> T where decl({ a; a }) {
+    a
+}
+
+fn main() -> num {
+    probe::<num>(3)
+}
+)",
+        .literal_kind = TyLiteral::Kind::Num,
+        .literal_symbol = "3",
+        .failing_source = R"(
+extern "lang" fn to_str(value: num) -> str;
+
+fn probe<T>(a: T) -> T where decl({ a; a }) {
+    a
+}
+
+fn main() -> num {
+    probe::<str>(to_str(3));
+    0
+}
+)",
+        .failing_function = "probe",
+    });
+}
+
 static void test_decl_generic_call_argument_probe_rechecks_after_substitution() {
     SymbolSession session;
     expect_decl_probe_recheck_case({
@@ -2262,6 +2322,8 @@ int main() {
     test_decl_generic_struct_probe_is_deferred_inside_generic_body();
     test_decl_recursive_constraint_probe_reports_instantiation_limit();
     test_decl_generic_parameter_probe_rechecks_after_substitution();
+    test_decl_generic_ownership_probe_rechecks_after_substitution();
+    test_decl_generic_block_ownership_probe_rechecks_after_substitution();
     test_decl_generic_call_argument_probe_rechecks_after_substitution();
     test_decl_generic_struct_field_probe_rechecks_after_substitution();
     test_decl_generic_unary_probe_rechecks_after_substitution();

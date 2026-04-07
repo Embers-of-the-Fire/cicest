@@ -4,6 +4,7 @@
 #include <cstc_tyir/type_compat.hpp>
 
 #include <cassert>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace cstc::tyir_interp::detail {
@@ -333,6 +334,417 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
         "probed expression still depends on generic substitution",
         std::nullopt,
     };
+}
+
+class ProbeOwnershipScope {
+public:
+    struct LocalState {
+        cstc::symbol::Symbol name = cstc::symbol::kInvalidSymbol;
+        tyir::Ty ty;
+        bool moved = false;
+        std::size_t active_borrows = 0;
+        std::size_t deferred_value_uses = 0;
+        std::optional<std::size_t> borrowed_local;
+    };
+
+    ProbeOwnershipScope() { push(); }
+
+    void push() { frames_.push_back(Frame{{}, locals_.size()}); }
+    void pop() {
+        assert(!frames_.empty());
+        while (locals_.size() > frames_.back().start_local_count) {
+            LocalState& local = locals_.back();
+            if (local.borrowed_local.has_value()) {
+                LocalState& owner = locals_.at(*local.borrowed_local);
+                assert(owner.active_borrows > 0);
+                owner.active_borrows -= 1;
+            }
+            locals_.pop_back();
+        }
+        frames_.pop_back();
+    }
+
+    [[nodiscard]] std::optional<std::size_t> lookup_local(cstc::symbol::Symbol name) const {
+        for (auto it = frames_.rbegin(); it != frames_.rend(); ++it) {
+            const auto found = it->bindings.find(name);
+            if (found != it->bindings.end())
+                return found->second;
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::size_t ensure_external_local(cstc::symbol::Symbol name, const tyir::Ty& ty) {
+        if (const auto found = lookup_local(name); found.has_value())
+            return *found;
+        assert(!frames_.empty());
+        const std::size_t index = locals_.size();
+        locals_.push_back(LocalState{name, ty, false, 0, 0, std::nullopt});
+        frames_.front().bindings.emplace(name, index);
+        return index;
+    }
+
+    void insert(
+        cstc::symbol::Symbol name, const tyir::Ty& ty,
+        std::optional<std::size_t> borrowed_local = std::nullopt) {
+        assert(!frames_.empty());
+        if (borrowed_local.has_value())
+            locals_.at(*borrowed_local).active_borrows += 1;
+        const std::size_t index = locals_.size();
+        locals_.push_back(LocalState{name, ty, false, 0, 0, borrowed_local});
+        frames_.back().bindings.emplace(name, index);
+    }
+
+    [[nodiscard]] LocalState& local(std::size_t index) { return locals_.at(index); }
+    [[nodiscard]] const LocalState& local(std::size_t index) const { return locals_.at(index); }
+
+    void release_temp_borrows(const std::vector<std::size_t>& borrowed_locals) {
+        for (const std::size_t index : borrowed_locals) {
+            LocalState& owner = locals_.at(index);
+            assert(owner.active_borrows > 0);
+            owner.active_borrows -= 1;
+        }
+    }
+
+    void merge_from(const ProbeOwnershipScope& other) {
+        assert(locals_.size() == other.locals_.size());
+        for (std::size_t index = 0; index < locals_.size(); ++index) {
+            locals_[index].moved = locals_[index].moved || other.locals_[index].moved;
+            locals_[index].active_borrows =
+                std::max(locals_[index].active_borrows, other.locals_[index].active_borrows);
+            locals_[index].deferred_value_uses = std::max(
+                locals_[index].deferred_value_uses, other.locals_[index].deferred_value_uses);
+        }
+    }
+
+private:
+    struct Frame {
+        std::unordered_map<cstc::symbol::Symbol, std::size_t, cstc::symbol::SymbolHash> bindings;
+        std::size_t start_local_count = 0;
+    };
+
+    std::vector<Frame> frames_;
+    std::vector<LocalState> locals_;
+};
+
+struct ProbeOwnershipCheck {
+    ConstraintEvalResult status;
+    std::vector<std::size_t> temp_borrows;
+};
+
+[[nodiscard]] static ProbeOwnershipCheck
+    satisfied_probe_ownership(std::vector<std::size_t> temp_borrows = {}) {
+    return {
+        {ConstraintEvalKind::Satisfied, {}, std::nullopt},
+        std::move(temp_borrows)
+    };
+}
+
+[[nodiscard]] static ProbeOwnershipCheck failed_probe_ownership(ConstraintEvalResult status) {
+    return {std::move(status), {}};
+}
+
+[[nodiscard]] static std::optional<std::size_t>
+    borrowed_owner_local(const tyir::TyExprPtr& expr, ProbeOwnershipScope& scope) {
+    if (expr == nullptr)
+        return std::nullopt;
+    return std::visit(
+        [&](const auto& node) -> std::optional<std::size_t> {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<Node, tyir::LocalRef>) {
+                if (node.use_kind != tyir::ValueUseKind::Borrow)
+                    return std::nullopt;
+                return scope.ensure_external_local(node.name, expr->ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                if (node.use_kind != tyir::ValueUseKind::Borrow)
+                    return std::nullopt;
+                return borrowed_owner_local(node.base, scope);
+            } else {
+                return std::nullopt;
+            }
+        },
+        expr->node);
+}
+
+[[nodiscard]] static ConstraintEvalResult validate_decl_probe_ownership(
+    const tyir::TyExprPtr& expr, const GenericParamSet& generic_params) {
+    ProbeOwnershipScope scope;
+    const auto validate_expr = [&](const auto& self, const tyir::TyExprPtr& value,
+                                   ProbeOwnershipScope& current) -> ProbeOwnershipCheck {
+        if (value == nullptr)
+            return satisfied_probe_ownership();
+
+        return std::visit(
+            [&](const auto& node) -> ProbeOwnershipCheck {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (
+                    std::is_same_v<Node, tyir::TyLiteral>
+                    || std::is_same_v<Node, tyir::EnumVariantRef>
+                    || std::is_same_v<Node, tyir::TyDeferredGenericCall>
+                    || std::is_same_v<Node, tyir::TyDeclProbe>
+                    || std::is_same_v<Node, tyir::TyContinue>) {
+                    return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::LocalRef>) {
+                    const std::size_t local_index =
+                        current.ensure_external_local(node.name, value->ty);
+                    auto& local = current.local(local_index);
+                    if (local.moved) {
+                        return failed_probe_ownership({
+                            ConstraintEvalKind::Unsatisfied,
+                            "use of moved value '" + std::string(node.name.as_str()) + "'",
+                            std::nullopt,
+                        });
+                    }
+                    if (node.use_kind == tyir::ValueUseKind::Borrow) {
+                        local.active_borrows += 1;
+                        return satisfied_probe_ownership({local_index});
+                    }
+                    if (type_depends_on_generic_params(value->ty, generic_params)) {
+                        if (local.active_borrows > 0 || local.deferred_value_uses > 0) {
+                            return failed_probe_ownership(generic_substitution_dependency_result());
+                        }
+                        local.deferred_value_uses += 1;
+                        return satisfied_probe_ownership();
+                    }
+                    if (value->ty.is_move_only()) {
+                        if (local.active_borrows > 0) {
+                            return failed_probe_ownership({
+                                ConstraintEvalKind::Unsatisfied,
+                                "cannot move '" + std::string(node.name.as_str())
+                                    + "' while it is borrowed",
+                                std::nullopt,
+                            });
+                        }
+                        local.moved = true;
+                    }
+                    return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                    std::vector<std::size_t> temp_borrows;
+                    for (const tyir::TyStructInitField& field : node.fields) {
+                        auto nested = self(self, field.value, current);
+                        if (nested.status.kind != ConstraintEvalKind::Satisfied) {
+                            current.release_temp_borrows(temp_borrows);
+                            return nested;
+                        }
+                        temp_borrows.insert(
+                            temp_borrows.end(), nested.temp_borrows.begin(),
+                            nested.temp_borrows.end());
+                    }
+                    current.release_temp_borrows(temp_borrows);
+                    return satisfied_probe_ownership();
+                } else if constexpr (
+                    std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                    auto nested = self(self, node.rhs, current);
+                    if (nested.status.kind != ConstraintEvalKind::Satisfied)
+                        return nested;
+                    if constexpr (std::is_same_v<Node, tyir::TyBorrow>)
+                        return nested;
+                    current.release_temp_borrows(nested.temp_borrows);
+                    return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                    auto lhs = self(self, node.lhs, current);
+                    if (lhs.status.kind != ConstraintEvalKind::Satisfied)
+                        return lhs;
+                    auto rhs = self(self, node.rhs, current);
+                    current.release_temp_borrows(lhs.temp_borrows);
+                    if (rhs.status.kind != ConstraintEvalKind::Satisfied)
+                        return rhs;
+                    current.release_temp_borrows(rhs.temp_borrows);
+                    return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                    auto base = self(self, node.base, current);
+                    if (base.status.kind != ConstraintEvalKind::Satisfied)
+                        return base;
+                    if (node.use_kind == tyir::ValueUseKind::Borrow)
+                        return base;
+                    current.release_temp_borrows(base.temp_borrows);
+                    if (type_depends_on_generic_params(value->ty, generic_params)) {
+                        return failed_probe_ownership(generic_substitution_dependency_result());
+                    }
+                    if (value->ty.is_move_only()) {
+                        return failed_probe_ownership({
+                            ConstraintEvalKind::Unsatisfied,
+                            "cannot move field '" + std::string(node.field.as_str()) + "' out of '"
+                                + node.base->ty.display() + "'; borrow the field instead",
+                            std::nullopt,
+                        });
+                    }
+                    return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                    std::vector<std::size_t> temp_borrows;
+                    for (const tyir::TyExprPtr& arg : node.args) {
+                        auto nested = self(self, arg, current);
+                        if (nested.status.kind != ConstraintEvalKind::Satisfied) {
+                            current.release_temp_borrows(temp_borrows);
+                            return nested;
+                        }
+                        temp_borrows.insert(
+                            temp_borrows.end(), nested.temp_borrows.begin(),
+                            nested.temp_borrows.end());
+                    }
+                    current.release_temp_borrows(temp_borrows);
+                    return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                    if (node == nullptr)
+                        return satisfied_probe_ownership();
+                    current.push();
+                    for (const tyir::TyStmt& stmt : node->stmts) {
+                        auto nested = std::visit(
+                            [&](const auto& stmt_node) -> ProbeOwnershipCheck {
+                                using StmtNode = std::decay_t<decltype(stmt_node)>;
+                                if constexpr (std::is_same_v<StmtNode, tyir::TyLetStmt>) {
+                                    auto init = self(self, stmt_node.init, current);
+                                    if (init.status.kind != ConstraintEvalKind::Satisfied)
+                                        return init;
+                                    std::optional<std::size_t> borrowed_local;
+                                    if (stmt_node.ty.is_ref())
+                                        borrowed_local =
+                                            borrowed_owner_local(stmt_node.init, current);
+                                    if (!stmt_node.discard)
+                                        current.insert(
+                                            stmt_node.name, stmt_node.ty, borrowed_local);
+                                    std::vector<std::size_t> remaining_borrows = init.temp_borrows;
+                                    if (borrowed_local.has_value()) {
+                                        remaining_borrows.erase(
+                                            std::remove(
+                                                remaining_borrows.begin(), remaining_borrows.end(),
+                                                *borrowed_local),
+                                            remaining_borrows.end());
+                                    }
+                                    current.release_temp_borrows(remaining_borrows);
+                                    return satisfied_probe_ownership();
+                                } else {
+                                    auto nested_expr = self(self, stmt_node.expr, current);
+                                    if (nested_expr.status.kind != ConstraintEvalKind::Satisfied) {
+                                        return nested_expr;
+                                    }
+                                    current.release_temp_borrows(nested_expr.temp_borrows);
+                                    return satisfied_probe_ownership();
+                                }
+                            },
+                            stmt);
+                        if (nested.status.kind != ConstraintEvalKind::Satisfied) {
+                            current.pop();
+                            return nested;
+                        }
+                    }
+                    ProbeOwnershipCheck tail = satisfied_probe_ownership();
+                    if (node->tail.has_value())
+                        tail = self(self, *node->tail, current);
+                    if (tail.status.kind != ConstraintEvalKind::Satisfied) {
+                        current.pop();
+                        return tail;
+                    }
+                    current.pop();
+                    return tail;
+                } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                    auto condition = self(self, node.condition, current);
+                    if (condition.status.kind != ConstraintEvalKind::Satisfied)
+                        return condition;
+                    current.release_temp_borrows(condition.temp_borrows);
+
+                    ProbeOwnershipScope then_scope = current;
+                    auto then_branch = self(
+                        self, tyir::make_ty_expr(value->span, node.then_block, node.then_block->ty),
+                        then_scope);
+                    if (then_branch.status.kind != ConstraintEvalKind::Satisfied)
+                        return then_branch;
+                    then_scope.release_temp_borrows(then_branch.temp_borrows);
+
+                    if (!node.else_branch.has_value()) {
+                        current.merge_from(then_scope);
+                        return satisfied_probe_ownership();
+                    }
+
+                    ProbeOwnershipScope else_scope = current;
+                    auto else_branch = self(self, *node.else_branch, else_scope);
+                    if (else_branch.status.kind != ConstraintEvalKind::Satisfied)
+                        return else_branch;
+                    else_scope.release_temp_borrows(else_branch.temp_borrows);
+                    current.merge_from(then_scope);
+                    current.merge_from(else_scope);
+                    return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                    auto nested = self(
+                        self, tyir::make_ty_expr(value->span, node.body, node.body->ty), current);
+                    if (nested.status.kind != ConstraintEvalKind::Satisfied)
+                        return nested;
+                    current.release_temp_borrows(nested.temp_borrows);
+                    return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                    auto condition = self(self, node.condition, current);
+                    if (condition.status.kind != ConstraintEvalKind::Satisfied)
+                        return condition;
+                    current.release_temp_borrows(condition.temp_borrows);
+                    auto body = self(
+                        self, tyir::make_ty_expr(value->span, node.body, node.body->ty), current);
+                    if (body.status.kind != ConstraintEvalKind::Satisfied)
+                        return body;
+                    current.release_temp_borrows(body.temp_borrows);
+                    return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                    current.push();
+                    if (node.init.has_value()) {
+                        auto init = self(self, node.init->init, current);
+                        if (init.status.kind != ConstraintEvalKind::Satisfied) {
+                            current.pop();
+                            return init;
+                        }
+                        std::optional<std::size_t> borrowed_local;
+                        if (node.init->ty.is_ref())
+                            borrowed_local = borrowed_owner_local(node.init->init, current);
+                        current.insert(node.init->name, node.init->ty, borrowed_local);
+                        std::vector<std::size_t> remaining_borrows = init.temp_borrows;
+                        if (borrowed_local.has_value()) {
+                            remaining_borrows.erase(
+                                std::remove(
+                                    remaining_borrows.begin(), remaining_borrows.end(),
+                                    *borrowed_local),
+                                remaining_borrows.end());
+                        }
+                        current.release_temp_borrows(remaining_borrows);
+                    }
+                    if (node.condition.has_value()) {
+                        auto condition = self(self, *node.condition, current);
+                        if (condition.status.kind != ConstraintEvalKind::Satisfied) {
+                            current.pop();
+                            return condition;
+                        }
+                        current.release_temp_borrows(condition.temp_borrows);
+                    }
+                    if (node.step.has_value()) {
+                        auto step = self(self, *node.step, current);
+                        if (step.status.kind != ConstraintEvalKind::Satisfied) {
+                            current.pop();
+                            return step;
+                        }
+                        current.release_temp_borrows(step.temp_borrows);
+                    }
+                    auto body = self(
+                        self, tyir::make_ty_expr(value->span, node.body, node.body->ty), current);
+                    if (body.status.kind != ConstraintEvalKind::Satisfied) {
+                        current.pop();
+                        return body;
+                    }
+                    current.release_temp_borrows(body.temp_borrows);
+                    current.pop();
+                    return satisfied_probe_ownership();
+                } else {
+                    static_assert(
+                        std::is_same_v<Node, tyir::TyBreak>
+                        || std::is_same_v<Node, tyir::TyReturn>);
+                    if (!node.value.has_value())
+                        return satisfied_probe_ownership();
+                    auto nested = self(self, *node.value, current);
+                    if (nested.status.kind != ConstraintEvalKind::Satisfied)
+                        return nested;
+                    current.release_temp_borrows(nested.temp_borrows);
+                    return satisfied_probe_ownership();
+                }
+            },
+            value->node);
+    };
+
+    return validate_expr(validate_expr, expr, scope).status;
 }
 
 [[nodiscard]] static std::optional<ConstraintEvalResult> unresolved_shape_check(
@@ -915,6 +1327,11 @@ ConstraintEvalResult evaluate_constraint(
             std::nullopt,
         };
     }
+
+    ConstraintEvalResult ownership_status =
+        validate_decl_probe_ownership(*probe.expr, generic_params);
+    if (ownership_status.kind != ConstraintEvalKind::Satisfied)
+        return ownership_status;
 
     const auto validate_expr = [&](const auto& self,
                                    const tyir::TyExprPtr& expr) -> ConstraintEvalResult {
