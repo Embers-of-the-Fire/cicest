@@ -1583,6 +1583,40 @@ fn main() -> num {
     });
 }
 
+static void test_decl_block_cannot_return_borrow_of_inner_local() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe() -> Constraint {
+    decl({ let x: num = 1; &x })
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_block_borrow_escape_stays_invalid_through_outer_let() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe() -> Constraint {
+    decl({ let r: &num = { let x: num = 1; &x }; 0 })
+}
+
+fn main() -> num {
+    0
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
 static void test_decl_generic_ref_local_keeps_temp_borrow_after_substitution() {
     SymbolSession session;
     expect_decl_probe_recheck_case({
@@ -2496,6 +2530,8 @@ int main() {
     test_decl_generic_if_condition_probe_rechecks_after_substitution();
     test_decl_generic_let_annotation_probe_rechecks_after_substitution();
     test_decl_generic_if_branch_probe_rechecks_after_substitution();
+    test_decl_block_cannot_return_borrow_of_inner_local();
+    test_decl_block_borrow_escape_stays_invalid_through_outer_let();
     test_decl_generic_ref_local_keeps_temp_borrow_after_substitution();
     test_decl_generic_if_ref_local_rechecks_borrow_after_substitution();
     test_decl_generic_named_actual_to_bare_param_defers_until_substitution();

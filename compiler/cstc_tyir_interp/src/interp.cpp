@@ -401,6 +401,11 @@ public:
     [[nodiscard]] LocalState& local(std::size_t index) { return locals_.at(index); }
     [[nodiscard]] const LocalState& local(std::size_t index) const { return locals_.at(index); }
 
+    [[nodiscard]] bool is_in_current_frame(std::size_t index) const {
+        assert(!frames_.empty());
+        return index >= frames_.back().start_local_count;
+    }
+
     void release_temp_borrows(const std::vector<std::size_t>& borrowed_locals) {
         for (const std::size_t index : borrowed_locals) {
             LocalState& owner = locals_.at(index);
@@ -514,6 +519,15 @@ static void release_uncaptured_temp_borrows(
         remaining_borrows.push_back(borrowed_local);
     }
     scope.release_temp_borrows(remaining_borrows);
+}
+
+[[nodiscard]] static std::optional<std::size_t> escaped_current_frame_temp_borrow(
+    const ProbeOwnershipScope& scope, const std::vector<std::size_t>& temp_borrows) {
+    for (const std::size_t borrowed_local : temp_borrows) {
+        if (scope.is_in_current_frame(borrowed_local))
+            return borrowed_local;
+    }
+    return std::nullopt;
 }
 
 [[nodiscard]] static ConstraintEvalResult validate_decl_probe_ownership(
@@ -685,6 +699,19 @@ static void release_uncaptured_temp_borrows(
                     if (tail.status.kind != ConstraintEvalKind::Satisfied) {
                         current.pop();
                         return tail;
+                    }
+                    if (const auto escaped_local =
+                            escaped_current_frame_temp_borrow(current, tail.temp_borrows);
+                        escaped_local.has_value()) {
+                        const auto& local = current.local(*escaped_local);
+                        current.release_temp_borrows(tail.temp_borrows);
+                        current.pop();
+                        return failed_probe_ownership({
+                            ConstraintEvalKind::Unsatisfied,
+                            "cannot return borrow of block-local '"
+                                + std::string(local.name.as_str()) + "'",
+                            std::nullopt,
+                        });
                     }
                     current.pop();
                     return tail;
