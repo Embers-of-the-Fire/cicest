@@ -29,6 +29,11 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef _WIN32
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+#endif
+
 typedef struct cstc_rt_str {
     char* data;
     uint64_t len;
@@ -111,6 +116,35 @@ static void cstc_rt_finalize_buffer(cstc_rt_str* out, char* data, size_t len) {
         data = resized;
     data[len] = '\0';
     cstc_rt_store_owned(out, data, len);
+}
+
+static int cstc_rt_get_timespec_utc(struct timespec* ts) {
+    if (ts == NULL)
+        return 0;
+
+#ifdef TIME_UTC
+    if (timespec_get(ts, TIME_UTC) == TIME_UTC)
+        return 1;
+#endif
+
+#ifdef _WIN32
+    FILETIME file_time;
+    ULARGE_INTEGER ticks;
+    const uint64_t windows_epoch_offset = 116444736000000000ULL;
+
+    GetSystemTimeAsFileTime(&file_time);
+    ticks.LowPart = file_time.dwLowDateTime;
+    ticks.HighPart = file_time.dwHighDateTime;
+    if (ticks.QuadPart < windows_epoch_offset)
+        return 0;
+
+    const uint64_t unix_ticks = ticks.QuadPart - windows_epoch_offset;
+    ts->tv_sec = (time_t)(unix_ticks / 10000000ULL);
+    ts->tv_nsec = (long)((unix_ticks % 10000000ULL) * 100ULL);
+    return 1;
+#else
+    return 0;
+#endif
 }
 
 static char* cstc_rt_to_c_string(const cstc_rt_str* value) {
@@ -229,7 +263,7 @@ static void cstc_rt_seed_rand_once(void) {
 
     struct timespec ts;
     unsigned int seed = (unsigned int)time(NULL);
-    if (timespec_get(&ts, TIME_UTC) == TIME_UTC)
+    if (cstc_rt_get_timespec_utc(&ts))
         seed ^= (unsigned int)ts.tv_sec ^ (unsigned int)ts.tv_nsec;
 
     srand(seed);
@@ -243,7 +277,7 @@ double cstc_std_rand(void) {
 
 double cstc_std_time(void) {
     struct timespec ts;
-    if (timespec_get(&ts, TIME_UTC) == TIME_UTC)
+    if (cstc_rt_get_timespec_utc(&ts))
         return (double)ts.tv_sec + ((double)ts.tv_nsec / 1000000000.0);
     return (double)time(NULL);
 }
