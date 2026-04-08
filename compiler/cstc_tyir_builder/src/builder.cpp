@@ -312,6 +312,59 @@ using TypeSubstitution =
 
 [[nodiscard]] static tyir::Ty annotate_type_semantics(tyir::Ty ty, const TypeEnv& env);
 
+[[nodiscard]] static tyir::Ty erase_runtime_qualifiers(const tyir::Ty& ty) {
+    tyir::Ty erased = ty;
+    erased.is_runtime = false;
+    if (ty.kind == tyir::TyKind::Ref && ty.pointee != nullptr) {
+        erased.pointee = std::make_shared<tyir::Ty>(erase_runtime_qualifiers(*ty.pointee));
+    }
+    if (ty.kind == tyir::TyKind::Named && !ty.generic_args.empty()) {
+        erased.generic_args.clear();
+        erased.generic_args.reserve(ty.generic_args.size());
+        for (const tyir::Ty& arg : ty.generic_args)
+            erased.generic_args.push_back(erase_runtime_qualifiers(arg));
+    }
+    return erased;
+}
+
+[[nodiscard]] static bool type_has_runtime_dependency(const tyir::Ty& ty) {
+    if (ty.is_runtime)
+        return true;
+    if (ty.kind == tyir::TyKind::Ref)
+        return ty.pointee != nullptr && type_has_runtime_dependency(*ty.pointee);
+    if (ty.kind != tyir::TyKind::Named)
+        return false;
+    for (const tyir::Ty& arg : ty.generic_args) {
+        if (type_has_runtime_dependency(arg))
+            return true;
+    }
+    return false;
+}
+
+[[nodiscard]] static bool
+    call_argument_compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
+    return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
+}
+
+[[nodiscard]] static bool call_argument_may_be_compatible_after_generic_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
+    return type_may_be_compatible_after_generic_substitution(
+        erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected), generic_params);
+}
+
+[[nodiscard]] static tyir::Ty
+    lift_call_result_type(tyir::Ty result_ty, const std::vector<tyir::TyExprPtr>& args) {
+    if (type_has_runtime_dependency(result_ty))
+        result_ty.is_runtime = true;
+    for (const tyir::TyExprPtr& arg : args) {
+        if (arg != nullptr && type_has_runtime_dependency(arg->ty)) {
+            result_ty.is_runtime = true;
+            break;
+        }
+    }
+    return result_ty;
+}
+
 [[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
     const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params);
 
@@ -337,42 +390,46 @@ using TypeSubstitution =
     const tyir::Ty& pattern, const tyir::Ty& actual, const GenericParamSet& generic_params,
     TypeSubstitution& subst, cstc::span::SourceSpan span, std::string_view owner_name,
     const GenericParamSet* tentative_generic_params = nullptr) {
-    if (is_generic_param_ty(pattern, generic_params)) {
-        const auto found = subst.find(pattern.name);
+    const tyir::Ty normalized_pattern = erase_runtime_qualifiers(pattern);
+    const tyir::Ty normalized_actual = erase_runtime_qualifiers(actual);
+
+    if (is_generic_param_ty(normalized_pattern, generic_params)) {
+        const auto found = subst.find(normalized_pattern.name);
         if (found == subst.end()) {
-            subst.emplace(pattern.name, actual);
+            subst.emplace(normalized_pattern.name, normalized_actual);
             return {};
         }
-        if (found->second == actual)
+        if (found->second == normalized_actual)
             return {};
         if (tentative_generic_params != nullptr
             && type_may_be_compatible_after_generic_substitution(
-                found->second, actual, *tentative_generic_params)) {
+                found->second, normalized_actual, *tentative_generic_params)) {
             return {};
         }
         return make_error(
             span, "conflicting inferred types for generic parameter '"
-                      + std::string(pattern.name.as_str()) + "' in '" + std::string(owner_name)
-                      + "'");
+                      + std::string(normalized_pattern.name.as_str()) + "' in '"
+                      + std::string(owner_name) + "'");
     }
 
-    if (pattern.kind != actual.kind)
+    if (normalized_pattern.kind != normalized_actual.kind)
         return {};
-    if (pattern.kind == tyir::TyKind::Ref) {
-        if (pattern.pointee != nullptr && actual.pointee != nullptr)
+    if (normalized_pattern.kind == tyir::TyKind::Ref) {
+        if (normalized_pattern.pointee != nullptr && normalized_actual.pointee != nullptr)
             return infer_substitution(
-                *pattern.pointee, *actual.pointee, generic_params, subst, span, owner_name,
-                tentative_generic_params);
+                *normalized_pattern.pointee, *normalized_actual.pointee, generic_params, subst,
+                span, owner_name, tentative_generic_params);
         return {};
     }
-    if (pattern.kind != tyir::TyKind::Named || pattern.name != actual.name
-        || pattern.generic_args.size() != actual.generic_args.size()) {
+    if (normalized_pattern.kind != tyir::TyKind::Named
+        || normalized_pattern.name != normalized_actual.name
+        || normalized_pattern.generic_args.size() != normalized_actual.generic_args.size()) {
         return {};
     }
-    for (std::size_t index = 0; index < pattern.generic_args.size(); ++index) {
+    for (std::size_t index = 0; index < normalized_pattern.generic_args.size(); ++index) {
         auto result = infer_substitution(
-            pattern.generic_args[index], actual.generic_args[index], generic_params, subst, span,
-            owner_name, tentative_generic_params);
+            normalized_pattern.generic_args[index], normalized_actual.generic_args[index],
+            generic_params, subst, span, owner_name, tentative_generic_params);
         if (!result)
             return result;
     }
@@ -594,6 +651,18 @@ struct LowerCtx {
         return false;
     }
     return type_may_be_compatible_after_generic_substitution(actual, expected, ctx.generic_params);
+}
+
+[[nodiscard]] static bool should_defer_generic_call_argument_failure(
+    const tyir::Ty& actual, const tyir::Ty& expected, const LowerCtx& ctx) {
+    if (!ctx.defer_generic_probe_validation)
+        return false;
+    if (!type_depends_on_generic_params(actual, ctx.generic_params)
+        && !type_depends_on_generic_params(expected, ctx.generic_params)) {
+        return false;
+    }
+    return call_argument_may_be_compatible_after_generic_substitution(
+        actual, expected, ctx.generic_params);
 }
 
 [[nodiscard]] static bool should_defer_generic_probe_failure(
@@ -1715,7 +1784,7 @@ struct ParamReferenceVisitor {
         if (!resolved_arg)
             return std::unexpected(std::move(resolved_arg.error()));
         resolved_args[index] = std::move(*resolved_arg);
-        if (!compatible(resolved_args[index]->ty, expected_param_ty)) {
+        if (!call_argument_compatible(resolved_args[index]->ty, expected_param_ty)) {
             return make_error(
                 resolved_args[index]->span, "argument " + std::to_string(index + 1) + " of '"
                                                 + std::string(deferred->fn_name.as_str())
@@ -1725,10 +1794,12 @@ struct ParamReferenceVisitor {
         }
     }
 
+    const tyir::Ty lifted_return_ty = lift_call_result_type(resolved_return_ty, resolved_args);
+
     return tyir::make_ty_expr(
         expr->span,
         tyir::TyCall{deferred->fn_name, std::move(concrete_generic_args), std::move(resolved_args)},
-        resolved_return_ty);
+        lifted_return_ty);
 }
 
 [[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
@@ -2862,8 +2933,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         if (!resolved_arg)
                             return std::unexpected(std::move(resolved_arg.error()));
                         lowered_args[i] = std::move(*resolved_arg);
-                        if (!compatible(lowered_args[i]->ty, expected_param_ty)
-                            && !should_defer_generic_probe_failure(
+                        if (!call_argument_compatible(lowered_args[i]->ty, expected_param_ty)
+                            && !should_defer_generic_call_argument_failure(
                                 lowered_args[i]->ty, expected_param_ty, ctx))
                             return make_error(
                                 node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
@@ -2872,17 +2943,22 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                                         + lowered_args[i]->ty.display() + "'");
                     }
 
+                    const tyir::Ty lifted_return_ty =
+                        lift_call_result_type(resolved_return_ty, lowered_args);
+
                     lowered_expr = tyir::make_ty_expr(
                         expr->span,
                         tyir::TyCall{
                             fn_name, std::move(concrete_generic_args), std::move(lowered_args)},
-                        resolved_return_ty);
+                        lifted_return_ty);
                 } else {
+                    const tyir::Ty lifted_return_ty =
+                        lift_call_result_type(resolved_return_ty, lowered_args);
                     lowered_expr = tyir::make_ty_expr(
                         expr->span,
                         tyir::TyDeferredGenericCall{
                             fn_name, std::move(resolved_generic_args), std::move(lowered_args)},
-                        resolved_return_ty);
+                        lifted_return_ty);
                 }
 
                 auto lowered = LoweredExpr{

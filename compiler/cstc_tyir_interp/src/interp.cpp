@@ -231,6 +231,35 @@ struct EvalState {
 
 using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
 
+[[nodiscard]] static bool types_may_be_compatible_after_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params);
+
+[[nodiscard]] static tyir::Ty erase_runtime_qualifiers(const tyir::Ty& ty) {
+    tyir::Ty erased = ty;
+    erased.is_runtime = false;
+    if (ty.kind == tyir::TyKind::Ref && ty.pointee != nullptr) {
+        erased.pointee = std::make_shared<tyir::Ty>(erase_runtime_qualifiers(*ty.pointee));
+    }
+    if (ty.kind == tyir::TyKind::Named && !ty.generic_args.empty()) {
+        erased.generic_args.clear();
+        erased.generic_args.reserve(ty.generic_args.size());
+        for (const tyir::Ty& arg : ty.generic_args)
+            erased.generic_args.push_back(erase_runtime_qualifiers(arg));
+    }
+    return erased;
+}
+
+[[nodiscard]] static bool
+    call_argument_compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
+    return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
+}
+
+[[nodiscard]] static bool call_argument_may_be_compatible_after_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
+    return types_may_be_compatible_after_substitution(
+        erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected), generic_params);
+}
+
 [[nodiscard]] static bool
     type_is_generic_param(const tyir::Ty& ty, const GenericParamSet& generic_params) {
     return ty.kind == tyir::TyKind::Named && ty.generic_args.empty()
@@ -937,8 +966,8 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
 
 [[nodiscard]] static std::optional<ConstraintEvalResult> unresolved_compatibility_check(
     const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
-    if (!compatible(actual, expected)
-        && types_may_be_compatible_after_substitution(actual, expected, generic_params)) {
+    if (!call_argument_compatible(actual, expected)
+        && call_argument_may_be_compatible_after_substitution(actual, expected, generic_params)) {
         return generic_substitution_dependency_result();
     }
     return std::nullopt;
@@ -1771,7 +1800,7 @@ ConstraintEvalResult evaluate_constraint(
                         for (std::size_t index = 0; index < node.args.size(); ++index) {
                             const tyir::Ty expected_ty =
                                 apply_substitution(fn.params[index].ty, substitution);
-                            if (!compatible(node.args[index]->ty, expected_ty)) {
+                            if (!call_argument_compatible(node.args[index]->ty, expected_ty)) {
                                 if (auto unresolved = unresolved_compatibility_check(
                                         node.args[index]->ty, expected_ty, generic_params);
                                     unresolved.has_value()) {
@@ -1824,7 +1853,7 @@ ConstraintEvalResult evaluate_constraint(
                         }
                         for (std::size_t index = 0; index < node.args.size(); ++index) {
                             const tyir::Ty& expected_ty = decl.params[index].ty;
-                            if (!compatible(node.args[index]->ty, expected_ty)) {
+                            if (!call_argument_compatible(node.args[index]->ty, expected_ty)) {
                                 if (auto unresolved = unresolved_compatibility_check(
                                         node.args[index]->ty, expected_ty, generic_params);
                                     unresolved.has_value()) {
