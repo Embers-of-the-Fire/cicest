@@ -966,6 +966,16 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
 
 [[nodiscard]] static std::optional<ConstraintEvalResult> unresolved_compatibility_check(
     const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
+    if (!compatible(actual, expected)
+        && types_may_be_compatible_after_substitution(actual, expected, generic_params)) {
+        return generic_substitution_dependency_result();
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] static std::optional<ConstraintEvalResult>
+    unresolved_call_argument_compatibility_check(
+        const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
     if (!call_argument_compatible(actual, expected)
         && call_argument_may_be_compatible_after_substitution(actual, expected, generic_params)) {
         return generic_substitution_dependency_result();
@@ -1801,7 +1811,7 @@ ConstraintEvalResult evaluate_constraint(
                             const tyir::Ty expected_ty =
                                 apply_substitution(fn.params[index].ty, substitution);
                             if (!call_argument_compatible(node.args[index]->ty, expected_ty)) {
-                                if (auto unresolved = unresolved_compatibility_check(
+                                if (auto unresolved = unresolved_call_argument_compatibility_check(
                                         node.args[index]->ty, expected_ty, generic_params);
                                     unresolved.has_value()) {
                                     return *unresolved;
@@ -1854,7 +1864,7 @@ ConstraintEvalResult evaluate_constraint(
                         for (std::size_t index = 0; index < node.args.size(); ++index) {
                             const tyir::Ty& expected_ty = decl.params[index].ty;
                             if (!call_argument_compatible(node.args[index]->ty, expected_ty)) {
-                                if (auto unresolved = unresolved_compatibility_check(
+                                if (auto unresolved = unresolved_call_argument_compatibility_check(
                                         node.args[index]->ty, expected_ty, generic_params);
                                     unresolved.has_value()) {
                                     return *unresolved;
