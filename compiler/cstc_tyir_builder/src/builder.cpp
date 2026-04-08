@@ -312,6 +312,9 @@ using TypeSubstitution =
 
 [[nodiscard]] static tyir::Ty annotate_type_semantics(tyir::Ty ty, const TypeEnv& env);
 
+[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
+    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params);
+
 [[nodiscard]] static tyir::Ty erase_runtime_qualifiers(const tyir::Ty& ty) {
     tyir::Ty erased = ty;
     erased.is_runtime = false;
@@ -364,9 +367,6 @@ using TypeSubstitution =
     }
     return result_ty;
 }
-
-[[nodiscard]] static bool type_may_be_compatible_after_generic_substitution(
-    const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params);
 
 [[nodiscard]] static std::expected<TypeSubstitution, LowerError> build_substitution(
     const std::vector<cstc::ast::GenericParam>& generic_params,
