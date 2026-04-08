@@ -36,6 +36,13 @@ can be loaded explicitly through `@std/...` import paths.
 | `assert_eq`  | `fn assert_eq(a: num, b: num)`         | Aborts the program when two numbers differ by more than `1e-9`, printing both values on standard error. |
 | `constraint` | `fn constraint(value: bool) -> Constraint` | Converts a boolean into `Constraint::Valid` / `Constraint::Invalid`; the compiler inserts this implicitly for boolean `where` clauses. |
 
+Plain std helpers participate in the language's call-lifting rule. A call may
+pass runtime-qualified arguments to a plain std function, and the call result is
+then lifted to the corresponding `runtime` type automatically. This is how
+helpers such as `to_str`, `str_concat`, `str_len`, `assert`, and `assert_eq`
+support both compile-time and runtime values without changing their source
+signatures.
+
 ## Architecture
 
 All standard library lang items are declared in the prelude using `[[lang = "..."]]`:

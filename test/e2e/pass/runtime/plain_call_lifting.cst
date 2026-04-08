@@ -1,0 +1,8 @@
+runtime fn source() -> num { 41 }
+
+fn increment(value: num) -> num { value + 1 }
+
+fn main() {
+    let lifted: runtime num = increment(source());
+    let _ = lifted;
+}

@@ -188,6 +188,16 @@ TypeArgList        = "<" , Type , { "," , Type } , [ "," ] , ">" ;
 > a wrapper like `Runtime<T>` rather than a separate ad hoc type category.
 > Values of type `T` may be promoted to `runtime T`, but the reverse demotion
 > is forbidden and is reported as a hard error.
+>
+> Function calls add one extra lifting rule: a plain function parameter of type
+> `T` may still receive a `runtime T` argument. That does not demote the
+> argument. Instead, the call result is lifted to `runtime U`, where `U` is the
+> declared return type, whenever the callee is runtime-qualified or any argument
+> is runtime-qualified.
+
+> **Note:** `decl(expr)` is not an ordinary function call. It is a dedicated
+> compiler-recognized form that always has type `Constraint`, even when the
+> probed validity/value is deferred for later checking.
 
 Ownership notes:
 

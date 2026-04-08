@@ -1,0 +1,8 @@
+runtime fn source() -> num { 41 }
+
+fn id<T>(value: T) -> T { value }
+
+fn main() {
+    let lifted: runtime num = id(source());
+    let _ = lifted;
+}

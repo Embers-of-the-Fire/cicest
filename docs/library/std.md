@@ -187,6 +187,14 @@ The C implementations must match the LLVM IR signatures emitted by codegen:
 
 The prelude currently provides the following functions:
 
+Calls to plain std helpers follow the language's ordinary call-lifting rule.
+That means functions such as `to_str`, `str_concat`, `str_len`, `assert`, and
+`assert_eq` may be called with runtime-qualified arguments even though their
+declared parameter types are plain. The call result is then lifted to the
+corresponding `runtime` type automatically. Impure APIs such as `print`,
+`read_file`, `rand`, and `time` remain explicitly `runtime` in their
+declarations.
+
 ## Available lang items
 
 ### Constraint

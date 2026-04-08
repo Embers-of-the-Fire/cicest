@@ -47,6 +47,16 @@ For runtime-tagged types, TyIR uses a directional compatibility rule:
 - `runtime T` does not convert to `T`
 - When control-flow joins `T` with `runtime T`, the resulting type is `runtime T`
 
+Function application is intentionally slightly more permissive than ordinary
+compatibility:
+
+- call arguments are matched by their non-`runtime` structure
+- passing `runtime T` to a plain parameter `T` is allowed for calls only
+- the resulting `TyCall` / `TyDeferredGenericCall` type is lifted to
+  `runtime U` when the callee or any argument is runtime-qualified
+- this does not introduce a general `runtime T -> T` conversion for lets,
+  returns, or other non-call sites
+
 TyIR keeps the tag on `Ty` itself. Surface sugar such as `runtime fn` is
 normalized during lowering into a runtime-tagged return type, and TyIR also
 preserves the original declaration-level runtime marker on function items for
@@ -68,7 +78,8 @@ TyIR is the last IR that may still contain generic declarations.
   lang `Constraint` enum. Source `bool` expressions are implicitly wrapped to
   `Constraint::Valid` / `Constraint::Invalid` through the constraint intrinsic.
 - Source `decl(expr)` probes lower into a dedicated TyIR node that validates the
-  inner expression without evaluating it for runtime value production.
+  inner expression without evaluating it for runtime value production. The node
+  always has type `Constraint`; it is not modeled as an ordinary function call.
 - When lowering function `where` clauses, parameters stay unavailable to normal
   constraint expressions, but they are placed in scope for nested `decl(expr)`
   probes so the compiler can validate parameter-dependent expressions.
