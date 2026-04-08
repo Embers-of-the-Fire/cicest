@@ -228,12 +228,52 @@ static void test_runtime_argument_promotion() {
     assert(stmt.init->ty == ty::num(true));
 }
 
-static void test_runtime_argument_demotion_error() {
+static void test_plain_call_accepts_runtime_argument_and_lifts_result() {
+    const auto prog = must_lower(
+        "runtime fn source() -> num { 1 }"
+        "fn sink(value: num) -> num { value }"
+        "fn main() { let value: runtime num = sink(source()); }");
+    const auto& stmt = std::get<TyLetStmt>(nth_fn(prog, 2).body->stmts[0]);
+    assert(stmt.ty == ty::num(true));
+    assert(stmt.init->ty == ty::num(true));
+    const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty == ty::num(true));
+}
+
+static void test_plain_call_lifted_result_still_prevents_return_demotion() {
     must_fail_with_message(
         "runtime fn source() -> num { 1 }"
         "fn sink(value: num) -> num { value }"
         "fn main() -> num { sink(source()) }",
-        "argument 1 of 'sink': expected 'num', found 'runtime num'");
+        "body has type 'runtime num' but return type is 'num'");
+}
+
+static void test_plain_generic_call_accepts_runtime_argument_and_lifts_result() {
+    const auto prog = must_lower(
+        "runtime fn source() -> num { 1 }"
+        "fn id<T>(value: T) -> T { value }"
+        "fn main() { let value: runtime num = id(source()); }");
+    const auto& stmt = std::get<TyLetStmt>(nth_fn(prog, 2).body->stmts[0]);
+    assert(stmt.ty == ty::num(true));
+    assert(stmt.init->ty == ty::num(true));
+    const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+    assert(call.args[0]->ty == ty::num(true));
+}
+
+static void test_plain_extern_call_accepts_runtime_argument_and_lifts_result() {
+    const auto prog = must_lower(
+        "runtime fn source() -> num { 1 }"
+        "extern \"lang\" fn to_str(value: num) -> str;"
+        "fn main() { let text: runtime str = to_str(source()); }");
+    const auto& stmt = std::get<TyLetStmt>(nth_fn(prog, 1).body->stmts[0]);
+    assert(stmt.ty == ty::str(true));
+    assert(stmt.init->ty == ty::str(true));
+    const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty == ty::num(true));
 }
 
 static void test_nominal_argument_mismatch_error() {
@@ -1333,7 +1373,10 @@ int main() {
     test_equality_type_mismatch_error();
     test_logical();
     test_runtime_argument_promotion();
-    test_runtime_argument_demotion_error();
+    test_plain_call_accepts_runtime_argument_and_lifts_result();
+    test_plain_call_lifted_result_still_prevents_return_demotion();
+    test_plain_generic_call_accepts_runtime_argument_and_lifts_result();
+    test_plain_extern_call_accepts_runtime_argument_and_lifts_result();
     test_nominal_argument_mismatch_error();
     test_nominal_ref_argument_mismatch_error();
     test_runtime_arithmetic_preserves_runtime_type();

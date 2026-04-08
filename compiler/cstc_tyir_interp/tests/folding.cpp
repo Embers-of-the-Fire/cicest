@@ -199,6 +199,30 @@ fn main() -> runtime num {
     assert(std::get<TyCall>(binary.lhs->node).fn_name == Symbol::intern("source"));
 }
 
+static void test_plain_call_with_runtime_argument_remains_in_tyir() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+runtime fn source() -> num {
+    41
+}
+
+fn inc(value: num) -> num {
+    value + 1
+}
+
+fn main() -> runtime num {
+    inc(source())
+}
+)");
+
+    const TyExprPtr& tail = require_tail(find_fn(program, "main"));
+    assert(tail->ty == ty::num(true));
+    const TyCall& call = require_call(tail);
+    assert(call.fn_name == Symbol::intern("inc"));
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty == ty::num(true));
+}
+
 static void test_short_circuit_boolean_ops_do_not_eval_dead_rhs() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -2628,6 +2652,7 @@ fn main() -> num {
 int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
+    test_plain_call_with_runtime_argument_remains_in_tyir();
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
     test_move_only_local_and_borrow_can_fold();
     test_move_only_return_materializes_owned_string();
