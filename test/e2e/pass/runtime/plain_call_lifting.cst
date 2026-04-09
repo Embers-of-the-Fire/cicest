@@ -2,7 +2,16 @@ runtime fn source() -> num { 41 }
 
 fn increment(value: num) -> num { value + 1 }
 
+fn add(a: num, b: num) -> num {
+    a + b
+}
+
 fn main() {
+    let x: num = add(1, 2);
+    let y: runtime num = add(runtime { 1 }, runtime { 2 });
     let lifted: runtime num = increment(source());
+
+    assert_eq(x, 3);
+    let _ = y;
     let _ = lifted;
 }

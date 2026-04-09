@@ -1,0 +1,8 @@
+runtime fn source() -> num {
+    2
+}
+
+fn main() {
+    let value: runtime num = if true { 1 } else { source() };
+    let _ = value;
+}

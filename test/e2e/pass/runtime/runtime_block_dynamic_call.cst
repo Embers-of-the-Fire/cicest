@@ -1,0 +1,12 @@
+fn add(a: num, b: num) -> num {
+    a + b
+}
+
+runtime fn source() -> num {
+    1
+}
+
+fn main() {
+    let value: runtime num = runtime { add(source(), source()) };
+    let _ = value;
+}

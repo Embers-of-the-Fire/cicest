@@ -898,6 +898,19 @@ struct LowerCtx {
     return result_shape;
 }
 
+[[nodiscard]] static tyir::Ty
+    call_result_type(tyir::Ty result_shape, const std::vector<tyir::TyExprPtr>& args) {
+    if (result_shape.is_never())
+        return result_shape;
+    for (const tyir::TyExprPtr& arg : args) {
+        if (arg->ty.is_runtime) {
+            result_shape.is_runtime = true;
+            break;
+        }
+    }
+    return result_shape;
+}
+
 [[nodiscard]] static tyir::Ty propagate_runtime_tag(tyir::Ty ty, bool inherited_runtime) {
     ty.is_runtime = ty.is_runtime || inherited_runtime;
     return ty;
@@ -1781,8 +1794,9 @@ struct ParamReferenceVisitor {
         generic_args.push_back(found->second);
     }
 
-    const tyir::Ty resolved_return_ty =
-        annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env);
+    const tyir::Ty resolved_return_ty = call_result_type(
+        annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env),
+        deferred->args);
     if (!fully_resolved) {
         return tyir::make_ty_expr(
             expr->span,
@@ -2938,8 +2952,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     resolved_generic_args.push_back(found->second);
                 }
 
-                const tyir::Ty resolved_return_ty = annotate_type_semantics(
-                    apply_substitution(sig.return_ty, substitution), ctx.env);
+                const tyir::Ty resolved_return_ty = call_result_type(
+                    annotate_type_semantics(
+                        apply_substitution(sig.return_ty, substitution), ctx.env),
+                    lowered_args);
 
                 tyir::TyExprPtr lowered_expr;
                 if (fully_resolved) {
