@@ -507,6 +507,10 @@ struct ProbeOwnershipCheck {
                 if (then_local.has_value() && else_local == then_local)
                     return then_local;
                 return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                if (node.body == nullptr || !node.body->tail.has_value())
+                    return std::nullopt;
+                return borrowed_owner_local(*node.body->tail, scope);
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 if (node == nullptr || !node->tail.has_value())
                     return std::nullopt;
@@ -605,6 +609,9 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                 } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
                     if (node.expr.has_value())
                         self(self, *node.expr);
+                } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                    if (node.body != nullptr)
+                        self(self, tyir::make_ty_expr(value->span, node.body, node.body->ty));
                 } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                     if (node == nullptr)
                         return;
@@ -792,6 +799,9 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     }
                     current.release_temp_borrows(temp_borrows);
                     return satisfied_probe_ownership();
+                } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                    return self(
+                        self, tyir::make_ty_expr(value->span, node.body, node.body->ty), current);
                 } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                     if (node == nullptr)
                         return satisfied_probe_ownership();
@@ -1085,7 +1095,8 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                 }
                 return node.else_branch.has_value()
                     && expr_depends_on_generic_params(*node.else_branch, generic_params);
-            } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyRuntimeBlock> || std::is_same_v<Node, tyir::TyLoop>) {
                 return block_depends_on_generic_params(node.body, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
                 return expr_depends_on_generic_params(node.condition, generic_params)
@@ -1248,6 +1259,10 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     tyir::TyCall{
                         rewritten.fn_name, std::move(concrete_generic_args),
                         std::move(rewritten.args)},
+                    rewritten_ty);
+            } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                return tyir::make_ty_expr(
+                    expr->span, tyir::TyRuntimeBlock{apply_substitution(node.body, subst)},
                     rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 return tyir::make_ty_expr(
@@ -1558,7 +1573,7 @@ ConstraintEvalResult evaluate_constraint(
                 ConstraintEvalKind::Unsatisfied, "probed expression is not type-valid",
                 std::nullopt};
         }
-        if (expr->ty.is_runtime) {
+        if (expr->ty.is_runtime && !std::holds_alternative<tyir::TyRuntimeBlock>(expr->node)) {
             return {
                 ConstraintEvalKind::Unsatisfied,
                 "probed expression uses runtime-only behavior",
@@ -1974,7 +1989,9 @@ ConstraintEvalResult evaluate_constraint(
                         return self(self, *node.else_branch);
                     }
                     return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
-                } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                } else if constexpr (
+                    std::is_same_v<Node, tyir::TyRuntimeBlock>
+                    || std::is_same_v<Node, tyir::TyLoop>) {
                     return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
                 } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
                     if (!matches_type_shape(node.condition->ty, tyir::ty::bool_())) {
@@ -2299,7 +2316,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
 [[nodiscard]] static std::expected<EvalState, EvalError>
     eval_expr(const tyir::TyExprPtr& expr, ConstEnv& env, EvalContext& ctx) {
-    if (expr->ty.is_runtime)
+    if (expr->ty.is_runtime && !std::holds_alternative<tyir::TyRuntimeBlock>(expr->node))
         return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
 
     return std::visit(
@@ -2623,6 +2640,10 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
             if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                 return EvalState::blocked();
+            }
+
+            if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                return eval_block(node.body, env, ctx);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
@@ -3080,6 +3101,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 return true;
             } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
                 return true;
+            } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                return block_can_fallthrough(*node.body);
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 return block_can_fallthrough(*node);
             } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
@@ -3350,6 +3373,15 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     expr->span,
                     tyir::TyDeferredGenericCall{node.fn_name, node.generic_args, std::move(args)},
                     expr->ty);
+            }
+
+            if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                auto block = fold_block(*node.body, env, program, generic_params);
+                if (!block)
+                    return std::unexpected(std::move(block.error()));
+                auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
+                return tyir::make_ty_expr(
+                    expr->span, tyir::TyRuntimeBlock{std::move(block_ptr)}, expr->ty);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
@@ -3660,7 +3692,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 if (node.else_branch.has_value())
                     return validate_constraints_in_expr(*node.else_branch, program, generic_params);
                 return {};
-            } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyRuntimeBlock> || std::is_same_v<Node, tyir::TyLoop>) {
                 return validate_constraints_in_block(node.body, program, generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
                 auto cond = validate_constraints_in_expr(node.condition, program, generic_params);
