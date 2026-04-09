@@ -1484,7 +1484,8 @@ template <typename Visitor>
                 if (node.else_branch.has_value())
                     return walk_where_expr(*node.else_branch, visitor);
                 return Traits::empty();
-            } else if constexpr (std::is_same_v<Node, ast::LoopExpr>) {
+            } else if constexpr (
+                std::is_same_v<Node, ast::RuntimeExpr> || std::is_same_v<Node, ast::LoopExpr>) {
                 return walk_where_block(node.body, visitor);
             } else if constexpr (std::is_same_v<Node, ast::WhileExpr>) {
                 auto condition = walk_where_expr(node.condition, visitor);
@@ -1688,6 +1689,26 @@ struct ParamReferenceVisitor {
             (*block)->ty =
                 block_can_fallthrough(**block) ? (*(*block)->tail)->ty : tyir::ty::never();
             expr->ty = (*block)->ty;
+        }
+        return expr;
+    }
+
+    if (auto* runtime_block = std::get_if<tyir::TyRuntimeBlock>(&expr->node);
+        runtime_block != nullptr) {
+        if (runtime_block->body != nullptr && runtime_block->body->tail.has_value()) {
+            tyir::Ty expected_body_ty = expected_ty;
+            expected_body_ty.is_runtime = false;
+            auto resolved_tail =
+                resolve_expr_against_type(*runtime_block->body->tail, expected_body_ty, ctx);
+            if (!resolved_tail)
+                return std::unexpected(std::move(resolved_tail.error()));
+            runtime_block->body->tail = std::move(*resolved_tail);
+            runtime_block->body->ty = block_can_fallthrough(*runtime_block->body)
+                                        ? (*runtime_block->body->tail)->ty
+                                        : tyir::ty::never();
+            expr->ty = runtime_block->body->ty;
+            if (!expr->ty.is_never())
+                expr->ty.is_runtime = true;
         }
         return expr;
     }
@@ -1985,6 +2006,10 @@ struct ParamReferenceVisitor {
                         return unresolved;
                 }
                 return std::nullopt;
+            } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                return find_unresolved_deferred_generic_call(
+                    node.body != nullptr ? node.body->tail.value_or(nullptr) : nullptr, env,
+                    generic_params);
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 if (node == nullptr)
                     return std::nullopt;
@@ -2976,6 +3001,23 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 if (!lowered_probe)
                     return std::unexpected(std::move(lowered_probe.error()));
                 return LoweredExpr{std::move(*lowered_probe), {}, std::nullopt};
+            }
+
+            // ── runtime { ... } block ─────────────────────────────────────
+            else if constexpr (std::is_same_v<N, ast::RuntimeExpr>) {
+                auto block = lower_block(*node.body, ctx);
+                if (!block)
+                    return std::unexpected(std::move(block.error()));
+                tyir::Ty result_ty = block->ty;
+                if (!result_ty.is_never())
+                    result_ty.is_runtime = true;
+                auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
+                return LoweredExpr{
+                    tyir::make_ty_expr(
+                        expr->span, tyir::TyRuntimeBlock{std::move(block_ptr)}, result_ty),
+                    {},
+                    std::nullopt,
+                };
             }
 
             // ── Block expression ──────────────────────────────────────────

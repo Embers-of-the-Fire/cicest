@@ -1634,6 +1634,21 @@ private:
             return ast::make_expr(span, ast::ReturnExpr{.value = std::move(value)});
         }
 
+        if (match(TokenKind::KwRuntime)) {
+            const Token runtime_kw = previous();
+            if (!check(TokenKind::LBrace)) {
+                return std::unexpected(
+                    make_error_here("expected `{` to start runtime block after `runtime`"));
+            }
+
+            auto body = parse_block_expr();
+            if (!body.has_value())
+                return std::unexpected(body.error());
+
+            return ast::make_expr(
+                merge_spans(runtime_kw.span, (*body)->span), ast::RuntimeExpr{.body = *body});
+        }
+
         if (match(TokenKind::Identifier)) {
             const Token identifier = previous();
 

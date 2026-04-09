@@ -337,6 +337,19 @@ static void test_runtime_logical_prevents_demotion() {
         "body has type 'runtime bool' but return type is 'bool'");
 }
 
+static void test_runtime_block_promotes_pure_result() {
+    const auto prog = must_lower("fn f() -> runtime num { runtime { let x = 1; x + 2 } }");
+    const auto& runtime_expr = std::get<TyRuntimeBlock>((*first_fn(prog).body->tail)->node);
+    assert(runtime_expr.body->tail.has_value());
+    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
+    assert((*runtime_expr.body->tail)->ty == ty::num());
+}
+
+static void test_runtime_block_prevents_demotion() {
+    must_fail_with_message(
+        "fn f() -> num { runtime { 1 } }", "body has type 'runtime num' but return type is 'num'");
+}
+
 // ─── Unary operators ─────────────────────────────────────────────────────────
 
 static void test_unary_negate() {
@@ -1386,6 +1399,8 @@ int main() {
     test_runtime_equality_preserves_runtime_type();
     test_runtime_logical_preserves_runtime_type();
     test_runtime_logical_prevents_demotion();
+    test_runtime_block_promotes_pure_result();
+    test_runtime_block_prevents_demotion();
     test_unary_negate();
     test_unary_not();
     test_runtime_unary_negate_preserves_runtime_type();

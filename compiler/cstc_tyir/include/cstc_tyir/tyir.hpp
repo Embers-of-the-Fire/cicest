@@ -422,6 +422,12 @@ struct TyDeclProbe {
     std::optional<std::string> invalid_reason;
 };
 
+/// Typed runtime-authorized block expression (`runtime { ... }`).
+struct TyRuntimeBlock {
+    /// Typed body evaluated within a runtime authorization boundary.
+    TyBlockPtr body;
+};
+
 /// Typed conditional expression (`if … { … } else { … }`).
 struct TyIf {
     /// Condition expression; must have type `bool`.
@@ -499,8 +505,8 @@ struct TyExpr {
     /// Variant payload for all typed expression forms.
     using Node = std::variant<
         TyLiteral, LocalRef, EnumVariantRef, TyStructInit, TyBorrow, TyUnary, TyBinary,
-        TyFieldAccess, TyCall, TyDeferredGenericCall, TyDeclProbe, TyBlockPtr, TyIf, TyLoop,
-        TyWhile, TyFor, TyBreak, TyContinue, TyReturn>;
+        TyFieldAccess, TyCall, TyDeferredGenericCall, TyDeclProbe, TyRuntimeBlock, TyBlockPtr, TyIf,
+        TyLoop, TyWhile, TyFor, TyBreak, TyContinue, TyReturn>;
 
     /// Concrete expression node payload.
     Node node;

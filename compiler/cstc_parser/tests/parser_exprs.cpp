@@ -397,6 +397,23 @@ void test_decl_expression() {
     assert(std::holds_alternative<cstc::ast::CallExpr>(decl.expr->node));
 }
 
+void test_runtime_block_expression() {
+    cstc::symbol::SymbolSession session;
+    const auto& expr = tail_of("runtime { let x = 1; x + 2 }");
+    const auto& runtime_expr = std::get<cstc::ast::RuntimeExpr>(expr.node);
+    assert(runtime_expr.body->statements.size() == 1);
+    assert(runtime_expr.body->tail.has_value());
+    assert(std::holds_alternative<cstc::ast::BinaryExpr>((*runtime_expr.body->tail)->node));
+}
+
+void test_runtime_block_nested_in_if_branch() {
+    cstc::symbol::SymbolSession session;
+    const auto& expr = tail_of("if cond { runtime { 1 } } else { 2 }");
+    const auto& if_expr = std::get<cstc::ast::IfExpr>(expr.node);
+    assert(if_expr.then_block->tail.has_value());
+    assert(std::holds_alternative<cstc::ast::RuntimeExpr>((*if_expr.then_block->tail)->node));
+}
+
 } // namespace
 
 int main() {
@@ -442,5 +459,7 @@ int main() {
     test_turbofish_call_expression();
     test_generic_struct_initializer_expression();
     test_decl_expression();
+    test_runtime_block_expression();
+    test_runtime_block_nested_in_if_branch();
     return 0;
 }

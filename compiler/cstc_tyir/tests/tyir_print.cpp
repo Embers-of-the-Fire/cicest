@@ -640,6 +640,29 @@ static void test_print_call() {
     assert(contains(out, "TyLocal(x): num"));
 }
 
+static void test_print_runtime_block() {
+    auto inner = std::make_shared<TyBlock>();
+    inner->tail =
+        make_ty_expr({}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("3"), false}, ty::num());
+    inner->ty = ty::num();
+
+    auto outer = std::make_shared<TyBlock>();
+    outer->tail = make_ty_expr({}, TyRuntimeBlock{inner}, ty::num(true));
+    outer->ty = ty::num(true);
+
+    TyFnDecl fn;
+    fn.name = Symbol::intern("f");
+    fn.return_ty = ty::num(true);
+    fn.body = outer;
+
+    TyProgram prog;
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyRuntimeBlock: runtime num"));
+    assert(contains(out, "TyLiteral(3): num"));
+}
+
 // ─── Let statement ───────────────────────────────────────────────────────────
 
 static void test_print_let_stmt() {
@@ -713,6 +736,7 @@ int main() {
     test_print_while();
     test_print_for();
     test_print_call();
+    test_print_runtime_block();
     test_print_let_stmt();
     test_print_discard_let();
 

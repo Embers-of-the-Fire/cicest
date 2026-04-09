@@ -86,6 +86,11 @@ cstc::ast::BlockPtr block_with_tail(cstc::ast::ExprPtr tail) {
     return blk;
 }
 
+cstc::ast::ExprPtr runtime_block(cstc::ast::ExprPtr tail) {
+    return cstc::ast::make_expr(
+        {}, cstc::ast::RuntimeExpr{.body = block_with_tail(std::move(tail))});
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -767,6 +772,19 @@ void test_block_tail_rendered() {
     assert(out.find("NumLit(99)") != std::string::npos);
 }
 
+void test_runtime_expr_rendered() {
+    cstc::symbol::SymbolSession session;
+    cstc::ast::Program prog;
+    cstc::ast::FnDecl fn;
+    fn.name = cstc::symbol::Symbol::intern("f");
+    fn.body = block_with_tail(runtime_block(num("1")));
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = cstc::ast::format_program(prog);
+    assert(out.find("RuntimeExpr") != std::string::npos);
+    assert(out.find("NumLit(1)") != std::string::npos);
+}
+
 } // namespace
 
 int main() {
@@ -802,5 +820,6 @@ int main() {
     test_let_discard_rendered();
     test_expr_stmt_rendered();
     test_block_tail_rendered();
+    test_runtime_expr_rendered();
     return 0;
 }

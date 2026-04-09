@@ -422,6 +422,13 @@ static void test_nested_binary() {
     assert(fn.locals.size() >= 4); // 2 params + at least 2 temps
 }
 
+static void test_runtime_block_lowers() {
+    const LirProgram prog = must_lower("fn f() -> runtime num { runtime { let x = 1; x + 2 } }");
+    const LirFnDef& fn = first_fn(prog);
+    assert(!fn.blocks.empty());
+    assert(!fn.locals.empty());
+}
+
 int main() {
     SymbolSession session;
 
@@ -461,6 +468,7 @@ int main() {
     test_scope_exit_inserts_drop_for_owned_local();
     test_move_only_flow_uses_move_operands();
     test_nested_binary();
+    test_runtime_block_lowers();
 
     return 0;
 }
