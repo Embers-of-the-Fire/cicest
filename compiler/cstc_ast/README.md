@@ -8,6 +8,9 @@ Defines AST node structures for top-level items, statements, and expressions,
 plus a readable AST formatter used by inspector tooling and tests.
 All textual fields in AST nodes are stored as interned symbols.
 
+Expression forms include staged constructs such as `decl(expr)` and the forced
+block runtime boundary `runtime { ... }`.
+
 ## Public API
 
 - Headers:

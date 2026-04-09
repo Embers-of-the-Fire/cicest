@@ -25,6 +25,8 @@ const-evaluable subtrees back into TyIR before LIR lowering.
 - Executes the current TyIR surface, including blocks, control flow, loops,
   structs/enums, borrows, returns, and direct function calls.
 - Treats runtime-qualified expressions as const-eval barriers.
+- Special-cases `TyRuntimeBlock` so pure code may still fold inside a runtime
+  boundary while runtime-only calls remain blocked and preserved.
 - Evaluates supported `extern "lang"` intrinsics inside the interpreter rather
   than reusing the runtime C library.
 - Matches runtime ordered floating-point equality semantics during const-eval,

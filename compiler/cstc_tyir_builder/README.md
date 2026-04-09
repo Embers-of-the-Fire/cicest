@@ -70,6 +70,11 @@ form when either side is tagged.
 Surface syntax sugar such as `runtime fn` and `runtime extern ... fn` is
 normalized into a runtime-tagged return type during lowering.
 
+Runtime block expressions use dedicated lowering: `runtime { ... }` becomes a
+`TyRuntimeBlock` whose body remains an ordinary `TyBlock`. The outer expression
+result is promoted to `runtime T`, but pure inner expressions keep their normal
+types so later const-folding can still inspect them.
+
 ### Main function constraints
 
 The `main` function, if present, is restricted to return one of:

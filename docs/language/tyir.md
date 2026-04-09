@@ -105,6 +105,7 @@ TyDeferredGenericCall — generic call awaiting later inference/substitution
 TyDeclProbe      — decl(expr) validity probe producing `Constraint`
                    while preserving nested parameter references for where-clause
                    validation
+TyRuntimeBlock   — runtime { stmts… [tail] } authorization boundary
 TyBlockPtr       — { stmts… [tail] }
 TyIf             — if (cond) { … } [else { … }]
 TyLoop           — loop { … }
@@ -120,6 +121,12 @@ TyReturn         — return [value]          → type: !
 A `TyBlock` has type:
 - The tail expression's type when a tail is present.
 - `Unit` when there is no tail expression.
+
+## Runtime block type rules
+
+- `runtime { e }` yields `runtime T` when the body block yields `T`.
+- The runtime boundary is explicit in TyIR as `TyRuntimeBlock`; the body remains a
+  normal `TyBlock` so pure inner expressions can still be folded independently.
 
 ## If-else type rules
 
