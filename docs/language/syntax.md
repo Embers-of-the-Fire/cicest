@@ -32,7 +32,9 @@ Explicitly out of scope:
 - Async/await.
 - Global `let`/`const`/`static`.
 - Mutation (`mut`, reassignment, assignment expressions).
-- Tuple types and tuple literals.
+- Tuple types and tuple literals. They are intentionally unsupported to keep the
+  current compiler simpler; paper examples should use currently implemented
+  forms such as named structs or conditionals instead.
 - Unnamed structs.
 - Lambda/closure expressions.
 
