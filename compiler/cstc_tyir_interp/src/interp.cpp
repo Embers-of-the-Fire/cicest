@@ -3106,7 +3106,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
                 return true;
             } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
-                return block_can_fallthrough(*node.body);
+                return node.body == nullptr || block_can_fallthrough(*node.body);
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 return block_can_fallthrough(*node);
             } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
