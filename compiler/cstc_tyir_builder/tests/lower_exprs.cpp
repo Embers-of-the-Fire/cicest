@@ -266,8 +266,11 @@ static void test_generic_call_lifts_runtime_arguments() {
         "fn main() { let value: runtime num = id(runtime { 2 }); }"
         "fn id<T>(value: T) -> T { value }");
     const auto& stmt = std::get<TyLetStmt>(first_fn(prog).body->stmts[0]);
+    const auto& call = std::get<TyCall>(stmt.init->node);
     assert(stmt.ty == ty::num(true));
     assert(stmt.init->ty == ty::num(true));
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty == ty::num(true));
 }
 
 static void test_runtime_argument_demotion_error() {
