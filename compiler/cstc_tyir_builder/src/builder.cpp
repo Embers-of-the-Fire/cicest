@@ -903,7 +903,7 @@ struct LowerCtx {
     if (result_shape.is_never())
         return result_shape;
     for (const tyir::TyExprPtr& arg : args) {
-        if (arg->ty.is_runtime) {
+        if (arg != nullptr && type_has_runtime_dependency(arg->ty)) {
             result_shape.is_runtime = true;
             break;
         }

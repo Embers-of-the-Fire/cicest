@@ -657,6 +657,33 @@ static void test_decl_probe_contains_unresolved_generic_inference_in_let() {
     assert(std::holds_alternative<TyDeferredGenericCall>((*probe.expr)->node));
 }
 
+static void test_decl_probe_marks_deferred_call_runtime_for_ref_argument_dependency() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "struct Point { x: num }"
+        "fn make<T, U>(value: &T) -> U { loop {} }"
+        "fn probe(p: runtime Point) -> Constraint where decl(make(&p.x)) { Constraint::Valid }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[4]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    assert(std::holds_alternative<TyDeferredGenericCall>((*probe.expr)->node));
+    assert((*probe.expr)->ty.is_runtime);
+}
+
+static void test_decl_probe_marks_deferred_call_runtime_for_nested_generic_argument() {
+    const auto prog = must_lower_with_constraint_prelude(
+        "struct Box<T> { value: T }"
+        "fn make<T, U>(value: T) -> U { loop {} }"
+        "fn probe(box: Box<runtime num>) -> Constraint where decl(make(box)) { Constraint::Valid "
+        "}");
+    const auto& fn = std::get<TyFnDecl>(prog.items[4]);
+    const auto& probe = require_decl_probe(fn.lowered_where_clause[0].expr);
+    assert(!probe.is_invalid);
+    assert(probe.expr.has_value());
+    assert(std::holds_alternative<TyDeferredGenericCall>((*probe.expr)->node));
+    assert((*probe.expr)->ty.is_runtime);
+}
+
 static void test_decl_probe_tentatively_accepts_explicit_outer_generic_call_arguments() {
     const auto prog = must_lower_with_constraint_prelude(
         "fn id<T>(value: T) -> T { value }"
@@ -909,6 +936,8 @@ int main() {
     test_decl_probe_rejects_conflicting_generic_let_annotation_bindings();
     test_decl_probe_rejects_conflicting_generic_if_branch_join_bindings();
     test_decl_probe_contains_unresolved_generic_inference_in_let();
+    test_decl_probe_marks_deferred_call_runtime_for_ref_argument_dependency();
+    test_decl_probe_marks_deferred_call_runtime_for_nested_generic_argument();
     test_decl_probe_tentatively_accepts_explicit_outer_generic_call_arguments();
     test_decl_probe_does_not_drive_if_branch_join_inference();
     test_decl_probe_does_not_relax_unrelated_body_checks();
