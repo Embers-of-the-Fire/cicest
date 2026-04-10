@@ -8,6 +8,10 @@ Builds `cstc_ast::Program` from pre-lexed tokens or directly from source text.
 Implements the scoped Cicest grammar defined in `docs/language/syntax.md`.
 All textual values are interned into a shared symbol table.
 
+The parser accepts runtime boundaries only in block form: `runtime { ... }`.
+Top-level `runtime fn` and `runtime extern ... fn` declarations continue to use
+their existing declaration syntax.
+
 ## Public API
 
 - Header: `include/cstc_parser/parser.hpp`

@@ -338,6 +338,12 @@ struct DeclExpr {
     ExprPtr expr;
 };
 
+/// Runtime-authorized block expression (`runtime { ... }`).
+struct RuntimeExpr {
+    /// Block whose body runs inside a runtime authorization boundary.
+    BlockPtr body;
+};
+
 /// Conditional expression.
 struct IfExpr {
     /// Condition expression.
@@ -408,8 +414,8 @@ struct Expr {
     /// Variant payload for expression nodes.
     using Node = std::variant<
         LiteralExpr, PathExpr, StructInitExpr, GenericAppExpr, UnaryExpr, BinaryExpr,
-        FieldAccessExpr, CallExpr, DeclExpr, BlockPtr, IfExpr, LoopExpr, WhileExpr, ForExpr,
-        BreakExpr, ContinueExpr, ReturnExpr>;
+        FieldAccessExpr, CallExpr, DeclExpr, RuntimeExpr, BlockPtr, IfExpr, LoopExpr, WhileExpr,
+        ForExpr, BreakExpr, ContinueExpr, ReturnExpr>;
 
     /// Concrete expression node payload.
     Node node;

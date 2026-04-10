@@ -249,6 +249,38 @@ static void test_plain_call_lifted_result_still_prevents_return_demotion() {
         "body has type 'runtime num' but return type is 'num'");
 }
 
+static void test_plain_call_lifts_runtime_arguments() {
+    const auto prog = must_lower(
+        "fn main() { let value: runtime num = add(runtime { 1 }, runtime { 2 }); }"
+        "fn add(a: num, b: num) -> num { a + b }");
+    const auto& stmt = std::get<TyLetStmt>(first_fn(prog).body->stmts[0]);
+    const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(stmt.ty == ty::num(true));
+    assert(stmt.init->ty == ty::num(true));
+    assert(call.args[0]->ty == ty::num(true));
+    assert(call.args[1]->ty == ty::num(true));
+}
+
+static void test_generic_call_lifts_runtime_arguments() {
+    const auto prog = must_lower(
+        "fn main() { let value: runtime num = id(runtime { 2 }); }"
+        "fn id<T>(value: T) -> T { value }");
+    const auto& stmt = std::get<TyLetStmt>(first_fn(prog).body->stmts[0]);
+    const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(stmt.ty == ty::num(true));
+    assert(stmt.init->ty == ty::num(true));
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty == ty::num(true));
+}
+
+static void test_runtime_argument_demotion_error() {
+    must_fail_with_message(
+        "runtime fn source() -> num { 1 }"
+        "fn sink(value: num) -> num { value }"
+        "fn main() -> num { sink(source()) }",
+        "body has type 'runtime num' but return type is 'num'");
+}
+
 static void test_plain_generic_call_accepts_runtime_argument_and_lifts_result() {
     const auto prog = must_lower(
         "runtime fn source() -> num { 1 }"
@@ -335,6 +367,19 @@ static void test_runtime_logical_prevents_demotion() {
     must_fail_with_message(
         "fn f() -> bool { flag() && true } runtime fn flag() -> bool { true }",
         "body has type 'runtime bool' but return type is 'bool'");
+}
+
+static void test_runtime_block_promotes_pure_result() {
+    const auto prog = must_lower("fn f() -> runtime num { runtime { let x = 1; x + 2 } }");
+    const auto& runtime_expr = std::get<TyRuntimeBlock>((*first_fn(prog).body->tail)->node);
+    assert(runtime_expr.body->tail.has_value());
+    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
+    assert((*runtime_expr.body->tail)->ty == ty::num());
+}
+
+static void test_runtime_block_prevents_demotion() {
+    must_fail_with_message(
+        "fn f() -> num { runtime { 1 } }", "body has type 'runtime num' but return type is 'num'");
 }
 
 // ─── Unary operators ─────────────────────────────────────────────────────────
@@ -1200,7 +1245,8 @@ static void test_generic_struct_specialization_tracks_move_semantics() {
 static void test_generic_struct_specialization_keeps_copy_semantics() {
     const auto prog = must_lower(
         "struct Box<T> { value: T }"
-        "fn f() { let b: Box<num> = Box<num> { value: 1 }; let c: Box<num> = b; let d: Box<num> "
+        "fn f() { let b: Box<num> = Box<num> { value: 1 }; let c: Box<num> = b; let d: "
+        "Box<num> "
         "= b; }");
     const auto& body = *first_fn(prog).body;
     const auto& copy_stmt = std::get<TyLetStmt>(body.stmts[2]);
@@ -1217,7 +1263,8 @@ static void test_generic_fn_return_reannotates_specialized_semantics() {
         "extern \"lang\" fn to_str(value: num) -> str;"
         "fn id<T>(value: T) -> T { value }"
         "struct Box<T> { value: T }"
-        "fn f() { let b: Box<str> = id::<Box<str>>(Box<str> { value: to_str(1) }); let c: Box<str> "
+        "fn f() { let b: Box<str> = id::<Box<str>>(Box<str> { value: to_str(1) }); let c: "
+        "Box<str> "
         "= b; let d: "
         "Box<str> = b; }",
         "use of moved value 'b'");
@@ -1375,8 +1422,11 @@ int main() {
     test_runtime_argument_promotion();
     test_plain_call_accepts_runtime_argument_and_lifts_result();
     test_plain_call_lifted_result_still_prevents_return_demotion();
+    test_plain_call_lifts_runtime_arguments();
     test_plain_generic_call_accepts_runtime_argument_and_lifts_result();
+    test_generic_call_lifts_runtime_arguments();
     test_plain_extern_call_accepts_runtime_argument_and_lifts_result();
+    test_runtime_argument_demotion_error();
     test_nominal_argument_mismatch_error();
     test_nominal_ref_argument_mismatch_error();
     test_runtime_arithmetic_preserves_runtime_type();
@@ -1386,6 +1436,8 @@ int main() {
     test_runtime_equality_preserves_runtime_type();
     test_runtime_logical_preserves_runtime_type();
     test_runtime_logical_prevents_demotion();
+    test_runtime_block_promotes_pure_result();
+    test_runtime_block_prevents_demotion();
     test_unary_negate();
     test_unary_not();
     test_runtime_unary_negate_preserves_runtime_type();

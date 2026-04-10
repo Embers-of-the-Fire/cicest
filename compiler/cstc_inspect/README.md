@@ -47,6 +47,10 @@ Output kinds:
 - `llvm`: LLVM IR emitted for the resolved module graph and injected std
   prelude.
 
+The `ast` and `tyir` outputs render explicit runtime block nodes for
+`runtime { ... }`, which helps inspect how the runtime boundary survives
+lowering before LIR/codegen.
+
 `tokens` and `ast` operate on the root source file only. `tyir`, `lir`, and
 `llvm` first resolve the full module graph and inject the std prelude.
 

@@ -73,6 +73,7 @@ Concrete expression variants:
 | `TyBinary` | Binary arithmetic, comparison, or logical op |
 | `TyFieldAccess` | Field access `base.field` |
 | `TyCall` | Direct function call (always resolved to a top-level function) |
+| `TyRuntimeBlock` | Explicit runtime boundary that wraps a typed block body |
 | `TyBlockPtr` | Inline block expression |
 | `TyIf` | Conditional expression |
 | `TyLoop` | Infinite loop |
@@ -103,6 +104,11 @@ Surface sugar such as `runtime fn` is normalized into runtime-qualified types,
 and TyIR also preserves the original declaration-level marker on
 `TyFnDecl::is_runtime` / `TyExternFnDecl::is_runtime` so later passes can
 distinguish item-level runtime boundaries from nested type tags.
+
+`runtime { ... }` is represented explicitly as `TyRuntimeBlock` rather than as a
+plain `TyBlock` whose result type is merely runtime-tagged. This preserves the
+runtime authorization boundary while still allowing pure inner expressions to be
+analyzed or folded.
 
 ## Printer
 

@@ -225,6 +225,10 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 out << "\n";
                 if (node.expr.has_value())
                     print_ty_expr(out, *node.expr, level + 1);
+            } else if constexpr (std::is_same_v<N, TyRuntimeBlock>) {
+                indent(out, level);
+                out << "TyRuntimeBlock: " << expr->ty.display() << "\n";
+                print_ty_block(out, node.body, level + 1);
             } else if constexpr (std::is_same_v<N, TyBlockPtr>) {
                 print_ty_block(out, node, level);
             } else if constexpr (std::is_same_v<N, TyIf>) {

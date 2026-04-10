@@ -473,6 +473,18 @@ private:
             } else if constexpr (std::is_same_v<N, tyir::TyDeclProbe>) {
                 assert(false && "unconsumed decl(expr) probe reached LIR lowering");
                 return terminated_operand();
+            } else if constexpr (std::is_same_v<N, tyir::TyRuntimeBlock>) {
+                lir::LirOperand body_value = lower_block(builder, node.body);
+                if (builder.is_terminated())
+                    return terminated_operand();
+                if (expr->ty.is_unit() || expr->ty.is_never())
+                    return body_value;
+                const lir::LirLocalId tmp = builder.alloc_local(expr->ty);
+                builder.emit_stmt(
+                    lir::LirAssign{
+                        lir::LirPlace::local(tmp), lir::LirRvalue{lir::LirUse{body_value}},
+                        expr->span});
+                return operand_for_local(tmp, expr->ty);
             }
 
             // ── Nested block ──────────────────────────────────────────────────
@@ -1290,6 +1302,12 @@ private:
                         rewritten.expr = *rewritten_expr;
                     }
                     return fold_decl_probe(expr->span, std::move(rewritten), *rewritten_ty);
+                } else if constexpr (std::is_same_v<T, tyir::TyRuntimeBlock>) {
+                    auto body = rewrite_block(node.body, subst);
+                    if (!body)
+                        return std::unexpected(std::move(body.error()));
+                    return tyir::make_ty_expr(
+                        expr->span, tyir::TyRuntimeBlock{*body}, *rewritten_ty);
                 } else if constexpr (std::is_same_v<T, tyir::TyBlockPtr>) {
                     auto block = rewrite_block(node, subst);
                     if (!block)

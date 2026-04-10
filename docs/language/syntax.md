@@ -247,10 +247,11 @@ CallSuffix         = "(" , [ ArgList ] , ")" ;
 ArgList            = Expr , { "," , Expr } , [ "," ] ;
 
 PrimaryExpr        = LiteralExpr
-                   | DeclExpr
-                   | PathExpr
-                   | StructInitExpr
-                   | BlockExpr
+                    | DeclExpr
+                    | RuntimeExpr
+                    | PathExpr
+                    | StructInitExpr
+                    | BlockExpr
                    | IfExpr
                    | LoopExpr
                    | WhileExpr
@@ -262,6 +263,7 @@ PrimaryExpr        = LiteralExpr
 
 LiteralExpr        = NUM_LIT | STR_LIT | BOOL_LIT | UNIT_LIT ;
 DeclExpr           = "decl" , "(" , Expr , ")" ;
+RuntimeExpr        = "runtime" , BlockExpr ;
 PathExpr           = IDENT | IDENT , "::" , IDENT ;
 StructInitExpr     = IDENT , [ TypeArgList ] , "{" , [ FieldInitList ] , "}" ;
 FieldInitList      = FieldInit , { "," , FieldInit } , [ "," ] ;
@@ -280,6 +282,8 @@ Notes:
 - Tuple/grouping ambiguity is avoided: `(expr)` is grouping; `()` is the unit literal.
 - No tuple literals or tuple types are defined.
 - `&expr` creates an immutable shared borrow.
+- `runtime` is expression syntax only in the forced-block form `runtime { ... }`.
+- `runtime expr` is intentionally invalid; the runtime boundary always introduces a block scope.
 - Moving a non-`Copy` value out of a field is intentionally unsupported in this
   stage; borrow the field instead (`&value.field`).
 

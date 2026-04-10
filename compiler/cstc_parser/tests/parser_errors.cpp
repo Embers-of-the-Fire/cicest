@@ -247,6 +247,11 @@ void test_error_block_missing_close_brace() {
     expect_error("fn f() {", "expected `}` to close block");
 }
 
+void test_error_runtime_expr_requires_block() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f() { runtime x }", "expected `{` to start runtime block after `runtime`");
+}
+
 void test_error_let_missing_assign() {
     cstc::symbol::SymbolSession session;
     expect_error("fn f() { let x: num; }", "expected `=` in let binding");
@@ -340,6 +345,7 @@ int main() {
     test_error_import_missing_path();
     test_error_import_missing_semicolon();
     test_error_block_missing_close_brace();
+    test_error_runtime_expr_requires_block();
     test_error_let_missing_assign();
     test_error_let_missing_semicolon();
     test_error_expr_without_semicolon_before_next();

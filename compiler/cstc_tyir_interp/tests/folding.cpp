@@ -223,6 +223,122 @@ fn main() -> runtime num {
     assert(call.args[0]->ty == ty::num(true));
 }
 
+static void test_runtime_block_folds_pure_inner_expression() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn main() -> runtime num {
+    runtime { let x = 1; x + 2 }
+}
+)");
+
+    const TyExprPtr& tail = require_tail(find_fn(program, "main"));
+    const auto& runtime_block = std::get<TyRuntimeBlock>(tail->node);
+    assert(tail->ty == ty::num(true));
+    assert(runtime_block.body->tail.has_value());
+    const TyLiteral& literal = require_literal(*runtime_block.body->tail);
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"3"});
+}
+
+static void test_runtime_block_preserves_runtime_call_boundary() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+runtime fn source() -> num {
+    41
+}
+
+fn main() -> runtime num {
+    runtime { source() + 1 }
+}
+)");
+
+    const TyExprPtr& tail = require_tail(find_fn(program, "main"));
+    const auto& runtime_block = std::get<TyRuntimeBlock>(tail->node);
+    const auto& binary = std::get<TyBinary>((*runtime_block.body->tail)->node);
+    assert(std::holds_alternative<TyCall>(binary.lhs->node));
+    const TyLiteral& literal = require_literal(binary.rhs);
+    assert(literal.symbol.as_str() == std::string_view{"1"});
+}
+
+static void test_runtime_block_with_null_body_is_preserved() {
+    SymbolSession session;
+
+    TyProgram program;
+    TyBlock fn_body;
+    fn_body.ty = ty::num(true);
+
+    auto runtime_block = make_ty_expr({}, TyRuntimeBlock{nullptr}, ty::num(true));
+    fn_body.tail = runtime_block;
+
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(true),
+            .body = std::make_shared<TyBlock>(std::move(fn_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyExprPtr& tail = require_tail(find_fn(*folded, "main"));
+    const auto& folded_runtime_block = std::get<TyRuntimeBlock>(tail->node);
+    assert(folded_runtime_block.body == nullptr);
+}
+
+static void test_runtime_block_stmt_with_null_body_still_falls_through() {
+    SymbolSession session;
+
+    const auto ast = cstc::parser::parse_source(R"(
+fn one() -> num { 1 }
+
+fn main() {
+    one();
+}
+)");
+    assert(ast.has_value());
+
+    auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+
+    TyProgram program = *tyir;
+    TyFnDecl* main_fn = nullptr;
+    for (TyItem& item : program.items) {
+        if (auto* fn = std::get_if<TyFnDecl>(&item);
+            fn != nullptr && fn->name == Symbol::intern("main")) {
+            main_fn = fn;
+            break;
+        }
+    }
+
+    assert(main_fn != nullptr);
+    assert(main_fn->body != nullptr);
+    main_fn->body->stmts.insert(
+        main_fn->body->stmts.begin(),
+        TyExprStmt{make_ty_expr({}, TyRuntimeBlock{nullptr}, ty::num(true)), {}});
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyFnDecl& folded_main = find_fn(*folded, "main");
+    assert(folded_main.body != nullptr);
+    assert(folded_main.body->stmts.size() == 2);
+
+    const auto& runtime_stmt = std::get<TyExprStmt>(folded_main.body->stmts[0]);
+    const auto& runtime_block = std::get<TyRuntimeBlock>(runtime_stmt.expr->node);
+    assert(runtime_block.body == nullptr);
+
+    const auto& folded_call_stmt = std::get<TyExprStmt>(folded_main.body->stmts[1]);
+    const TyLiteral& folded_call = require_literal(folded_call_stmt.expr);
+    assert(folded_call.kind == TyLiteral::Kind::Num);
+    assert(folded_call.symbol.as_str() == std::string_view{"1"});
+}
+
 static void test_short_circuit_boolean_ops_do_not_eval_dead_rhs() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -2653,6 +2769,10 @@ int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
     test_plain_call_with_runtime_argument_remains_in_tyir();
+    test_runtime_block_folds_pure_inner_expression();
+    test_runtime_block_preserves_runtime_call_boundary();
+    test_runtime_block_with_null_body_is_preserved();
+    test_runtime_block_stmt_with_null_body_still_falls_through();
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
     test_move_only_local_and_borrow_can_fold();
     test_move_only_return_materializes_owned_string();
