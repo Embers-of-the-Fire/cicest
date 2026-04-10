@@ -105,6 +105,70 @@ static LirLocalId
     return kInvalidLocal;
 }
 
+static LirLocalId find_local_assigned_from_binary_op(
+    const LirFnDef& fn, cstc::ast::BinaryOp op, const LirOperand& lhs, const LirOperand& rhs) {
+    for (const LirBasicBlock& block : fn.blocks) {
+        for (const LirStmt& stmt : block.stmts) {
+            const auto* assign = std::get_if<LirAssign>(&stmt.node);
+            if (assign == nullptr)
+                continue;
+            if (assign->dest.kind != LirPlace::Kind::Local)
+                continue;
+            const auto* binary = std::get_if<LirBinaryOp>(&assign->rhs.node);
+            if (binary == nullptr)
+                continue;
+            if (binary->op != op)
+                continue;
+            if (binary->lhs != lhs || binary->rhs != rhs)
+                continue;
+            return assign->dest.local_id;
+        }
+    }
+    return kInvalidLocal;
+}
+
+static bool has_local_assign_from_use_operand_with_type(
+    const LirFnDef& fn, const LirOperand& operand, const Ty& dest_ty) {
+    for (const LirBasicBlock& block : fn.blocks) {
+        for (const LirStmt& stmt : block.stmts) {
+            const auto* assign = std::get_if<LirAssign>(&stmt.node);
+            if (assign == nullptr)
+                continue;
+            if (assign->dest.kind != LirPlace::Kind::Local)
+                continue;
+            if (fn.locals[assign->dest.local_id].ty != dest_ty)
+                continue;
+            const auto* use = std::get_if<LirUse>(&assign->rhs.node);
+            if (use == nullptr)
+                continue;
+            if (use->operand == operand)
+                return true;
+        }
+    }
+    return false;
+}
+
+static LirLocalId find_local_assigned_from_use_operand_with_type(
+    const LirFnDef& fn, const LirOperand& operand, const Ty& dest_ty) {
+    for (const LirBasicBlock& block : fn.blocks) {
+        for (const LirStmt& stmt : block.stmts) {
+            const auto* assign = std::get_if<LirAssign>(&stmt.node);
+            if (assign == nullptr)
+                continue;
+            if (assign->dest.kind != LirPlace::Kind::Local)
+                continue;
+            if (fn.locals[assign->dest.local_id].ty != dest_ty)
+                continue;
+            const auto* use = std::get_if<LirUse>(&assign->rhs.node);
+            if (use == nullptr)
+                continue;
+            if (use->operand == operand)
+                return assign->dest.local_id;
+        }
+    }
+    return kInvalidLocal;
+}
+
 static std::size_t count_drop_stmts_for_local(const LirFnDef& fn, LirLocalId local) {
     std::size_t count = 0;
     for (const LirBasicBlock& block : fn.blocks) {
@@ -425,8 +489,31 @@ static void test_nested_binary() {
 static void test_runtime_block_lowers() {
     const LirProgram prog = must_lower("fn f() -> runtime num { runtime { let x = 1; x + 2 } }");
     const LirFnDef& fn = first_fn(prog);
-    assert(!fn.blocks.empty());
-    assert(!fn.locals.empty());
+    assert(fn.return_ty == num(true));
+    assert(fn.blocks.size() == 1);
+
+    const LirLocalId x_local = find_named_local(fn, "x");
+    assert(x_local != kInvalidLocal);
+    assert(fn.locals[x_local].ty == num());
+
+    const LirLocalId pure_sum_local = find_local_assigned_from_binary_op(
+        fn, cstc::ast::BinaryOp::Add, LirOperand::copy(LirPlace::local(x_local)),
+        LirOperand::from_const(LirConst::num(Symbol::intern("2"))));
+    assert(pure_sum_local != kInvalidLocal);
+    assert(fn.locals[pure_sum_local].ty == num());
+
+    const LirLocalId pure_block_result_local = find_local_assigned_from_use_operand_with_type(
+        fn, LirOperand::copy(LirPlace::local(pure_sum_local)), num());
+    assert(pure_block_result_local != kInvalidLocal);
+    assert(pure_block_result_local != pure_sum_local);
+
+    assert(has_local_assign_from_use_operand_with_type(
+        fn, LirOperand::copy(LirPlace::local(pure_block_result_local)), num(true)));
+
+    const auto& ret = std::get<LirReturn>(fn.blocks[0].terminator.node);
+    assert(ret.value.has_value());
+    assert(ret.value->kind == LirOperand::Kind::Copy);
+    assert(fn.locals[ret.value->place.local_id].ty == num(true));
 }
 
 int main() {
