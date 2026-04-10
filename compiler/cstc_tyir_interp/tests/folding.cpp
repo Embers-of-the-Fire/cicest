@@ -260,6 +260,37 @@ fn main() -> runtime num {
     assert(literal.symbol.as_str() == std::string_view{"1"});
 }
 
+static void test_runtime_block_with_null_body_is_preserved() {
+    SymbolSession session;
+
+    TyProgram program;
+    TyBlock fn_body;
+    fn_body.ty = ty::num(true);
+
+    auto runtime_block = make_ty_expr({}, TyRuntimeBlock{nullptr}, ty::num(true));
+    fn_body.tail = runtime_block;
+
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(true),
+            .body = std::make_shared<TyBlock>(std::move(fn_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyExprPtr& tail = require_tail(find_fn(*folded, "main"));
+    const auto& folded_runtime_block = std::get<TyRuntimeBlock>(tail->node);
+    assert(folded_runtime_block.body == nullptr);
+}
+
 static void test_short_circuit_boolean_ops_do_not_eval_dead_rhs() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -2692,6 +2723,7 @@ int main() {
     test_plain_call_with_runtime_argument_remains_in_tyir();
     test_runtime_block_folds_pure_inner_expression();
     test_runtime_block_preserves_runtime_call_boundary();
+    test_runtime_block_with_null_body_is_preserved();
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
     test_move_only_local_and_borrow_can_fold();
     test_move_only_return_materializes_owned_string();

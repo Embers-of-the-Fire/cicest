@@ -2645,6 +2645,8 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                if (node.body == nullptr)
+                    return EvalState::blocked();
                 return eval_block(node.body, env, ctx);
             }
 
@@ -3378,6 +3380,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                if (node.body == nullptr)
+                    return expr;
                 auto block = fold_block(*node.body, env, program, generic_params);
                 if (!block)
                     return std::unexpected(std::move(block.error()));
