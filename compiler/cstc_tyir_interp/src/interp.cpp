@@ -3386,6 +3386,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 if (!block)
                     return std::unexpected(std::move(block.error()));
                 auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
+                // Preserve the runtime block wrapper as a const-eval barrier.
                 return tyir::make_ty_expr(
                     expr->span, tyir::TyRuntimeBlock{std::move(block_ptr)}, expr->ty);
             }
