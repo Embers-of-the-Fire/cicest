@@ -1992,6 +1992,8 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (
                     std::is_same_v<Node, tyir::TyRuntimeBlock>
                     || std::is_same_v<Node, tyir::TyLoop>) {
+                    if (node.body == nullptr)
+                        return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                     return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
                 } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
                     if (!matches_type_shape(node.condition->ty, tyir::ty::bool_())) {
