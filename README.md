@@ -1,48 +1,81 @@
 # The Cicest Programming Language
 
-Cicest is a small expression-oriented language and compiler prototype implemented in modern C++.
-The current repository contains a working multi-stage compiler pipeline from source text to LLVM IR and native compile artifacts.
+Cicest is a small expression-oriented language and compiler prototype implemented
+in modern C++. The current repository contains a working frontend and backend
+pipeline from source text through typed and low-level IR to LLVM IR and native
+artifacts.
+
+This README is a stable overview. The canonical language and library references
+live under `docs/`.
+
+## Stable Reading Order
+
+- Start with `docs/language/syntax.md` for the supported surface language.
+- Read `docs/language/modules.md` for file layout and import resolution.
+- Read `docs/language/ownership.md` for the current `str`, `&str`, and drop
+  model.
+- Read `docs/language/tyir.md` and `docs/language/lir.md` for the compiler-facing
+  semantic and lowering story.
+- Read `docs/library/std.md` for the prelude, runtime ABI, and standard library
+  surface.
 
 ## Current Implementation Scope
 
-Implemented language surface (as of this repository state):
+Implemented top-level items:
 
-- Top-level items: `import`, `struct`, `enum`, `fn`, `extern`
-- Types: `Unit`, `num`, `str`, `bool`, and named user types
-- Statements: immutable `let` and expression statements
-- Expressions:
-  - literals (`num`, `str`, `bool`, `()`)
-  - paths (`name`, `Enum::Variant`)
-  - struct initialization and field access
-  - function calls
-  - unary/binary operators (`+ - * / % ! && || == != < <= > >=`)
-  - blocks and control flow (`if`, `loop`, `while`, C-style `for`, `break`, `continue`, `return`)
+- `import`
+- `struct`
+- `enum`
+- `fn`, including `runtime fn`
+- `extern`, including `runtime extern ... fn`
+- generic parameters on `fn`, `struct`, and `enum`
+- declaration-level `where` clauses with constraint expressions
 
-Not implemented in the current scoped subset:
+Implemented types and qualifiers:
 
-- generics
-- mutable bindings and assignment expressions
-- async/await and closures
+- `Unit`, `num`, `str`, `bool`, and named user types
+- `runtime T`
+- immutable shared references `&T`
+- `!` for diverging expressions
 
-Current semantic/lowering stages include:
+Implemented statements and expressions include:
 
-- module loading from a root `.cst` file with recursive `import { ... } from
-  "..."` resolution
-- visibility checks for `pub` exports, `pub import` re-exports, implicit std
-  prelude bindings, and duplicate imported/local names
-- duplicate-name checks for struct fields, enum variants, and fn parameters
-- name resolution (locals, functions, enum variants)
-- type checking and typed IR lowering
-- lowering to control-flow based LIR
-- LLVM IR emission
-- native assembly/object artifact emission
+- immutable `let`
+- literals, paths, and scoped enum variants
+- struct initialization and field access
+- function calls
+- unary and binary operators
+- blocks and control flow: `if`, `loop`, `while`, C-style `for`, `break`,
+  `continue`, and `return`
+- `runtime { ... }` blocks
+- compiler-recognized `decl(expr)` in staged checking sites such as `where`
+  clauses
 
-Compilation is rooted at a single input module file. The compiler loads that
-module graph, implicitly imports `@std/prelude.cst` into every non-prelude
-module, and then continues through the existing frontend/backend pipeline with a
-crate-wide resolved AST.
+Explicitly out of scope in the current subset:
 
-For language, library, and unresolved design notes, see [docs/index.md](docs/index.md).
+- mutation and assignment expressions
+- async/await
+- closures and lambda expressions
+- tuple types and tuple literals
+- global `let` / `const` / `static`
+
+## Language Direction Reflected In The Current Docs
+
+The public docs and tests now describe a more precise staged story than older
+overview notes did.
+
+- `runtime T` is a runtime-qualified form of `T`.
+- `T` may be promoted to `runtime T`, but the reverse demotion is rejected.
+- Plain function calls use call-specific lifting: a parameter of type `T` may
+  receive a `runtime T` argument at a call site, and the result is lifted to
+  `runtime U` when runtime dependence reaches the call result.
+- `runtime { ... }` is an explicit runtime boundary in the source language.
+- Pure subexpressions inside a runtime block may still be normalized ahead of
+  time when they do not depend on runtime data.
+
+For the precise surface-language statement of these rules, use
+`docs/language/syntax.md`. For the implementation-facing account of how they are
+tracked in the compiler, use `docs/language/tyir.md`.
 
 ## Compiler Pipeline
 
@@ -52,26 +85,40 @@ The implementation under `compiler/` currently includes:
 - `cstc_span`: source positions, spans, and source map
 - `cstc_ast`: AST model and formatter
 - `cstc_lexer`: source lexer and token model
-- `cstc_parser`: recursive-descent parser (tokens/source → AST)
+- `cstc_parser`: recursive-descent parser
 - `cstc_module`: module graph loader and import resolver
-- `cstc_tyir`: typed IR model + formatter
-- `cstc_tyir_builder`: AST → TyIR lowering + type checking
-- `cstc_lir`: low-level IR model + formatter
-- `cstc_lir_builder`: TyIR → LIR lowering
-- `cstc_codegen`: LIR → LLVM IR/native artifact backend
+- `cstc_tyir`: typed IR model and formatter
+- `cstc_tyir_builder`: AST to TyIR lowering and type checking
+- `cstc_lir`: low-level IR model and formatter
+- `cstc_lir_builder`: TyIR to LIR lowering
+- `cstc_codegen`: LIR to LLVM IR and native artifact backend
 - `cstc_cli_support`: shared CLI helpers for module loading and diagnostics
-- `cstc`: compiler CLI that emits `.s` and `.o`
-- `cstc_inspect`: CLI inspector for each stage
+- `cstc`: compiler CLI that emits `.s`, `.o`, and linked executables
+- `cstc_inspect`: CLI inspector for intermediate stages
+- `cstc_repl`: REPL support package
 
 Pipeline overview:
 
 ```text
-Root module graph -> Lexer/Parser -> Module resolution -> AST -> TyIR -> LIR -> LLVM IR -> native .s/.o
+Root module graph -> Lexer/Parser -> Module resolution -> AST -> TyIR -> LIR
+-> LLVM IR -> native .s/.o/.exe
 ```
+
+## Module And Prelude Model
+
+Compilation is rooted at a single input module file. The compiler resolves that
+module graph recursively, implicitly imports `@std/prelude.cst` into every
+non-prelude module, and then continues through the frontend and backend with a
+crate-wide resolved AST.
+
+This is documented in more detail in:
+
+- `docs/language/modules.md`
+- `docs/library/std.md`
 
 ## Build
 
-### Option 1: Nix (recommended in this repo)
+### Option 1: Nix
 
 ```bash
 nix develop
@@ -84,7 +131,7 @@ Run tests:
 nix run .#tests
 ```
 
-Run lint + format checks:
+Run lint and format checks:
 
 ```bash
 nix run .#lint
@@ -100,80 +147,49 @@ cmake --build build
 Build and run tests:
 
 ```bash
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCICEST_BUILD_TESTS=ON
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCICEST_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
 Notes:
 
-- The project requires C++23 (`cmake_minimum_required(VERSION 3.21)`).
-- `cstc_codegen` links against LLVM and supporting libraries (`zlib`, `libxml2`, `libffi`).
-- Windows MinGW currently skips the end-to-end suite. Use `-DCICEST_BUILD_E2E_TESTS=OFF`
-  when configuring tests in that environment, or run `.github/scripts/run-platform-tests.sh windows`
-  which applies that setting automatically.
+- The project requires C++23.
+- `cstc_codegen` links against LLVM and supporting libraries such as `zlib`,
+  `libxml2`, and `libffi`.
+- Windows MinGW currently skips the end-to-end suite. Use
+  `-DCICEST_BUILD_E2E_TESTS=OFF` when configuring tests there, or use the CI
+  helper scripts under `.github/scripts/`.
 
 ## CI
 
-For CI workflow details (test matrix, lint/format checks, and local reproduction), see [CI.md](CI.md).
+For CI workflow details, including lint and test reproduction, see `CI.md`.
 
-## Compiler CLI
+## CLI Overview
 
 The compiler executable is built at `build/compiler/cstc/cstc`.
 
 Usage:
 
 ```bash
-./build/compiler/cstc/cstc <input-file> [-o <output-stem>] [--module-name <module>] [--emit <asm|obj|exe|all>] [--linker <linker>]
+./build/compiler/cstc/cstc <input-file> [-o <output-stem>]
+  [--module-name <module>] [--emit <asm|obj|exe|all>] [--linker <linker>]
 ```
-
-Examples:
-
-```bash
-./build/compiler/cstc/cstc path/to/file.cst
-./build/compiler/cstc/cstc path/to/file.cst -o build/out/program
-./build/compiler/cstc/cstc path/to/file.cst -o build/out/program --emit asm
-./build/compiler/cstc/cstc path/to/file.cst -o build/out/program --emit obj
-./build/compiler/cstc/cstc path/to/file.cst -o build/out/program --emit all
-```
-
-`<input-file>` is the root module. Relative imports resolve from the importing
-file's directory, and `@std/...` imports resolve from the configured
-standard-library root.
-
-`cstc` supports these artifacts:
-
-- `<stem>.s`
-- `<stem>.o`
-- `<stem>`
-
-Default output is `<stem>` (linked executable).
-Use `--emit` to request specific outputs (`asm`, `obj`, `exe`, or `all`; can be repeated).
-Executable output uses an external linker/driver (`$CXX` by default, overridable via `--linker`).
-
-## Inspector CLI
 
 The inspector executable is built at `build/compiler/cstc_inspect/cstc_inspect`.
 
 Usage:
 
 ```bash
-./build/compiler/cstc_inspect/cstc_inspect <input-file> --out-type <tokens|ast|tyir|lir|llvm> [-o <output-file>] [--keep-trivia]
+./build/compiler/cstc_inspect/cstc_inspect <input-file>
+  --out-type <tokens|ast|tyir|lir|llvm> [-o <output-file>] [--keep-trivia]
 ```
 
-Examples:
+## Documentation Index
 
-```bash
-./build/compiler/cstc_inspect/cstc_inspect path/to/file.cst --out-type tokens --keep-trivia
-./build/compiler/cstc_inspect/cstc_inspect path/to/file.cst --out-type ast
-./build/compiler/cstc_inspect/cstc_inspect path/to/file.cst --out-type tyir
-./build/compiler/cstc_inspect/cstc_inspect path/to/file.cst --out-type lir
-./build/compiler/cstc_inspect/cstc_inspect path/to/file.cst --out-type llvm -o output.ll
-```
-
-`tokens` and `ast` inspect only the root source file. `tyir`, `lir`, and
-`llvm` first resolve the full module graph and the implicit std prelude.
+For language, library, and unresolved design notes, see `docs/index.md`.
 
 ## License
 
-This project is licensed under [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT).
+This project is licensed under `Apache-2.0` or `MIT`.
