@@ -1,0 +1,25 @@
+fn non_negative(value: num) -> bool {
+    value >= 0
+}
+
+fn checked_add(a: num, b: num) -> num {
+    let result = a + b;
+    assert(non_negative(result));
+    result
+}
+
+runtime fn source() -> num {
+    1
+}
+
+fn main() {
+    let static_value: num = checked_add(1, 2);
+    let dynamic_value: runtime num = checked_add(source(), 2);
+    let bounded: runtime num = runtime {
+        checked_add(source(), checked_add(1, 2))
+    };
+
+    assert_eq(static_value, 3);
+    let _ = dynamic_value;
+    let _ = bounded;
+}

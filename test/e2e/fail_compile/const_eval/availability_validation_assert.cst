@@ -1,0 +1,13 @@
+fn non_negative(value: num) -> bool {
+    value >= 0
+}
+
+fn checked_add(a: num, b: num) -> num {
+    let result = a + b;
+    assert(non_negative(result));
+    result
+}
+
+fn main() {
+    checked_add(1, -5);
+}
