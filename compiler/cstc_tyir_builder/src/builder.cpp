@@ -27,6 +27,7 @@ using tyir::matches_type_shape;
 
 /// Signature stored for each top-level function.
 struct FnSignature {
+    std::vector<cstc::symbol::Symbol> param_names;
     std::vector<tyir::Ty> param_types;
     std::vector<tyir::ParamRequirement> param_requirements;
     tyir::Ty return_ty;
@@ -348,6 +349,10 @@ using TypeSubstitution =
 [[nodiscard]] static bool
     call_argument_compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
     return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
+}
+
+[[nodiscard]] static std::string ct_required_type_display(const tyir::Ty& ty) {
+    return "!runtime " + erase_runtime_qualifiers(ty).display();
 }
 
 [[nodiscard]] static bool call_argument_may_be_compatible_after_generic_substitution(
@@ -924,6 +929,37 @@ struct LowerCtx {
     return std::unexpected(LowerError{span, std::move(msg), std::nullopt});
 }
 
+[[nodiscard]] static std::expected<void, LowerError> require_ct_call_argument(
+    const FnSignature& sig, std::size_t param_index, const tyir::TyExprPtr& arg,
+    const tyir::Ty& expected_ty, cstc::span::SourceSpan span) {
+    if (param_index >= sig.param_requirements.size()
+        || sig.param_requirements[param_index] != tyir::ParamRequirement::CtRequired
+        || !type_has_runtime_dependency(arg->ty)) {
+        return {};
+    }
+
+    std::string param_name = "argument " + std::to_string(param_index + 1);
+    if (param_index < sig.param_names.size() && sig.param_names[param_index].is_valid())
+        param_name = "`" + std::string(sig.param_names[param_index].as_str()) + "`";
+
+    return make_error(
+        span, "argument " + param_name + " must be compile-time available: expected '"
+                  + ct_required_type_display(expected_ty) + "', found '" + arg->ty.display()
+                  + "'");
+}
+
+[[nodiscard]] static std::expected<void, LowerError> require_ct_annotation_value(
+    bool requires_ct, const tyir::TyExprPtr& value, const tyir::Ty& expected_ty,
+    cstc::span::SourceSpan span, std::string_view context) {
+    if (!requires_ct || !type_has_runtime_dependency(value->ty))
+        return {};
+
+    return make_error(
+        span, std::string(context) + " must be compile-time available: expected '"
+                  + ct_required_type_display(expected_ty) + "', found '" + value->ty.display()
+                  + "'");
+}
+
 [[nodiscard]] static std::string
     display_symbol(cstc::symbol::Symbol display_name, cstc::symbol::Symbol fallback) {
     if (display_name.is_valid())
@@ -1358,6 +1394,7 @@ struct LoweredPlace {
         auto pt = lower_type(p.type, env, p.span, generic_param_set);
         if (!pt)
             return std::unexpected(std::move(pt.error()));
+        sig.param_names.push_back(p.name);
         sig.param_types.push_back(*pt);
         sig.param_requirements.push_back(
             p.type.requires_ct ? tyir::ParamRequirement::CtRequired
@@ -1831,6 +1868,10 @@ struct ParamReferenceVisitor {
                                                 + "', found '" + resolved_args[index]->ty.display()
                                                 + "'");
         }
+        auto ct_check = require_ct_call_argument(
+            sig, index, resolved_args[index], expected_param_ty, resolved_args[index]->span);
+        if (!ct_check)
+            return std::unexpected(std::move(ct_check.error()));
     }
 
     const tyir::Ty lifted_return_ty = lift_call_result_type(resolved_return_ty, resolved_args);
@@ -2129,10 +2170,22 @@ struct ParamReferenceVisitor {
                     init->expr = std::move(*resolved_init);
                     if (!compatible(init->expr->ty, *ann)
                         && !should_defer_generic_probe_failure(
-                            init->expr->ty, *ann, ctx, init->deferred_generic_probe_validation))
+                            init->expr->ty, *ann, ctx, init->deferred_generic_probe_validation)) {
+                        if (s.type_annotation->requires_ct
+                            && call_argument_compatible(init->expr->ty, *ann)) {
+                            auto ct_check = require_ct_annotation_value(
+                                true, init->expr, *ann, s.span, "let binding");
+                            if (!ct_check)
+                                return std::unexpected(std::move(ct_check.error()));
+                        }
                         return make_error(
                             s.span, "type mismatch in let binding: expected '" + ann->display()
                                         + "', found '" + init->expr->ty.display() + "'");
+                    }
+                    auto ct_check = require_ct_annotation_value(
+                        s.type_annotation->requires_ct, init->expr, *ann, s.span, "let binding");
+                    if (!ct_check)
+                        return std::unexpected(std::move(ct_check.error()));
                     binding_ty = *ann;
                 } else {
                     if (auto unresolved = find_unresolved_deferred_generic_call(
@@ -2980,12 +3033,17 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         lowered_args[i] = std::move(*resolved_arg);
                         if (!call_argument_compatible(lowered_args[i]->ty, expected_param_ty)
                             && !should_defer_generic_call_argument_failure(
-                                lowered_args[i]->ty, expected_param_ty, ctx))
+                                lowered_args[i]->ty, expected_param_ty, ctx)) {
                             return make_error(
                                 node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
                                                         + display_fn_name + "': expected '"
                                                         + expected_param_ty.display() + "', found '"
                                                         + lowered_args[i]->ty.display() + "'");
+                        }
+                        auto ct_check = require_ct_call_argument(
+                            sig, i, lowered_args[i], expected_param_ty, node.args[i]->span);
+                        if (!ct_check)
+                            return std::unexpected(std::move(ct_check.error()));
                     }
 
                     const tyir::Ty lifted_return_ty =
@@ -3228,11 +3286,28 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             if (!compatible(init_expr->expr->ty, *ann)
                                 && !should_defer_generic_probe_failure(
                                     init_expr->expr->ty, *ann, ctx)) {
+                                if (init_let->type_annotation->requires_ct
+                                    && call_argument_compatible(init_expr->expr->ty, *ann)) {
+                                    auto ct_check = require_ct_annotation_value(
+                                        true, init_expr->expr, *ann, init_let->span,
+                                        "for-init binding");
+                                    if (!ct_check) {
+                                        ctx.scope.pop();
+                                        return std::unexpected(std::move(ct_check.error()));
+                                    }
+                                }
                                 ctx.scope.pop();
                                 return make_error(
                                     init_let->span, "for-init type mismatch: expected '"
                                                         + ann->display() + "', found '"
                                                         + init_expr->expr->ty.display() + "'");
+                            }
+                            auto ct_check = require_ct_annotation_value(
+                                init_let->type_annotation->requires_ct, init_expr->expr, *ann,
+                                init_let->span, "for-init binding");
+                            if (!ct_check) {
+                                ctx.scope.pop();
+                                return std::unexpected(std::move(ct_check.error()));
                             }
                             init_ty = *ann;
                         } else {

@@ -57,10 +57,10 @@ struct TypeRef {
     TypeRefPtr pointee;
     /// True when this type is prefixed with the `runtime` qualifier.
     bool is_runtime = false;
-    /// True when this annotation requires compile-time availability (`!runtime`/`const`).
-    bool requires_ct = false;
     /// Explicit generic arguments when `kind == TypeKind::Named`.
     std::vector<TypeRef> generic_args;
+    /// True when this annotation requires compile-time availability (`!runtime`/`const`).
+    bool requires_ct = false;
 };
 
 /// Generic parameter declared on an item.

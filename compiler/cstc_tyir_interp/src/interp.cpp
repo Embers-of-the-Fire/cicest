@@ -254,6 +254,20 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
     return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
 }
 
+[[nodiscard]] static bool type_has_runtime_dependency(const tyir::Ty& ty) {
+    if (ty.is_runtime)
+        return true;
+    if (ty.kind == tyir::TyKind::Ref)
+        return ty.pointee != nullptr && type_has_runtime_dependency(*ty.pointee);
+    if (ty.kind != tyir::TyKind::Named)
+        return false;
+    for (const tyir::Ty& arg : ty.generic_args) {
+        if (type_has_runtime_dependency(arg))
+            return true;
+    }
+    return false;
+}
+
 [[nodiscard]] static bool call_argument_may_be_compatible_after_substitution(
     const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
     return types_may_be_compatible_after_substitution(
@@ -1837,6 +1851,14 @@ ConstraintEvalResult evaluate_constraint(
                                     std::nullopt,
                                 };
                             }
+                            if (fn.params[index].requires_ct()
+                                && type_has_runtime_dependency(node.args[index]->ty)) {
+                                return {
+                                    ConstraintEvalKind::Unsatisfied,
+                                    "probed expression is not type-valid",
+                                    std::nullopt,
+                                };
+                            }
                         }
                         if (!generic_args_depend) {
                             auto status = enforce_constraints(
@@ -1884,6 +1906,14 @@ ConstraintEvalResult evaluate_constraint(
                                     unresolved.has_value()) {
                                     return *unresolved;
                                 }
+                                return {
+                                    ConstraintEvalKind::Unsatisfied,
+                                    "probed expression is not type-valid",
+                                    std::nullopt,
+                                };
+                            }
+                            if (decl.params[index].requires_ct()
+                                && type_has_runtime_dependency(node.args[index]->ty)) {
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",
