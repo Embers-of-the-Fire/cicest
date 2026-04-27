@@ -28,6 +28,7 @@ using tyir::matches_type_shape;
 /// Signature stored for each top-level function.
 struct FnSignature {
     std::vector<tyir::Ty> param_types;
+    std::vector<tyir::ParamRequirement> param_requirements;
     tyir::Ty return_ty;
     cstc::span::SourceSpan span;
     std::vector<cstc::ast::GenericParam> generic_params;
@@ -1358,6 +1359,9 @@ struct LoweredPlace {
         if (!pt)
             return std::unexpected(std::move(pt.error()));
         sig.param_types.push_back(*pt);
+        sig.param_requirements.push_back(
+            p.type.requires_ct ? tyir::ParamRequirement::CtRequired
+                               : tyir::ParamRequirement::RuntimeAllowed);
     }
     return sig;
 }
@@ -3463,7 +3467,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
     ty_params.reserve(fn.params.size());
     for (std::size_t i = 0; i < fn.params.size(); ++i)
         ty_params.push_back(
-            tyir::TyParam{fn.params[i].name, sig.param_types[i], fn.params[i].span});
+            tyir::TyParam{
+                fn.params[i].name, sig.param_types[i], fn.params[i].span,
+                sig.param_requirements[i]});
 
     LowerCtx ctx{
         env, {}, make_generic_param_set(fn.generic_params), false, sig.return_ty, {},
@@ -3782,6 +3788,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                         .name = ext_fn->params[i].name,
                         .ty = sig.param_types[i],
                         .span = ext_fn->params[i].span,
+                        .requirement = sig.param_requirements[i],
                     });
             }
             result.items.push_back(std::move(ty_decl));

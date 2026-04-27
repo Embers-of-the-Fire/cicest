@@ -364,6 +364,14 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
     assert(fn.body->ty.is_runtime);
 }
 
+static void test_ct_required_param_requirement_is_preserved() {
+    const auto prog = must_lower("fn reserve(count: !runtime num) -> num { count }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.params.size() == 1);
+    assert(fn.params[0].ty == ty::num());
+    assert(fn.params[0].requires_ct());
+}
+
 static void test_fn_preserves_generic_metadata() {
     const auto prog =
         must_lower_with_constraint_prelude("fn id<T>(value: T) -> T where true, 1 == 1 { value }");
@@ -913,6 +921,7 @@ int main() {
     test_fn_ref_return_rejected();
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
+    test_ct_required_param_requirement_is_preserved();
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();
     test_fn_decl_where_clause_allows_parameter_references_in_decl_probe();

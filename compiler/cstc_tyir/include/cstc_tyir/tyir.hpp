@@ -637,6 +637,14 @@ struct TyEnumDecl {
     std::vector<TyGenericConstraint> lowered_where_clause;
 };
 
+/// Availability requirement attached to a function parameter.
+enum class ParamRequirement {
+    /// Runtime-dependent arguments are accepted by the ordinary lifted-call rule.
+    RuntimeAllowed,
+    /// The call argument must be compile-time available.
+    CtRequired,
+};
+
 /// Typed function parameter declaration.
 struct TyParam {
     /// Parameter name.
@@ -645,6 +653,13 @@ struct TyParam {
     Ty ty;
     /// Source location for the parameter.
     cstc::span::SourceSpan span;
+    /// Availability requirement enforced at call sites.
+    ParamRequirement requirement = ParamRequirement::RuntimeAllowed;
+
+    /// Returns true when this parameter rejects runtime-dependent arguments.
+    [[nodiscard]] constexpr bool requires_ct() const {
+        return requirement == ParamRequirement::CtRequired;
+    }
 };
 
 /// Typed function item declaration.

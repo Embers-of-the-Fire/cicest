@@ -62,6 +62,12 @@ inline void indent(std::ostringstream& out, std::size_t level) {
     return "";
 }
 
+[[nodiscard]] inline std::string param_type_name(const TyParam& param) {
+    if (param.requires_ct())
+        return "!runtime " + param.ty.display();
+    return param.ty.display();
+}
+
 [[nodiscard]] inline std::string_view binary_name(cstc::ast::BinaryOp op) {
     switch (op) {
     case cstc::ast::BinaryOp::Add: return "+";
@@ -354,7 +360,8 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 for (std::size_t i = 0; i < node.params.size(); ++i) {
                     if (i > 0)
                         out << ", ";
-                    out << node.params[i].name.as_str() << ": " << node.params[i].ty.display();
+                    out << node.params[i].name.as_str() << ": "
+                        << param_type_name(node.params[i]);
                 }
                 out << ") -> " << node.return_ty.display() << "\n";
                 cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
@@ -366,7 +373,8 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 for (std::size_t i = 0; i < node.params.size(); ++i) {
                     if (i > 0)
                         out << ", ";
-                    out << node.params[i].name.as_str() << ": " << node.params[i].ty.display();
+                    out << node.params[i].name.as_str() << ": "
+                        << param_type_name(node.params[i]);
                 }
                 out << ") -> " << node.return_ty.display() << "\n";
             } else if constexpr (std::is_same_v<T, TyExternStructDecl>) {
