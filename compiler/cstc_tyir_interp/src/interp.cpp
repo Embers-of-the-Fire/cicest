@@ -12,6 +12,7 @@ namespace cstc::tyir_interp::detail {
 using tyir::common_type;
 using tyir::compatible;
 using tyir::matches_type_shape;
+using tyir::type_has_runtime_dependency;
 
 ValuePtr make_num(double value) {
     auto out = std::make_shared<Value>();
@@ -252,20 +253,6 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
 [[nodiscard]] static bool
     call_argument_compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
     return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
-}
-
-[[nodiscard]] static bool type_has_runtime_dependency(const tyir::Ty& ty) {
-    if (ty.is_runtime)
-        return true;
-    if (ty.kind == tyir::TyKind::Ref)
-        return ty.pointee != nullptr && type_has_runtime_dependency(*ty.pointee);
-    if (ty.kind != tyir::TyKind::Named)
-        return false;
-    for (const tyir::Ty& arg : ty.generic_args) {
-        if (type_has_runtime_dependency(arg))
-            return true;
-    }
-    return false;
 }
 
 [[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {

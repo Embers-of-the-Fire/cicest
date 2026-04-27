@@ -22,6 +22,7 @@ namespace detail {
 using tyir::common_type;
 using tyir::compatible;
 using tyir::matches_type_shape;
+using tyir::type_has_runtime_dependency;
 
 // ─── Type environment ────────────────────────────────────────────────────────
 
@@ -330,20 +331,6 @@ using TypeSubstitution =
             erased.generic_args.push_back(erase_runtime_qualifiers(arg));
     }
     return erased;
-}
-
-[[nodiscard]] static bool type_has_runtime_dependency(const tyir::Ty& ty) {
-    if (ty.is_runtime)
-        return true;
-    if (ty.kind == tyir::TyKind::Ref)
-        return ty.pointee != nullptr && type_has_runtime_dependency(*ty.pointee);
-    if (ty.kind != tyir::TyKind::Named)
-        return false;
-    for (const tyir::Ty& arg : ty.generic_args) {
-        if (type_has_runtime_dependency(arg))
-            return true;
-    }
-    return false;
 }
 
 [[nodiscard]] static bool value_is_ct_available(const bool ct_available, const tyir::Ty& ty) {
