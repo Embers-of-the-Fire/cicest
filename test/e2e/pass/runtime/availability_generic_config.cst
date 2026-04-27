@@ -1,0 +1,45 @@
+struct Config<T> {
+    primary: T,
+    fallback: T,
+}
+
+runtime fn load_limit() -> num {
+    12
+}
+
+fn non_negative(value: num) -> bool {
+    value >= 0
+}
+
+fn checked_limit(value: num) -> num {
+    assert(non_negative(value));
+    value
+}
+
+fn mk_config<T>(primary: T, fallback: T) -> Config<T> {
+    Config<T> { primary: primary, fallback: fallback }
+}
+
+fn select<T>(cfg: Config<T>, use_primary: bool) -> T {
+    if use_primary {
+        cfg.primary
+    } else {
+        cfg.fallback
+    }
+}
+
+fn main() {
+    let static_cfg: Config<num> = mk_config(checked_limit(8), checked_limit(4));
+    let static_value: num = select(static_cfg, true);
+
+    let dynamic_cfg: runtime Config<num> = mk_config(load_limit(), checked_limit(4));
+    let dynamic_value: runtime num = select(dynamic_cfg, true);
+
+    let bounded: runtime num = runtime {
+        select(mk_config(load_limit(), checked_limit(3)), true)
+    };
+
+    assert_eq(static_value, 8);
+    let _ = dynamic_value;
+    let _ = bounded;
+}
