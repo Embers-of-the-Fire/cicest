@@ -1,0 +1,9 @@
+runtime fn source() -> num { 1 }
+
+fn static_id<T>(value: const T) -> T {
+    value
+}
+
+fn main() -> runtime num {
+    static_id(source())
+}

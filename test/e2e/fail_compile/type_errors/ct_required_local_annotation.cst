@@ -1,0 +1,4 @@
+fn main() -> runtime num {
+    let count: const num = runtime { 1 };
+    count
+}

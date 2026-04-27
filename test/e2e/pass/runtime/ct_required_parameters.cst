@@ -1,0 +1,23 @@
+runtime fn source() -> num { 40 }
+
+fn add(a: num, b: num) -> num {
+    a + b
+}
+
+fn reserve(count: !runtime num, extra: const num) -> num {
+    add(count, extra)
+}
+
+fn static_id<T>(value: const T) -> T {
+    value
+}
+
+fn main() {
+    let reserved: num = reserve(20, 2);
+    let generic_reserved: num = static_id(5);
+    let lifted: runtime num = add(source(), 2);
+
+    assert_eq(reserved, 22);
+    assert_eq(generic_reserved, 5);
+    let _ = lifted;
+}
