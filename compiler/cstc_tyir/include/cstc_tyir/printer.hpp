@@ -360,8 +360,7 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 for (std::size_t i = 0; i < node.params.size(); ++i) {
                     if (i > 0)
                         out << ", ";
-                    out << node.params[i].name.as_str() << ": "
-                        << param_type_name(node.params[i]);
+                    out << node.params[i].name.as_str() << ": " << param_type_name(node.params[i]);
                 }
                 out << ") -> " << node.return_ty.display() << "\n";
                 cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
@@ -373,8 +372,7 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                 for (std::size_t i = 0; i < node.params.size(); ++i) {
                     if (i > 0)
                         out << ", ";
-                    out << node.params[i].name.as_str() << ": "
-                        << param_type_name(node.params[i]);
+                    out << node.params[i].name.as_str() << ": " << param_type_name(node.params[i]);
                 }
                 out << ") -> " << node.return_ty.display() << "\n";
             } else if constexpr (std::is_same_v<T, TyExternStructDecl>) {

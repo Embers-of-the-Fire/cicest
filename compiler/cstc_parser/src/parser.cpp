@@ -928,8 +928,8 @@ private:
             if (!inner.has_value())
                 return std::unexpected(inner.error());
             if (inner->requires_ct) {
-                return std::unexpected(make_error_here(
-                    "conflicting `runtime` and `!runtime` type qualifiers"));
+                return std::unexpected(
+                    make_error_here("conflicting `runtime` and `!runtime` type qualifiers"));
             }
 
             inner->is_runtime = true;
@@ -941,8 +941,8 @@ private:
             if (!inner.has_value())
                 return std::unexpected(inner.error());
             if (inner->is_runtime) {
-                return std::unexpected(make_error_here(
-                    "conflicting `const` and `runtime` type qualifiers"));
+                return std::unexpected(
+                    make_error_here("conflicting `const` and `runtime` type qualifiers"));
             }
             if (inner->requires_ct) {
                 return std::unexpected(make_error_here("duplicate `!runtime` type qualifier"));
@@ -1004,8 +1004,8 @@ private:
                 if (!inner.has_value())
                     return std::unexpected(inner.error());
                 if (inner->is_runtime) {
-                    return std::unexpected(make_error_here(
-                        "conflicting `!runtime` and `runtime` type qualifiers"));
+                    return std::unexpected(
+                        make_error_here("conflicting `!runtime` and `runtime` type qualifiers"));
                 }
                 if (inner->requires_ct) {
                     return std::unexpected(make_error_here("duplicate `!runtime` type qualifier"));

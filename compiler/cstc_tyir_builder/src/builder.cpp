@@ -944,8 +944,7 @@ struct LowerCtx {
 
     return make_error(
         span, "argument " + param_name + " must be compile-time available: expected '"
-                  + ct_required_type_display(expected_ty) + "', found '" + arg->ty.display()
-                  + "'");
+                  + ct_required_type_display(expected_ty) + "', found '" + arg->ty.display() + "'");
 }
 
 [[nodiscard]] static std::expected<void, LowerError> require_ct_annotation_value(
