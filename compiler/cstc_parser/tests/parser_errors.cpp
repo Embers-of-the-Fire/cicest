@@ -160,6 +160,21 @@ void test_error_duplicate_runtime_type_qualifier() {
         source.find("runtime runtime") + std::string_view{"runtime "}.size());
 }
 
+void test_error_nested_ct_required_ref_pointee() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f(x: &!runtime num) { }", "nested `!runtime` type qualifier is not supported");
+}
+
+void test_error_nested_const_ref_pointee() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f(x: &const num) { }", "nested `const` type qualifier is not supported");
+}
+
+void test_error_nested_ct_required_generic_argument() {
+    cstc::symbol::SymbolSession session;
+    expect_error("fn f(x: Box<const num>) { }", "nested `const` type qualifier is not supported");
+}
+
 void test_error_fn_missing_body() {
     cstc::symbol::SymbolSession session;
     expect_error("fn f()", "expected `{` to start block");
@@ -329,6 +344,9 @@ int main() {
     test_error_fn_missing_close_paren();
     test_error_fn_duplicate_param();
     test_error_duplicate_runtime_type_qualifier();
+    test_error_nested_ct_required_ref_pointee();
+    test_error_nested_const_ref_pointee();
+    test_error_nested_ct_required_generic_argument();
     test_error_fn_missing_body();
     test_error_duplicate_generic_parameter();
     test_error_missing_generic_parameter_name();

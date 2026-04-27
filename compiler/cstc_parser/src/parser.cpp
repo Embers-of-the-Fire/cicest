@@ -370,7 +370,7 @@ private:
         std::vector<ast::TypeRef> args;
 
         while (true) {
-            auto arg = parse_type();
+            auto arg = parse_type(false);
             if (!arg.has_value())
                 return std::unexpected(arg.error());
             args.push_back(std::move(*arg));
@@ -919,12 +919,15 @@ private:
         };
     }
 
-    [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() {
+    [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() { return parse_type(true); }
+
+    [[nodiscard]] std::expected<ast::TypeRef, ParseError>
+        parse_type(const bool allow_ct_requirement) {
         if (match(TokenKind::KwRuntime)) {
             if (check(TokenKind::KwRuntime)) {
                 return std::unexpected(make_error_here("duplicate `runtime` type qualifier"));
             }
-            auto inner = parse_type();
+            auto inner = parse_type(allow_ct_requirement);
             if (!inner.has_value())
                 return std::unexpected(inner.error());
             if (inner->requires_ct) {
@@ -937,7 +940,12 @@ private:
         }
 
         if (match_contextual_keyword("const")) {
-            auto inner = parse_type();
+            const Token qualifier = previous();
+            if (!allow_ct_requirement) {
+                return std::unexpected(
+                    make_error_token(qualifier, "nested `const` type qualifier is not supported"));
+            }
+            auto inner = parse_type(allow_ct_requirement);
             if (!inner.has_value())
                 return std::unexpected(inner.error());
             if (inner->is_runtime) {
@@ -953,7 +961,7 @@ private:
         }
 
         if (match(TokenKind::Amp)) {
-            auto inner = parse_type();
+            auto inner = parse_type(false);
             if (!inner.has_value())
                 return std::unexpected(inner.error());
 
@@ -999,8 +1007,13 @@ private:
                 .generic_args = {},
             };
         if (match(TokenKind::Bang)) {
+            const Token bang = previous();
             if (match(TokenKind::KwRuntime)) {
-                auto inner = parse_type();
+                if (!allow_ct_requirement) {
+                    return std::unexpected(make_error_token(
+                        bang, "nested `!runtime` type qualifier is not supported"));
+                }
+                auto inner = parse_type(allow_ct_requirement);
                 if (!inner.has_value())
                     return std::unexpected(inner.error());
                 if (inner->is_runtime) {
