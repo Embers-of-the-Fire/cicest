@@ -393,6 +393,26 @@ static void test_ct_required_let_annotation_rejects_runtime_value() {
         "let binding must be compile-time available");
 }
 
+static void test_ct_required_param_rejects_forwarded_runtime_allowed_param() {
+    must_fail_with_message(
+        "fn reserve(count: !runtime num) -> num { count }"
+        "fn wrap(count: num) -> num { reserve(count) }",
+        "argument `count` must be compile-time available");
+}
+
+static void test_ct_required_param_rejects_forwarded_runtime_allowed_local() {
+    must_fail_with_message(
+        "fn reserve(count: !runtime num) -> num { count }"
+        "fn wrap(count: num) -> num { let forwarded = count; reserve(forwarded) }",
+        "argument `count` must be compile-time available");
+}
+
+static void test_ct_required_let_annotation_rejects_runtime_allowed_param() {
+    must_fail_with_message(
+        "fn wrap(count: num) -> num { let forwarded: const num = count; forwarded }",
+        "let binding must be compile-time available");
+}
+
 static void test_fn_preserves_generic_metadata() {
     const auto prog =
         must_lower_with_constraint_prelude("fn id<T>(value: T) -> T where true, 1 == 1 { value }");
@@ -946,6 +966,9 @@ int main() {
     test_ct_required_param_rejects_runtime_argument();
     test_ct_required_param_rejects_runtime_block_argument();
     test_ct_required_let_annotation_rejects_runtime_value();
+    test_ct_required_param_rejects_forwarded_runtime_allowed_param();
+    test_ct_required_param_rejects_forwarded_runtime_allowed_local();
+    test_ct_required_let_annotation_rejects_runtime_allowed_param();
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();
     test_fn_decl_where_clause_allows_parameter_references_in_decl_probe();

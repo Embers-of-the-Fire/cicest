@@ -268,6 +268,10 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
     return false;
 }
 
+[[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {
+    return expr != nullptr && expr->ct_available && !type_has_runtime_dependency(expr->ty);
+}
+
 [[nodiscard]] static bool call_argument_may_be_compatible_after_substitution(
     const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params) {
     return types_may_be_compatible_after_substitution(
@@ -1162,6 +1166,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
     auto rewritten = std::make_shared<tyir::TyBlock>();
     rewritten->ty = apply_substitution(block->ty, subst);
     rewritten->span = block->span;
+    rewritten->ct_available = block->ct_available && !type_has_runtime_dependency(rewritten->ty);
     rewritten->stmts.reserve(block->stmts.size());
     for (const tyir::TyStmt& stmt : block->stmts) {
         rewritten->stmts.push_back(
@@ -1193,7 +1198,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
         return nullptr;
 
     const tyir::Ty rewritten_ty = apply_substitution(expr->ty, subst);
-    return std::visit(
+    auto rewritten_expr = std::visit(
         [&](const auto& node) -> tyir::TyExprPtr {
             using Node = std::decay_t<decltype(node)>;
             if constexpr (
@@ -1332,6 +1337,8 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
             }
         },
         expr->node);
+    rewritten_expr->ct_available = expr->ct_available && !type_has_runtime_dependency(rewritten_ty);
+    return rewritten_expr;
 }
 
 [[nodiscard]] static std::string format_num(double value) {
@@ -1852,7 +1859,7 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                             if (fn.params[index].requires_ct()
-                                && type_has_runtime_dependency(node.args[index]->ty)) {
+                                && !expr_value_is_ct_available(node.args[index])) {
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",
@@ -1913,7 +1920,7 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                             if (decl.params[index].requires_ct()
-                                && type_has_runtime_dependency(node.args[index]->ty)) {
+                                && !expr_value_is_ct_available(node.args[index])) {
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",

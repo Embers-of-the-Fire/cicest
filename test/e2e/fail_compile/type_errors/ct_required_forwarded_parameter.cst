@@ -1,0 +1,13 @@
+runtime fn source() -> num { 1 }
+
+fn reserve(count: !runtime num) -> num {
+    count
+}
+
+fn wrap(count: num) -> num {
+    reserve(count)
+}
+
+fn main() -> runtime num {
+    wrap(source())
+}
