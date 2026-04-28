@@ -22,12 +22,15 @@ namespace detail {
 using tyir::common_type;
 using tyir::compatible;
 using tyir::matches_type_shape;
+using tyir::type_has_runtime_dependency;
 
 // ─── Type environment ────────────────────────────────────────────────────────
 
 /// Signature stored for each top-level function.
 struct FnSignature {
+    std::vector<cstc::symbol::Symbol> param_names;
     std::vector<tyir::Ty> param_types;
+    std::vector<tyir::ParamRequirement> param_requirements;
     tyir::Ty return_ty;
     cstc::span::SourceSpan span;
     std::vector<cstc::ast::GenericParam> generic_params;
@@ -330,23 +333,29 @@ using TypeSubstitution =
     return erased;
 }
 
-[[nodiscard]] static bool type_has_runtime_dependency(const tyir::Ty& ty) {
-    if (ty.is_runtime)
-        return true;
-    if (ty.kind == tyir::TyKind::Ref)
-        return ty.pointee != nullptr && type_has_runtime_dependency(*ty.pointee);
-    if (ty.kind != tyir::TyKind::Named)
-        return false;
-    for (const tyir::Ty& arg : ty.generic_args) {
-        if (type_has_runtime_dependency(arg))
-            return true;
+[[nodiscard]] static bool value_is_ct_available(const bool ct_available, const tyir::Ty& ty) {
+    return ct_available && !type_has_runtime_dependency(ty);
+}
+
+[[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {
+    return expr != nullptr && value_is_ct_available(expr->ct_available, expr->ty);
+}
+
+[[nodiscard]] static bool all_exprs_ct_available(const std::vector<tyir::TyExprPtr>& exprs) {
+    for (const tyir::TyExprPtr& expr : exprs) {
+        if (!expr_value_is_ct_available(expr))
+            return false;
     }
-    return false;
+    return true;
 }
 
 [[nodiscard]] static bool
     call_argument_compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
     return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
+}
+
+[[nodiscard]] static std::string ct_required_type_display(const tyir::Ty& ty) {
+    return "const " + erase_runtime_qualifiers(ty).display();
 }
 
 [[nodiscard]] static bool call_argument_may_be_compatible_after_generic_substitution(
@@ -476,6 +485,7 @@ public:
         bool moved = false;
         std::size_t active_borrows = 0;
         std::optional<std::size_t> borrowed_local;
+        bool ct_available = true;
     };
 
     void push() { frames_.push_back(Frame{{}, locals_.size()}); }
@@ -495,7 +505,7 @@ public:
 
     [[nodiscard]] bool insert(
         cstc::symbol::Symbol name, tyir::Ty ty,
-        std::optional<std::size_t> borrowed_local = std::nullopt) {
+        std::optional<std::size_t> borrowed_local = std::nullopt, bool ct_available = true) {
         assert(!frames_.empty());
         if (frames_.back().bindings.contains(name))
             return false;
@@ -504,7 +514,8 @@ public:
             locals_.at(*borrowed_local).active_borrows += 1;
 
         const std::size_t index = locals_.size();
-        locals_.push_back(LocalState{std::move(ty), false, 0, borrowed_local});
+        const bool stored_ct_available = value_is_ct_available(ct_available, ty);
+        locals_.push_back(LocalState{std::move(ty), false, 0, borrowed_local, stored_ct_available});
         frames_.back().bindings.emplace(name, index);
         return true;
     }
@@ -535,6 +546,7 @@ public:
             locals_[i].moved = locals_[i].moved || other.locals_[i].moved;
             locals_[i].active_borrows =
                 std::max(locals_[i].active_borrows, other.locals_[i].active_borrows);
+            locals_[i].ct_available = locals_[i].ct_available && other.locals_[i].ct_available;
         }
     }
 
@@ -560,6 +572,8 @@ struct LoopCtx {
     /// yet; once a `break` is encountered the type is set (bare `break` → Unit,
     /// `break expr` → expr type).  Subsequent breaks must unify.
     std::optional<tyir::Ty> break_ty;
+    /// Compile-time availability of accumulated break values.
+    std::optional<bool> break_ct_available;
 };
 
 // ─── Lowering context ────────────────────────────────────────────────────────
@@ -587,7 +601,9 @@ struct LowerCtx {
     }
 
     /// Push a new loop context for the given loop kind.
-    void push_loop(LoopKind kind) { loop_stack.push_back(LoopCtx{kind, std::nullopt}); }
+    void push_loop(LoopKind kind) {
+        loop_stack.push_back(LoopCtx{kind, std::nullopt, std::nullopt});
+    }
 
     /// Pop the innermost loop context.
     void pop_loop() {
@@ -921,6 +937,36 @@ struct LowerCtx {
 [[nodiscard]] static std::unexpected<LowerError>
     make_error(cstc::span::SourceSpan span, std::string msg) {
     return std::unexpected(LowerError{span, std::move(msg), std::nullopt});
+}
+
+[[nodiscard]] static std::expected<void, LowerError> require_ct_call_argument(
+    const FnSignature& sig, std::size_t param_index, const tyir::TyExprPtr& arg,
+    const tyir::Ty& expected_ty, cstc::span::SourceSpan span) {
+    if (param_index >= sig.param_requirements.size()
+        || sig.param_requirements[param_index] != tyir::ParamRequirement::CtRequired
+        || expr_value_is_ct_available(arg)) {
+        return {};
+    }
+
+    std::string param_name = std::to_string(param_index + 1);
+    if (param_index < sig.param_names.size() && sig.param_names[param_index].is_valid())
+        param_name = "`" + std::string(sig.param_names[param_index].as_str()) + "`";
+
+    return make_error(
+        span, "argument " + param_name + " must be compile-time available: expected '"
+                  + ct_required_type_display(expected_ty) + "', found '" + arg->ty.display() + "'");
+}
+
+[[nodiscard]] static std::expected<void, LowerError> require_ct_annotation_value(
+    bool requires_ct, const tyir::TyExprPtr& value, const tyir::Ty& expected_ty,
+    cstc::span::SourceSpan span, std::string_view context) {
+    if (!requires_ct || expr_value_is_ct_available(value))
+        return {};
+
+    return make_error(
+        span, std::string(context) + " must be compile-time available: expected '"
+                  + ct_required_type_display(expected_ty) + "', found '" + value->ty.display()
+                  + "'");
 }
 
 [[nodiscard]] static std::string
@@ -1357,7 +1403,11 @@ struct LoweredPlace {
         auto pt = lower_type(p.type, env, p.span, generic_param_set);
         if (!pt)
             return std::unexpected(std::move(pt.error()));
+        sig.param_names.push_back(p.name);
         sig.param_types.push_back(*pt);
+        sig.param_requirements.push_back(
+            p.type.requires_ct ? tyir::ParamRequirement::CtRequired
+                               : tyir::ParamRequirement::RuntimeAllowed);
     }
     return sig;
 }
@@ -1701,7 +1751,11 @@ struct ParamReferenceVisitor {
             (*block)->tail = std::move(*resolved_tail);
             (*block)->ty =
                 block_can_fallthrough(**block) ? (*(*block)->tail)->ty : tyir::ty::never();
+            (*block)->ct_available = value_is_ct_available(
+                block_can_fallthrough(**block) ? expr_value_is_ct_available(*(*block)->tail) : true,
+                (*block)->ty);
             expr->ty = (*block)->ty;
+            expr->ct_available = (*block)->ct_available;
         }
         return expr;
     }
@@ -1719,10 +1773,16 @@ struct ParamReferenceVisitor {
             runtime_block->body->ty = block_can_fallthrough(*runtime_block->body)
                                         ? (*runtime_block->body->tail)->ty
                                         : tyir::ty::never();
+            runtime_block->body->ct_available = value_is_ct_available(
+                block_can_fallthrough(*runtime_block->body)
+                    ? expr_value_is_ct_available(*runtime_block->body->tail)
+                    : true,
+                runtime_block->body->ty);
             expr->ty = runtime_block->body->ty;
             if (!expr->ty.is_never())
                 expr->ty.is_runtime = true;
         }
+        expr->ct_available = false;
         return expr;
     }
 
@@ -1736,6 +1796,11 @@ struct ParamReferenceVisitor {
             if_expr->then_block->ty = block_can_fallthrough(*if_expr->then_block)
                                         ? (*if_expr->then_block->tail)->ty
                                         : tyir::ty::never();
+            if_expr->then_block->ct_available = value_is_ct_available(
+                block_can_fallthrough(*if_expr->then_block)
+                    ? expr_value_is_ct_available(*if_expr->then_block->tail)
+                    : true,
+                if_expr->then_block->ty);
         }
 
         if (if_expr->else_branch.has_value() && expr_can_fallthrough(*(*if_expr->else_branch))) {
@@ -1754,6 +1819,13 @@ struct ParamReferenceVisitor {
                 return std::unexpected(std::move(joined_ty.error()));
             expr->ty = *joined_ty;
         }
+        const bool else_ct_available = if_expr->else_branch.has_value()
+                                         ? expr_value_is_ct_available(*if_expr->else_branch)
+                                         : true;
+        expr->ct_available = value_is_ct_available(
+            expr_value_is_ct_available(if_expr->condition) && if_expr->then_block->ct_available
+                && else_ct_available,
+            expr->ty);
         return expr;
     }
 
@@ -1797,11 +1869,13 @@ struct ParamReferenceVisitor {
     const tyir::Ty resolved_return_ty = call_result_type(
         annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env),
         deferred->args);
+    const bool deferred_call_ct_available =
+        value_is_ct_available(all_exprs_ct_available(deferred->args), resolved_return_ty);
     if (!fully_resolved) {
         return tyir::make_ty_expr(
             expr->span,
             tyir::TyDeferredGenericCall{deferred->fn_name, std::move(generic_args), deferred->args},
-            resolved_return_ty);
+            resolved_return_ty, deferred_call_ct_available);
     }
 
     std::vector<tyir::Ty> concrete_generic_args;
@@ -1827,14 +1901,20 @@ struct ParamReferenceVisitor {
                                                 + "', found '" + resolved_args[index]->ty.display()
                                                 + "'");
         }
+        auto ct_check = require_ct_call_argument(
+            sig, index, resolved_args[index], expected_param_ty, resolved_args[index]->span);
+        if (!ct_check)
+            return std::unexpected(std::move(ct_check.error()));
     }
 
     const tyir::Ty lifted_return_ty = lift_call_result_type(resolved_return_ty, resolved_args);
+    const bool call_ct_available =
+        value_is_ct_available(all_exprs_ct_available(resolved_args), lifted_return_ty);
 
     return tyir::make_ty_expr(
         expr->span,
         tyir::TyCall{deferred->fn_name, std::move(concrete_generic_args), std::move(resolved_args)},
-        lifted_return_ty);
+        lifted_return_ty, call_ct_available);
 }
 
 [[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
@@ -1902,7 +1982,9 @@ struct ParamReferenceVisitor {
     if (!constraint_fn)
         return std::unexpected(std::move(constraint_fn.error()));
 
-    return tyir::make_ty_expr(expr->span, tyir::TyCall{*constraint_fn, {}, {expr}}, *constraint_ty);
+    return tyir::make_ty_expr(
+        expr->span, tyir::TyCall{*constraint_fn, {}, {expr}}, *constraint_ty,
+        expr_value_is_ct_available(expr));
 }
 
 [[nodiscard]] static std::expected<std::vector<tyir::TyGenericConstraint>, LowerError>
@@ -1937,7 +2019,7 @@ struct ParamReferenceVisitor {
         }
 
         for (const tyir::TyParam& param : *params) {
-            if (!ctx.scope.insert(param.name, param.ty)) {
+            if (!ctx.scope.insert(param.name, param.ty, std::nullopt, param.requires_ct())) {
                 ctx.scope.pop();
                 return make_error(
                     param.span, "duplicate parameter '" + std::string(param.name.as_str()) + "'");
@@ -2115,6 +2197,7 @@ struct ParamReferenceVisitor {
 
                 // Resolve binding type (explicit annotation or infer from init)
                 tyir::Ty binding_ty;
+                bool binding_ct_available = true;
                 if (s.type_annotation.has_value()) {
                     auto ann = lower_type(*s.type_annotation, ctx.env, s.span, ctx.generic_params);
                     if (!ann)
@@ -2125,11 +2208,24 @@ struct ParamReferenceVisitor {
                     init->expr = std::move(*resolved_init);
                     if (!compatible(init->expr->ty, *ann)
                         && !should_defer_generic_probe_failure(
-                            init->expr->ty, *ann, ctx, init->deferred_generic_probe_validation))
+                            init->expr->ty, *ann, ctx, init->deferred_generic_probe_validation)) {
+                        if (s.type_annotation->requires_ct
+                            && call_argument_compatible(init->expr->ty, *ann)) {
+                            auto ct_check = require_ct_annotation_value(
+                                true, init->expr, *ann, s.span, "let binding");
+                            if (!ct_check)
+                                return std::unexpected(std::move(ct_check.error()));
+                        }
                         return make_error(
                             s.span, "type mismatch in let binding: expected '" + ann->display()
                                         + "', found '" + init->expr->ty.display() + "'");
+                    }
+                    auto ct_check = require_ct_annotation_value(
+                        s.type_annotation->requires_ct, init->expr, *ann, s.span, "let binding");
+                    if (!ct_check)
+                        return std::unexpected(std::move(ct_check.error()));
                     binding_ty = *ann;
+                    binding_ct_available = expr_value_is_ct_available(init->expr);
                 } else {
                     if (auto unresolved = find_unresolved_deferred_generic_call(
                             init->expr, ctx.env, ctx.generic_params);
@@ -2139,6 +2235,7 @@ struct ParamReferenceVisitor {
                                         + std::string(unresolved->as_str()) + "'");
                     }
                     binding_ty = init->expr->ty;
+                    binding_ct_available = expr_value_is_ct_available(init->expr);
                 }
 
                 // Register binding in scope (unless discard pattern)
@@ -2155,7 +2252,7 @@ struct ParamReferenceVisitor {
                         "borrow instead");
                 }
                 if (!s.discard && s.name.is_valid()
-                    && !ctx.scope.insert(s.name, binding_ty, borrowed_local))
+                    && !ctx.scope.insert(s.name, binding_ty, borrowed_local, binding_ct_available))
                     return make_error(
                         s.span, "duplicate local binding '" + std::string(s.name.as_str()) + "'");
 
@@ -2300,9 +2397,12 @@ struct ParamReferenceVisitor {
         release_temp_borrows(ctx, tail->temp_borrows);
         result.tail = std::move(tail->expr);
         result.ty = reaches_tail ? (*result.tail)->ty : tyir::ty::never();
+        result.ct_available = reaches_tail ? expr_value_is_ct_available(*result.tail) : true;
     } else {
         result.ty = reaches_tail ? tyir::ty::unit() : tyir::ty::never();
+        result.ct_available = true;
     }
+    result.ct_available = value_is_ct_available(result.ct_available, result.ty);
 
     ctx.scope.pop();
     return result;
@@ -2335,6 +2435,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
             continue;
         if (!target[i].break_ty.has_value()) {
             target[i].break_ty = source[i].break_ty;
+            target[i].break_ct_available = source[i].break_ct_available;
             continue;
         }
 
@@ -2344,6 +2445,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
         if (!joined)
             return std::unexpected(std::move(joined.error()));
         target[i].break_ty = *joined;
+        if (source[i].break_ct_available.has_value()) {
+            target[i].break_ct_available =
+                target[i].break_ct_available.value_or(true) && *source[i].break_ct_available;
+        }
     }
     return {};
 }
@@ -2376,8 +2481,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 return LoweredPlace{
                     tyir::make_ty_expr(
-                        expr->span, tyir::LocalRef{node.head, tyir::ValueUseKind::Borrow},
-                        local.ty),
+                        expr->span, tyir::LocalRef{node.head, tyir::ValueUseKind::Borrow}, local.ty,
+                        local.ct_available),
                     local_index,
                 };
             } else if constexpr (std::is_same_v<N, ast::FieldAccessExpr>) {
@@ -2409,13 +2514,14 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 }
                 tyir::Ty lowered_field_ty =
                     propagate_runtime_tag(*field_ty, base->expr->ty.is_runtime);
+                const bool field_ct_available = expr_value_is_ct_available(base->expr);
 
                 return LoweredPlace{
                     tyir::make_ty_expr(
                         expr->span,
                         tyir::TyFieldAccess{
                             std::move(base->expr), node.field, tyir::ValueUseKind::Borrow},
-                        lowered_field_ty),
+                        lowered_field_ty, field_ct_available),
                     base->owner_local,
                 };
             } else {
@@ -2514,7 +2620,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                     return LoweredExpr{
                         tyir::make_ty_expr(
-                            expr->span, tyir::LocalRef{node.head, use_kind}, local.ty),
+                            expr->span, tyir::LocalRef{node.head, use_kind}, local.ty,
+                            local.ct_available),
                         {},
                         local.ty.is_ref() ? local.borrowed_local : std::nullopt,
                     };
@@ -2575,6 +2682,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     cstc::symbol::Symbol, cstc::span::SourceSpan, cstc::symbol::SymbolHash>
                     seen_fields;
                 seen_fields.reserve(node.fields.size());
+                bool fields_ct_available = true;
 
                 for (const ast::StructInitField& field : node.fields) {
                     auto expected_ty = ctx.env.field_ty(type_name, field.name);
@@ -2608,6 +2716,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                             + "', found '" + val->expr->ty.display() + "'");
 
                     append_temp_borrows(temp_borrows, std::move(val->temp_borrows));
+                    fields_ct_available =
+                        fields_ct_available && expr_value_is_ct_available(val->expr);
 
                     lowered_fields.push_back(
                         tyir::TyStructInitField{field.name, std::move(val->expr), field.span});
@@ -2632,7 +2742,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         expr->span,
                         tyir::TyStructInit{
                             type_name, std::move(lowered_generic_args), std::move(lowered_fields)},
-                        result_ty),
+                        result_ty, fields_ct_available),
                     {},
                     std::nullopt,
                 };
@@ -2656,10 +2766,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             temp_borrows.push_back(*place->owner_local);
                         }
                         const tyir::Ty ref_ty = tyir::ty::ref(place->expr->ty);
+                        const bool borrow_ct_available = expr_value_is_ct_available(place->expr);
 
                         return LoweredExpr{
                             tyir::make_ty_expr(
-                                expr->span, tyir::TyBorrow{std::move(place->expr)}, ref_ty),
+                                expr->span, tyir::TyBorrow{std::move(place->expr)}, ref_ty,
+                                borrow_ct_available),
                             std::move(temp_borrows),
                             place->owner_local,
                         };
@@ -2670,19 +2782,22 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(rhs.error()));
 
                     if (rhs->expr->ty.is_never()) {
+                        const bool borrow_ct_available = expr_value_is_ct_available(rhs->expr);
                         return LoweredExpr{
                             tyir::make_ty_expr(
-                                expr->span, tyir::TyBorrow{std::move(rhs->expr)},
-                                tyir::ty::never()),
+                                expr->span, tyir::TyBorrow{std::move(rhs->expr)}, tyir::ty::never(),
+                                borrow_ct_available),
                             std::move(rhs->temp_borrows),
                             std::nullopt,
                         };
                     }
                     const tyir::Ty ref_ty = tyir::ty::ref(rhs->expr->ty);
+                    const bool borrow_ct_available = expr_value_is_ct_available(rhs->expr);
 
                     return LoweredExpr{
                         tyir::make_ty_expr(
-                            expr->span, tyir::TyBorrow{std::move(rhs->expr)}, ref_ty),
+                            expr->span, tyir::TyBorrow{std::move(rhs->expr)}, ref_ty,
+                            borrow_ct_available),
                         std::move(rhs->temp_borrows),
                         std::nullopt,
                     };
@@ -2712,9 +2827,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         result_ty = unary_result_type(rhs->expr->ty, tyir::ty::bool_());
                     }
 
+                    const bool unary_ct_available = expr_value_is_ct_available(rhs->expr);
                     auto lowered = LoweredExpr{
                         tyir::make_ty_expr(
-                            expr->span, tyir::TyUnary{node.op, std::move(rhs->expr)}, result_ty),
+                            expr->span, tyir::TyUnary{node.op, std::move(rhs->expr)}, result_ty,
+                            unary_ct_available),
                         {},
                         std::nullopt,
                     };
@@ -2802,11 +2919,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     result_ty = binary_result_type(lhs->expr->ty, rhs->expr->ty, tyir::ty::bool_());
                     break;
                 }
+                const bool binary_ct_available =
+                    expr_value_is_ct_available(lhs->expr) && expr_value_is_ct_available(rhs->expr);
                 auto lowered = LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span,
                         tyir::TyBinary{node.op, std::move(lhs->expr), std::move(rhs->expr)},
-                        std::move(result_ty)),
+                        std::move(result_ty), binary_ct_available),
                     {},
                     std::nullopt,
                 };
@@ -2830,11 +2949,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 const auto* access = std::get_if<tyir::TyFieldAccess>(&place->expr->node);
                 assert(access != nullptr);
+                const bool field_ct_available = expr_value_is_ct_available(place->expr);
                 return LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span,
                         tyir::TyFieldAccess{access->base, access->field, tyir::ValueUseKind::Copy},
-                        place->expr->ty),
+                        place->expr->ty, field_ct_available),
                     {},
                     place->expr->ty.is_ref() ? place->owner_local : std::nullopt,
                 };
@@ -2976,30 +3096,37 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         lowered_args[i] = std::move(*resolved_arg);
                         if (!call_argument_compatible(lowered_args[i]->ty, expected_param_ty)
                             && !should_defer_generic_call_argument_failure(
-                                lowered_args[i]->ty, expected_param_ty, ctx))
+                                lowered_args[i]->ty, expected_param_ty, ctx)) {
                             return make_error(
                                 node.args[i]->span, "argument " + std::to_string(i + 1) + " of '"
                                                         + display_fn_name + "': expected '"
                                                         + expected_param_ty.display() + "', found '"
                                                         + lowered_args[i]->ty.display() + "'");
+                        }
+                        auto ct_check = require_ct_call_argument(
+                            sig, i, lowered_args[i], expected_param_ty, node.args[i]->span);
+                        if (!ct_check)
+                            return std::unexpected(std::move(ct_check.error()));
                     }
 
                     const tyir::Ty lifted_return_ty =
                         lift_call_result_type(resolved_return_ty, lowered_args);
+                    const bool call_ct_available = all_exprs_ct_available(lowered_args);
 
                     lowered_expr = tyir::make_ty_expr(
                         expr->span,
                         tyir::TyCall{
                             fn_name, std::move(concrete_generic_args), std::move(lowered_args)},
-                        lifted_return_ty);
+                        lifted_return_ty, call_ct_available);
                 } else {
                     const tyir::Ty lifted_return_ty =
                         lift_call_result_type(resolved_return_ty, lowered_args);
+                    const bool call_ct_available = all_exprs_ct_available(lowered_args);
                     lowered_expr = tyir::make_ty_expr(
                         expr->span,
                         tyir::TyDeferredGenericCall{
                             fn_name, std::move(resolved_generic_args), std::move(lowered_args)},
-                        lifted_return_ty);
+                        lifted_return_ty, call_ct_available);
                 }
 
                 auto lowered = LoweredExpr{
@@ -3030,7 +3157,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
                 return LoweredExpr{
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyRuntimeBlock{std::move(block_ptr)}, result_ty),
+                        expr->span, tyir::TyRuntimeBlock{std::move(block_ptr)}, result_ty, false),
                     {},
                     std::nullopt,
                 };
@@ -3043,8 +3170,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     return std::unexpected(std::move(block.error()));
                 tyir::Ty block_ty = block->ty;
                 auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
+                const bool block_ct_available = block_ptr->ct_available;
                 return LoweredExpr{
-                    tyir::make_ty_expr(expr->span, std::move(block_ptr), block_ty),
+                    tyir::make_ty_expr(
+                        expr->span, std::move(block_ptr), block_ty, block_ct_available),
                     {},
                     std::nullopt,
                 };
@@ -3071,6 +3200,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 const bool then_reaches_join = block_can_fallthrough(*then_ptr);
 
                 tyir::Ty result_ty = then_ptr->ty;
+                const bool condition_ct_available = expr_value_is_ct_available(cond->expr);
+                bool if_ct_available = condition_ct_available && then_ptr->ct_available;
 
                 std::optional<tyir::TyExprPtr> else_branch;
                 if (node.else_branch.has_value()) {
@@ -3104,6 +3235,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (expr_can_fallthrough(*else_val->expr))
                         ctx.scope.merge_from(else_ctx.scope);
 
+                    if_ct_available = if_ct_available && expr_value_is_ct_available(else_val->expr);
                     else_branch = std::move(else_val->expr);
                 } else {
                     // No else branch: result type is Unit
@@ -3125,7 +3257,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         expr->span,
                         tyir::TyIf{
                             std::move(cond->expr), std::move(then_ptr), std::move(else_branch)},
-                        result_ty),
+                        result_ty, if_ct_available),
                     {},
                     std::nullopt,
                 };
@@ -3144,6 +3276,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 //   - bare break     → Unit
                 //   - break expr     → expr type
                 const tyir::Ty loop_ty = ctx.current_loop().break_ty.value_or(tyir::ty::never());
+                const bool loop_ct_available = ctx.current_loop().break_ct_available.value_or(true);
                 if (loop_ty.is_ref()) {
                     ctx.pop_loop();
                     return make_error(expr->span, "loop expressions cannot yield references yet");
@@ -3151,7 +3284,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
                 return LoweredExpr{
-                    tyir::make_ty_expr(expr->span, tyir::TyLoop{std::move(body_ptr)}, loop_ty),
+                    tyir::make_ty_expr(
+                        expr->span, tyir::TyLoop{std::move(body_ptr)}, loop_ty, loop_ct_available),
                     {},
                     std::nullopt,
                 };
@@ -3171,6 +3305,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                                   + cond->expr->ty.display() + "'");
                 }
                 release_temp_borrows(ctx, cond->temp_borrows);
+                const bool condition_ct_available = expr_value_is_ct_available(cond->expr);
 
                 ctx.push_loop(LoopKind::While);
                 auto body = lower_block(*node.body, ctx);
@@ -3180,11 +3315,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 }
                 ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
+                const bool while_ct_available = condition_ct_available && body_ptr->ct_available;
 
                 return LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span, tyir::TyWhile{std::move(cond->expr), std::move(body_ptr)},
-                        tyir::ty::unit()),
+                        tyir::ty::unit(), while_ct_available),
                     {},
                     std::nullopt,
                 };
@@ -3196,6 +3332,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 ctx.scope.push();
 
                 std::optional<tyir::TyForInit> lowered_init;
+                bool for_ct_available = true;
 
                 if (node.init.has_value()) {
                     const auto& init_var = *node.init;
@@ -3206,6 +3343,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             return std::unexpected(std::move(init_expr.error()));
                         }
                         tyir::Ty init_ty;
+                        bool init_ct_available = true;
                         if (init_let->type_annotation.has_value()) {
                             auto ann = lower_type(
                                 *init_let->type_annotation, ctx.env, init_let->span,
@@ -3224,15 +3362,34 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             if (!compatible(init_expr->expr->ty, *ann)
                                 && !should_defer_generic_probe_failure(
                                     init_expr->expr->ty, *ann, ctx)) {
+                                if (init_let->type_annotation->requires_ct
+                                    && call_argument_compatible(init_expr->expr->ty, *ann)) {
+                                    auto ct_check = require_ct_annotation_value(
+                                        true, init_expr->expr, *ann, init_let->span,
+                                        "for-init binding");
+                                    if (!ct_check) {
+                                        ctx.scope.pop();
+                                        return std::unexpected(std::move(ct_check.error()));
+                                    }
+                                }
                                 ctx.scope.pop();
                                 return make_error(
                                     init_let->span, "for-init type mismatch: expected '"
                                                         + ann->display() + "', found '"
                                                         + init_expr->expr->ty.display() + "'");
                             }
+                            auto ct_check = require_ct_annotation_value(
+                                init_let->type_annotation->requires_ct, init_expr->expr, *ann,
+                                init_let->span, "for-init binding");
+                            if (!ct_check) {
+                                ctx.scope.pop();
+                                return std::unexpected(std::move(ct_check.error()));
+                            }
                             init_ty = *ann;
+                            init_ct_available = expr_value_is_ct_available(init_expr->expr);
                         } else {
                             init_ty = init_expr->expr->ty;
+                            init_ct_available = expr_value_is_ct_available(init_expr->expr);
                         }
 
                         std::optional<std::size_t> borrowed_local;
@@ -3241,13 +3398,15 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             consume_temp_borrow(init_expr->temp_borrows, borrowed_local.value());
                         }
                         if (!init_let->discard && init_let->name.is_valid()
-                            && !ctx.scope.insert(init_let->name, init_ty, borrowed_local)) {
+                            && !ctx.scope.insert(
+                                init_let->name, init_ty, borrowed_local, init_ct_available)) {
                             ctx.scope.pop();
                             return make_error(
                                 init_let->span, "duplicate local binding '"
                                                     + std::string(init_let->name.as_str()) + "'");
                         }
                         release_temp_borrows(ctx, init_expr->temp_borrows);
+                        for_ct_available = for_ct_available && init_ct_available;
                         lowered_init = tyir::TyForInit{
                             init_let->discard, init_let->name, init_ty, std::move(init_expr->expr),
                             init_let->span};
@@ -3260,6 +3419,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             return std::unexpected(std::move(init_expr.error()));
                         }
                         release_temp_borrows(ctx, init_expr->temp_borrows);
+                        for_ct_available =
+                            for_ct_available && expr_value_is_ct_available(init_expr->expr);
                         // Treat as a discard init — wrap in TyForInit with discard=true
                         lowered_init = tyir::TyForInit{
                             true, cstc::symbol::kInvalidSymbol, init_expr->expr->ty,
@@ -3284,6 +3445,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 + cond->expr->ty.display() + "'");
                     }
                     release_temp_borrows(ctx, cond->temp_borrows);
+                    for_ct_available = for_ct_available && expr_value_is_ct_available(cond->expr);
                     lowered_cond = std::move(cond->expr);
                 }
 
@@ -3298,6 +3460,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 }
                 loop_ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
+                for_ct_available = for_ct_available && body_ptr->ct_available;
 
                 std::optional<tyir::TyExprPtr> lowered_step;
                 if (node.step.has_value()) {
@@ -3307,6 +3470,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(step.error()));
                     }
                     release_temp_borrows(loop_ctx, step->temp_borrows);
+                    for_ct_available = for_ct_available && expr_value_is_ct_available(step->expr);
                     lowered_step = std::move(step->expr);
                 }
 
@@ -3318,7 +3482,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         tyir::TyFor{
                             std::move(lowered_init), std::move(lowered_cond),
                             std::move(lowered_step), std::move(body_ptr)},
-                        tyir::ty::unit()),
+                        tyir::ty::unit(), for_ct_available),
                     {},
                     std::nullopt,
                 };
@@ -3351,14 +3515,18 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     // Re-acquire the reference after recursion.
                     auto& loop_ctx = ctx.current_loop();
                     const tyir::Ty& val_ty = val->expr->ty;
+                    const bool break_ct_available = expr_value_is_ct_available(val->expr);
                     if (!loop_ctx.break_ty.has_value()) {
                         loop_ctx.break_ty = val_ty;
+                        loop_ctx.break_ct_available = break_ct_available;
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
                         auto joined = join_loop_break_types(prev, val_ty, expr->span, ctx);
                         if (!joined)
                             return std::unexpected(std::move(joined.error()));
                         loop_ctx.break_ty = *joined;
+                        loop_ctx.break_ct_available =
+                            loop_ctx.break_ct_available.value_or(true) && break_ct_available;
                     }
 
                     release_temp_borrows(ctx, val->temp_borrows);
@@ -3376,6 +3544,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     // Bare break in `loop` contributes Unit
                     if (!loop_ctx.break_ty.has_value()) {
                         loop_ctx.break_ty = tyir::ty::unit();
+                        loop_ctx.break_ct_available = true;
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
                         auto joined =
@@ -3383,6 +3552,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         if (!joined)
                             return std::unexpected(std::move(joined.error()));
                         loop_ctx.break_ty = *joined;
+                        loop_ctx.break_ct_available = loop_ctx.break_ct_available.value_or(true);
                     }
                 }
                 // Bare break in while/for: no type tracking needed
@@ -3446,8 +3616,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
             return make_error(expr->span, "unsupported expression kind");
         },
         expr->node);
-    if (lowered.has_value())
+    if (lowered.has_value()) {
+        lowered->expr->ct_available =
+            value_is_ct_available(lowered->expr->ct_available, lowered->expr->ty);
         lowered->deferred_generic_probe_validation = ctx.defer_generic_probe_validation;
+    }
     return lowered;
 }
 
@@ -3463,14 +3636,16 @@ static std::expected<void, LowerError> merge_loop_break_types(
     ty_params.reserve(fn.params.size());
     for (std::size_t i = 0; i < fn.params.size(); ++i)
         ty_params.push_back(
-            tyir::TyParam{fn.params[i].name, sig.param_types[i], fn.params[i].span});
+            tyir::TyParam{
+                fn.params[i].name, sig.param_types[i], fn.params[i].span,
+                sig.param_requirements[i]});
 
     LowerCtx ctx{
         env, {}, make_generic_param_set(fn.generic_params), false, sig.return_ty, {},
     };
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params) {
-        if (!ctx.scope.insert(p.name, p.ty))
+        if (!ctx.scope.insert(p.name, p.ty, std::nullopt, p.requires_ct()))
             return make_error(p.span, "duplicate parameter '" + std::string(p.name.as_str()) + "'");
     }
 
@@ -3485,6 +3660,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
             return std::unexpected(std::move(resolved_tail.error()));
         body->tail = std::move(*resolved_tail);
         body->ty = block_can_fallthrough(*body) ? (*body->tail)->ty : tyir::ty::never();
+        body->ct_available =
+            value_is_ct_available(expr_value_is_ct_available(*body->tail), body->ty);
     }
 
     // Check that body type matches declared return type (when a tail is present)
@@ -3782,6 +3959,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                         .name = ext_fn->params[i].name,
                         .ty = sig.param_types[i],
                         .span = ext_fn->params[i].span,
+                        .requirement = sig.param_requirements[i],
                     });
             }
             result.items.push_back(std::move(ty_decl));

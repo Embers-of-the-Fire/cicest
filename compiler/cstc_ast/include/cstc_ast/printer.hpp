@@ -123,6 +123,8 @@ inline void print_attributes(
         rendered += ">";
     }
 
+    if (type.requires_ct)
+        return "!runtime " + rendered;
     if (type.is_runtime)
         return "runtime " + rendered;
     return rendered;

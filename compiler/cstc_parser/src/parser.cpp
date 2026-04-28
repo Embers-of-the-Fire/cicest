@@ -90,12 +90,23 @@ private:
 
     [[nodiscard]] bool check(TokenKind kind) const { return peek().kind == kind; }
 
+    [[nodiscard]] bool check_contextual_keyword(std::string_view keyword) const {
+        return check(TokenKind::Identifier) && token_text(peek()) == keyword;
+    }
+
     [[nodiscard]] bool check_attribute_start() const {
         return check(TokenKind::LBracket) && peek(1).kind == TokenKind::LBracket;
     }
 
     [[nodiscard]] bool match(TokenKind kind) {
         if (!check(kind))
+            return false;
+        static_cast<void>(advance());
+        return true;
+    }
+
+    [[nodiscard]] bool match_contextual_keyword(std::string_view keyword) {
+        if (!check_contextual_keyword(keyword))
             return false;
         static_cast<void>(advance());
         return true;
@@ -359,7 +370,7 @@ private:
         std::vector<ast::TypeRef> args;
 
         while (true) {
-            auto arg = parse_type();
+            auto arg = parse_type(false);
             if (!arg.has_value())
                 return std::unexpected(arg.error());
             args.push_back(std::move(*arg));
@@ -908,21 +919,49 @@ private:
         };
     }
 
-    [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() {
+    [[nodiscard]] std::expected<ast::TypeRef, ParseError> parse_type() { return parse_type(true); }
+
+    [[nodiscard]] std::expected<ast::TypeRef, ParseError>
+        parse_type(const bool allow_ct_requirement) {
         if (match(TokenKind::KwRuntime)) {
             if (check(TokenKind::KwRuntime)) {
                 return std::unexpected(make_error_here("duplicate `runtime` type qualifier"));
             }
-            auto inner = parse_type();
+            auto inner = parse_type(allow_ct_requirement);
             if (!inner.has_value())
                 return std::unexpected(inner.error());
+            if (inner->requires_ct) {
+                return std::unexpected(
+                    make_error_here("conflicting `runtime` and `!runtime` type qualifiers"));
+            }
 
             inner->is_runtime = true;
             return std::move(*inner);
         }
 
+        if (match_contextual_keyword("const")) {
+            const Token qualifier = previous();
+            if (!allow_ct_requirement) {
+                return std::unexpected(
+                    make_error_token(qualifier, "nested `const` type qualifier is not supported"));
+            }
+            auto inner = parse_type(allow_ct_requirement);
+            if (!inner.has_value())
+                return std::unexpected(inner.error());
+            if (inner->is_runtime) {
+                return std::unexpected(
+                    make_error_here("conflicting `const` and `runtime` type qualifiers"));
+            }
+            if (inner->requires_ct) {
+                return std::unexpected(make_error_here("duplicate `!runtime` type qualifier"));
+            }
+
+            inner->requires_ct = true;
+            return std::move(*inner);
+        }
+
         if (match(TokenKind::Amp)) {
-            auto inner = parse_type();
+            auto inner = parse_type(false);
             if (!inner.has_value())
                 return std::unexpected(inner.error());
 
@@ -967,7 +1006,27 @@ private:
                 .pointee = nullptr,
                 .generic_args = {},
             };
-        if (match(TokenKind::Bang))
+        if (match(TokenKind::Bang)) {
+            const Token bang = previous();
+            if (match(TokenKind::KwRuntime)) {
+                if (!allow_ct_requirement) {
+                    return std::unexpected(make_error_token(
+                        bang, "nested `!runtime` type qualifier is not supported"));
+                }
+                auto inner = parse_type(allow_ct_requirement);
+                if (!inner.has_value())
+                    return std::unexpected(inner.error());
+                if (inner->is_runtime) {
+                    return std::unexpected(
+                        make_error_here("conflicting `!runtime` and `runtime` type qualifiers"));
+                }
+                if (inner->requires_ct) {
+                    return std::unexpected(make_error_here("duplicate `!runtime` type qualifier"));
+                }
+
+                inner->requires_ct = true;
+                return std::move(*inner);
+            }
             return ast::TypeRef{
                 .kind = ast::TypeKind::Never,
                 .symbol = previous().symbol,
@@ -975,6 +1034,7 @@ private:
                 .pointee = nullptr,
                 .generic_args = {},
             };
+        }
 
         auto identifier = consume_identifier("expected type name");
         if (!identifier.has_value())

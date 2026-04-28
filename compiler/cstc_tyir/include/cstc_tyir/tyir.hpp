@@ -500,7 +500,9 @@ struct TyReturn {
 /// Every `TyExpr` carries:
 /// - `node`: the concrete expression variant,
 /// - `ty`:   the inferred or annotated type,
-/// - `span`: the source location.
+/// - `span`: the source location,
+/// - `ct_available`: whether the expression value is guaranteed available at
+///   compile time, independent of the static type shape.
 struct TyExpr {
     /// Variant payload for all typed expression forms.
     using Node = std::variant<
@@ -514,11 +516,14 @@ struct TyExpr {
     Ty ty;
     /// Source location for this expression.
     cstc::span::SourceSpan span;
+    /// True when this expression is guaranteed not to depend on runtime input.
+    bool ct_available = true;
 };
 
 /// Constructs a heap-allocated typed expression.
-[[nodiscard]] inline TyExprPtr make_ty_expr(cstc::span::SourceSpan span, TyExpr::Node node, Ty ty) {
-    return std::make_shared<TyExpr>(TyExpr{std::move(node), std::move(ty), span});
+[[nodiscard]] inline TyExprPtr
+    make_ty_expr(cstc::span::SourceSpan span, TyExpr::Node node, Ty ty, bool ct_available = true) {
+    return std::make_shared<TyExpr>(TyExpr{std::move(node), std::move(ty), span, ct_available});
 }
 
 // ─── Statements ──────────────────────────────────────────────────────────────
@@ -567,6 +572,8 @@ struct TyBlock {
     Ty ty;
     /// Source location for the full block.
     cstc::span::SourceSpan span;
+    /// True when the block's yielded value is guaranteed compile-time available.
+    bool ct_available = true;
 };
 
 /// Typed generic constraint attached to a generic declaration.
@@ -637,6 +644,14 @@ struct TyEnumDecl {
     std::vector<TyGenericConstraint> lowered_where_clause;
 };
 
+/// Availability requirement attached to a function parameter.
+enum class ParamRequirement {
+    /// Runtime-dependent arguments are accepted by the ordinary lifted-call rule.
+    RuntimeAllowed,
+    /// The call argument must be compile-time available.
+    CtRequired,
+};
+
 /// Typed function parameter declaration.
 struct TyParam {
     /// Parameter name.
@@ -645,6 +660,13 @@ struct TyParam {
     Ty ty;
     /// Source location for the parameter.
     cstc::span::SourceSpan span;
+    /// Availability requirement enforced at call sites.
+    ParamRequirement requirement = ParamRequirement::RuntimeAllowed;
+
+    /// Returns true when this parameter rejects runtime-dependent arguments.
+    [[nodiscard]] constexpr bool requires_ct() const {
+        return requirement == ParamRequirement::CtRequired;
+    }
 };
 
 /// Typed function item declaration.

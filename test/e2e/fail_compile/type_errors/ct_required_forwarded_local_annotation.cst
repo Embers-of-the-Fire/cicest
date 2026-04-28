@@ -1,0 +1,10 @@
+runtime fn source() -> num { 1 }
+
+fn wrap(count: num) -> num {
+    let forwarded: const num = count;
+    forwarded
+}
+
+fn main() -> runtime num {
+    wrap(source())
+}

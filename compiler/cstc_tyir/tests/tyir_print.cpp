@@ -211,6 +211,28 @@ static void test_print_runtime_items() {
     assert(contains(out, "TyExternFnDecl \"lang\" poll(value: &runtime str) -> Unit"));
 }
 
+static void test_print_ct_required_parameter() {
+    TyFnDecl fn;
+    fn.name = Symbol::intern("reserve");
+    fn.params = {
+        TyParam{
+                Symbol::intern("count"),
+                ty::num(),
+                {},
+                ParamRequirement::CtRequired,
+                },
+    };
+    fn.return_ty = ty::num();
+    fn.body = std::make_shared<TyBlock>();
+    fn.body->ty = ty::num();
+
+    TyProgram prog;
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyFnDecl reserve(count: !runtime num) -> num"));
+}
+
 static void test_print_generic_fn_metadata() {
     TyFnDecl fn;
     fn.name = Symbol::intern("id");
@@ -723,6 +745,7 @@ int main() {
     test_print_lang_item_enum();
     test_print_enum_with_discriminant();
     test_print_runtime_items();
+    test_print_ct_required_parameter();
     test_print_generic_fn_metadata();
     test_print_call_and_struct_init_generic_args();
     test_print_deferred_generic_call();

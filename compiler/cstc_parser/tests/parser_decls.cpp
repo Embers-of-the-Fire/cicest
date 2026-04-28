@@ -266,6 +266,23 @@ void test_runtime_type_prefixes() {
     assert(fn.return_type->pointee->symbol.as_str() == "Handle");
 }
 
+void test_ct_required_type_prefixes() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse(
+        "fn reserve(count: !runtime num, cap: const num) -> !runtime num { count + cap }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    assert(fn.params.size() == 2);
+    assert(fn.params[0].type.kind == cstc::ast::TypeKind::Num);
+    assert(!fn.params[0].type.is_runtime);
+    assert(fn.params[0].type.requires_ct);
+    assert(fn.params[1].type.kind == cstc::ast::TypeKind::Num);
+    assert(!fn.params[1].type.is_runtime);
+    assert(fn.params[1].type.requires_ct);
+    assert(fn.return_type.has_value());
+    assert(fn.return_type->kind == cstc::ast::TypeKind::Num);
+    assert(fn.return_type->requires_ct);
+}
+
 void test_import_decl() {
     cstc::symbol::SymbolSession session;
     const auto prog = must_parse("import { Value, helper as alias } from \"path/to/foo.cst\";");
@@ -383,6 +400,16 @@ void test_let_with_type_annotation() {
     assert(let.type_annotation->kind == cstc::ast::TypeKind::Bool);
 }
 
+void test_let_ct_required_type_annotation() {
+    cstc::symbol::SymbolSession session;
+    const auto prog = must_parse("fn f() { let y: const num = 1; y }");
+    const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
+    const auto& let = std::get<cstc::ast::LetStmt>(fn.body->statements[0]);
+    assert(let.type_annotation.has_value());
+    assert(let.type_annotation->kind == cstc::ast::TypeKind::Num);
+    assert(let.type_annotation->requires_ct);
+}
+
 void test_let_discard() {
     cstc::symbol::SymbolSession session;
     const auto prog = must_parse("fn f() { let _ = 0; }");
@@ -466,6 +493,7 @@ int main() {
     test_pub_runtime_fn();
     test_pub_extern_fn();
     test_runtime_type_prefixes();
+    test_ct_required_type_prefixes();
     test_import_decl();
     test_pub_import_decl();
     test_fn_never_return_type();
@@ -476,6 +504,7 @@ int main() {
     test_let_no_type_annotation();
     test_let_ref_type_annotation();
     test_let_with_type_annotation();
+    test_let_ct_required_type_annotation();
     test_let_discard();
     test_expr_stmt_semicolon();
     test_multiple_items();

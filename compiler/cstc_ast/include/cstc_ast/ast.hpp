@@ -59,6 +59,8 @@ struct TypeRef {
     bool is_runtime = false;
     /// Explicit generic arguments when `kind == TypeKind::Named`.
     std::vector<TypeRef> generic_args;
+    /// True when this annotation requires compile-time availability (`!runtime`/`const`).
+    bool requires_ct = false;
 };
 
 /// Generic parameter declared on an item.

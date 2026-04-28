@@ -12,6 +12,7 @@ namespace cstc::tyir_interp::detail {
 using tyir::common_type;
 using tyir::compatible;
 using tyir::matches_type_shape;
+using tyir::type_has_runtime_dependency;
 
 ValuePtr make_num(double value) {
     auto out = std::make_shared<Value>();
@@ -252,6 +253,10 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
 [[nodiscard]] static bool
     call_argument_compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
     return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
+}
+
+[[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {
+    return expr != nullptr && expr->ct_available && !type_has_runtime_dependency(expr->ty);
 }
 
 [[nodiscard]] static bool call_argument_may_be_compatible_after_substitution(
@@ -1148,6 +1153,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
     auto rewritten = std::make_shared<tyir::TyBlock>();
     rewritten->ty = apply_substitution(block->ty, subst);
     rewritten->span = block->span;
+    rewritten->ct_available = block->ct_available && !type_has_runtime_dependency(rewritten->ty);
     rewritten->stmts.reserve(block->stmts.size());
     for (const tyir::TyStmt& stmt : block->stmts) {
         rewritten->stmts.push_back(
@@ -1179,7 +1185,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
         return nullptr;
 
     const tyir::Ty rewritten_ty = apply_substitution(expr->ty, subst);
-    return std::visit(
+    auto rewritten_expr = std::visit(
         [&](const auto& node) -> tyir::TyExprPtr {
             using Node = std::decay_t<decltype(node)>;
             if constexpr (
@@ -1318,6 +1324,8 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
             }
         },
         expr->node);
+    rewritten_expr->ct_available = expr->ct_available && !type_has_runtime_dependency(rewritten_ty);
+    return rewritten_expr;
 }
 
 [[nodiscard]] static std::string format_num(double value) {
@@ -1837,6 +1845,14 @@ ConstraintEvalResult evaluate_constraint(
                                     std::nullopt,
                                 };
                             }
+                            if (fn.params[index].requires_ct()
+                                && !expr_value_is_ct_available(node.args[index])) {
+                                return {
+                                    ConstraintEvalKind::Unsatisfied,
+                                    "probed expression is not type-valid",
+                                    std::nullopt,
+                                };
+                            }
                         }
                         if (!generic_args_depend) {
                             auto status = enforce_constraints(
@@ -1884,6 +1900,14 @@ ConstraintEvalResult evaluate_constraint(
                                     unresolved.has_value()) {
                                     return *unresolved;
                                 }
+                                return {
+                                    ConstraintEvalKind::Unsatisfied,
+                                    "probed expression is not type-valid",
+                                    std::nullopt,
+                                };
+                            }
+                            if (decl.params[index].requires_ct()
+                                && !expr_value_is_ct_available(node.args[index])) {
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",
