@@ -3670,7 +3670,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
         return make_error(
             fn.body->span, "function '" + display_decl_name(fn) + "' body has type '"
                                + body->ty.display() + "' but return type is '"
-                               + sig.return_ty.display() + "'");
+                               + sig.return_ty.display() + "': expected '" + sig.return_ty.display()
+                               + "', found '" + body->ty.display() + "'");
 
     // Non-Unit functions without a tail expression must not reach the end of
     // the body without returning.

@@ -466,7 +466,7 @@ static void test_if_else_runtime_join_prevents_demotion() {
     must_fail_with_message(
         "fn choose(flag: bool) -> num { if flag { 1 } else { source() } }"
         "runtime fn source() -> num { 2 }",
-        "body has type 'runtime num' but return type is 'num'");
+        "expected 'num', found 'runtime num'");
 }
 
 // ─── Control flow ─────────────────────────────────────────────────────────────
