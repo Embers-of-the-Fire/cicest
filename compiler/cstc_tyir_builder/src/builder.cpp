@@ -948,7 +948,7 @@ struct LowerCtx {
         return {};
     }
 
-    std::string param_name = "argument " + std::to_string(param_index + 1);
+    std::string param_name = std::to_string(param_index + 1);
     if (param_index < sig.param_names.size() && sig.param_names[param_index].is_valid())
         param_name = "`" + std::string(sig.param_names[param_index].as_str()) + "`";
 

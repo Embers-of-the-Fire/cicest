@@ -401,6 +401,23 @@ static void test_ct_required_param_rejects_forwarded_runtime_allowed_param() {
         "argument `count` must be compile-time available");
 }
 
+static void test_ct_required_param_rejects_invalid_name_with_argument_number() {
+    auto ast = cstc::parser::parse_source(
+        "fn reserve(count: const num) { }"
+        "runtime fn source() -> num { 1 }"
+        "fn main() { reserve(source()); }");
+    assert(ast.has_value());
+    auto& reserve = std::get<cstc::ast::FnDecl>(ast->items[0]);
+    reserve.params[0].name = kInvalidSymbol;
+
+    const auto tyir = lower_program(*ast);
+    assert(!tyir.has_value());
+    assert(
+        tyir.error().message.find("argument 1 must be compile-time available")
+        != std::string::npos);
+    assert(tyir.error().message.find("argument argument") == std::string::npos);
+}
+
 static void test_ct_required_param_rejects_forwarded_runtime_allowed_local() {
     must_fail_with_message(
         "fn reserve(count: !runtime num) -> num { count }"
@@ -968,6 +985,7 @@ int main() {
     test_ct_required_param_rejects_runtime_block_argument();
     test_ct_required_let_annotation_rejects_runtime_value();
     test_ct_required_param_rejects_forwarded_runtime_allowed_param();
+    test_ct_required_param_rejects_invalid_name_with_argument_number();
     test_ct_required_param_rejects_forwarded_runtime_allowed_local();
     test_ct_required_let_annotation_rejects_runtime_allowed_param();
     test_fn_preserves_generic_metadata();
