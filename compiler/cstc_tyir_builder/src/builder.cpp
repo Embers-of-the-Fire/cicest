@@ -3668,10 +3668,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
     if (body->tail.has_value() && !compatible(body->ty, sig.return_ty)
         && !should_defer_generic_probe_failure(body->ty, sig.return_ty, ctx))
         return make_error(
-            fn.body->span, "function '" + display_decl_name(fn) + "' body has type '"
-                               + body->ty.display() + "' but return type is '"
-                               + sig.return_ty.display() + "': expected '" + sig.return_ty.display()
-                               + "', found '" + body->ty.display() + "'");
+            fn.body->span, "function '" + display_decl_name(fn) + "' body type mismatch: expected '"
+                               + sig.return_ty.display() + "', found '" + body->ty.display() + "'");
 
     // Non-Unit functions without a tail expression must not reach the end of
     // the body without returning.

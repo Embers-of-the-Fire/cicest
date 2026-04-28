@@ -246,7 +246,7 @@ static void test_plain_call_lifted_result_still_prevents_return_demotion() {
         "runtime fn source() -> num { 1 }"
         "fn sink(value: num) -> num { value }"
         "fn main() -> num { sink(source()) }",
-        "body has type 'runtime num' but return type is 'num'");
+        "body type mismatch: expected 'num', found 'runtime num'");
 }
 
 static void test_plain_call_lifts_runtime_arguments() {
@@ -278,7 +278,7 @@ static void test_runtime_argument_demotion_error() {
         "runtime fn source() -> num { 1 }"
         "fn sink(value: num) -> num { value }"
         "fn main() -> num { sink(source()) }",
-        "body has type 'runtime num' but return type is 'num'");
+        "body type mismatch: expected 'num', found 'runtime num'");
 }
 
 static void test_plain_generic_call_accepts_runtime_argument_and_lifts_result() {
@@ -335,14 +335,14 @@ static void test_runtime_arithmetic_preserves_runtime_type() {
 static void test_runtime_arithmetic_prevents_demotion() {
     must_fail_with_message(
         "fn f() -> num { source() + 1 } runtime fn source() -> num { 1 }",
-        "body has type 'runtime num' but return type is 'num'");
+        "body type mismatch: expected 'num', found 'runtime num'");
 }
 
 static void test_runtime_deferred_generic_return_prevents_demotion() {
     must_fail_with_message(
         "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
         "fn f() -> num { make_default(true) }",
-        "body has type 'runtime num' but return type is 'num'");
+        "body type mismatch: expected 'num', found 'runtime num'");
 }
 
 static void test_runtime_comparison_preserves_runtime_type() {
@@ -366,7 +366,7 @@ static void test_runtime_logical_preserves_runtime_type() {
 static void test_runtime_logical_prevents_demotion() {
     must_fail_with_message(
         "fn f() -> bool { flag() && true } runtime fn flag() -> bool { true }",
-        "body has type 'runtime bool' but return type is 'bool'");
+        "body type mismatch: expected 'bool', found 'runtime bool'");
 }
 
 static void test_runtime_block_promotes_pure_result() {
@@ -379,7 +379,8 @@ static void test_runtime_block_promotes_pure_result() {
 
 static void test_runtime_block_prevents_demotion() {
     must_fail_with_message(
-        "fn f() -> num { runtime { 1 } }", "body has type 'runtime num' but return type is 'num'");
+        "fn f() -> num { runtime { 1 } }",
+        "body type mismatch: expected 'num', found 'runtime num'");
 }
 
 // ─── Unary operators ─────────────────────────────────────────────────────────
@@ -638,7 +639,7 @@ static void test_loop_break_runtime_join_prevents_demotion() {
         "  }"
         "}"
         "runtime fn source() -> num { 2 }",
-        "body has type 'runtime num' but return type is 'num'");
+        "body type mismatch: expected 'num', found 'runtime num'");
 }
 
 // ─── Break/continue outside loop ─────────────────────────────────────────────
@@ -1010,7 +1011,7 @@ static void test_if_branch_join_keeps_runtime_on_deferred_generic_call() {
     must_fail_with_message(
         "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
         "fn f(cond: bool) -> num { if cond { make_default(true) } else { 0 } }",
-        "body has type 'runtime num' but return type is 'num'");
+        "body type mismatch: expected 'num', found 'runtime num'");
 }
 
 static void test_expected_type_resolves_nested_deferred_generic_argument() {
