@@ -3,6 +3,6 @@ runtime fn source() -> num {
 }
 
 fn main() {
-    let value: runtime num = if true { 1 } else { source() };
+    let value: runtime num = if source() > 0 { 1 } else { source() };
     let _ = value;
 }

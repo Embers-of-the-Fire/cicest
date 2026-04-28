@@ -471,7 +471,7 @@ static void test_fn_decl_where_clause_allows_parameter_references_in_decl_probe(
 static void test_decl_probe_does_not_relax_matching_body_checks() {
     must_fail_with_constraint_prelude(
         "fn bad<T>(value: T) -> num where decl(value) { value }",
-        "function 'bad' body has type 'T' but return type is 'num'");
+        "function 'bad' body type mismatch: expected 'num', found 'T'");
 }
 
 static void test_decl_probe_inside_disjunction_does_not_relax_matching_body_checks() {
@@ -814,7 +814,7 @@ static void test_runtime_return_annotation_accepts_plain_value() {
 static void test_runtime_return_type_mismatch_rejected() {
     must_fail_with_message(
         "struct Job; fn unwrap(job: runtime Job) -> Job { job }",
-        "body has type 'runtime Job' but return type is 'Job'");
+        "body type mismatch: expected 'Job', found 'runtime Job'");
 }
 
 static void test_runtime_main_return_allowed() {
@@ -887,7 +887,7 @@ static void test_fn_never_return_type_valid() {
 }
 
 static void test_fn_never_return_type_mismatch() {
-    must_fail_with_message("fn f() -> ! { 42 }", "body has type 'num' but return type is '!'");
+    must_fail_with_message("fn f() -> ! { 42 }", "body type mismatch: expected '!', found 'num'");
 }
 
 // ─── main return type constraints ─────────────────────────────────────────────

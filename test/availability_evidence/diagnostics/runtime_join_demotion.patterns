@@ -1,0 +1,5 @@
+# source: test/e2e/fail_compile/type_errors/runtime_join_demotion.cst
+# rule: rejected_reverse_demotion
+function 'main' body
+expected 'num'
+found 'runtime num'

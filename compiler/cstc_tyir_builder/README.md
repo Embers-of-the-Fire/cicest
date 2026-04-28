@@ -101,7 +101,7 @@ Common errors:
 | Type mismatch in let | `"type mismatch in let binding: expected 'num', found 'bool'"` |
 | Wrong argument count | `"function 'f' expects 2 argument(s), 1 provided"` |
 | Argument type mismatch | `"argument 1 of 'f': expected 'num', found 'bool'"` |
-| Return type mismatch | `"function 'f' body has type 'bool' but return type is 'num'"` |
+| Return type mismatch | `"function 'f' body type mismatch: expected 'num', found 'bool'"` |
 | Non-bool condition | `"'if' condition must have type 'bool', found 'num'"` |
 | Field not found | `"no field 'z' in struct 'Point'"` |
 | Duplicate top-level declaration | `"duplicate function name 'main'"` |

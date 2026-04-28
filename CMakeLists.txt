@@ -31,6 +31,7 @@ if(CICEST_BUILD_TESTS)
     enable_testing()
     if(CICEST_BUILD_E2E_TESTS)
         add_subdirectory(test/e2e)
+        add_subdirectory(test/availability_evidence)
     endif()
 endif()
 

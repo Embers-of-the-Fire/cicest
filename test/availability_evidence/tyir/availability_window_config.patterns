@@ -1,0 +1,19 @@
+# source: test/e2e/pass/runtime/availability_window_config.cst
+# out-type: tyir
+# rule: aggregate_generic_lifting,ct_required,runtime_block
+TyStructDecl Window<T>
+TyFnDecl checked_limit(value: num, limit: !runtime num) -> num
+TyFnDecl mk_window<T>(primary: T, fallback: T, limit: !runtime num) -> Window<T>
+Let static_window: Window<num> =
+TyStructInit(Window): Window<num>
+TyLiteral(8): num
+Let dynamic_window: runtime Window<num> =
+TyCall(mk_window): runtime Window<num>
+TyCall(checked_limit): runtime num
+TyCall(load_value): runtime num
+Let dynamic_value: runtime num =
+TyCall(choose): runtime num
+Let bounded: runtime num =
+TyRuntimeBlock: runtime num
+TyCall(choose): runtime num
+TyCall(mk_window): runtime Window<num>

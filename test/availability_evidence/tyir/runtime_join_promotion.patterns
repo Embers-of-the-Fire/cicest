@@ -1,0 +1,14 @@
+# source: test/e2e/pass/runtime/runtime_join_promotion.cst
+# out-type: tyir
+# rule: structural_join
+Let value: runtime num =
+TyIf: runtime num
+Condition
+TyBinary(>): runtime bool
+TyCall(source): runtime num
+Then
+TyBlock: num
+TyLiteral(1): num
+Else
+TyBlock: runtime num
+TyCall(source): runtime num
