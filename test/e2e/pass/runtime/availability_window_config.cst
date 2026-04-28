@@ -1,0 +1,47 @@
+struct Window<T> {
+    primary: T,
+    fallback: T,
+    limit: num,
+}
+
+runtime fn load_value() -> num {
+    7
+}
+
+fn non_negative(value: num) -> bool {
+    value >= 0
+}
+
+fn checked_limit(value: num, limit: !runtime num) -> num {
+    assert(non_negative(value));
+    assert(value <= limit);
+    value
+}
+
+fn mk_window<T>(primary: T, fallback: T, limit: const num) -> Window<T> {
+    Window<T> { primary: primary, fallback: fallback, limit: limit }
+}
+
+fn choose<T>(window: Window<T>, use_primary: bool) -> T {
+    if use_primary {
+        window.primary
+    } else {
+        window.fallback
+    }
+}
+
+fn main() {
+    let static_window: Window<num> = mk_window(checked_limit(8, 10), checked_limit(4, 10), 10);
+    let static_value: num = choose(static_window, true);
+
+    let dynamic_window: runtime Window<num> = mk_window(checked_limit(load_value(), 10), checked_limit(3, 10), 10);
+    let dynamic_value: runtime num = choose(dynamic_window, true);
+
+    let bounded: runtime num = runtime {
+        choose(mk_window(checked_limit(load_value(), 10), checked_limit(3, 10), 10), true)
+    };
+
+    assert_eq(static_value, 8);
+    let _ = dynamic_value;
+    let _ = bounded;
+}
