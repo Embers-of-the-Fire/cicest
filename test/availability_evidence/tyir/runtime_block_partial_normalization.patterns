@@ -1,0 +1,7 @@
+# source: test/e2e/pass/runtime/runtime_block_partial_normalization.cst
+# out-type: tyir
+# rule: runtime_block_partial_normalization
+Let value: runtime num =
+TyRuntimeBlock: runtime num
+TyBlock: num
+TyLiteral(3): num

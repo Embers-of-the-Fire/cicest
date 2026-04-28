@@ -1,0 +1,11 @@
+# source: test/e2e/pass/runtime/ct_required_parameters.cst
+# out-type: tyir
+# rule: ct_required
+TyFnDecl reserve(count: !runtime num, extra: !runtime num) -> num
+TyFnDecl static_id<T>(value: !runtime T) -> T
+Let reserved: num =
+TyLiteral(22): num
+Let generic_reserved: num =
+TyLiteral(5): num
+Let lifted: runtime num =
+TyCall(add): runtime num

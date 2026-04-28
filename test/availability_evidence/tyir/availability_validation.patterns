@@ -1,0 +1,14 @@
+# source: test/e2e/pass/runtime/availability_validation.cst
+# out-type: tyir
+# rule: call_lifting,runtime_block
+Let static_value: num =
+TyLiteral(3): num
+Let dynamic_value: runtime num =
+TyCall(checked_add): runtime num
+TyCall(source): runtime num
+TyLiteral(2): num
+Let bounded: runtime num =
+TyRuntimeBlock: runtime num
+TyCall(checked_add): runtime num
+TyCall(source): runtime num
+TyLiteral(3): num
