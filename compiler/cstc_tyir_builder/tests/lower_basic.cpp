@@ -384,13 +384,14 @@ static void test_ct_required_param_rejects_runtime_block_argument() {
     must_fail_with_message(
         "fn reserve(count: const num) -> num { count }"
         "fn main() -> runtime num { reserve(runtime { 1 }) }",
-        "argument `count` must be compile-time available");
+        "argument `count` must be compile-time available: expected 'const num', found 'runtime "
+        "num'");
 }
 
 static void test_ct_required_let_annotation_rejects_runtime_value() {
     must_fail_with_message(
         "fn main() -> runtime num { let count: const num = runtime { 1 }; count }",
-        "let binding must be compile-time available");
+        "let binding must be compile-time available: expected 'const num', found 'runtime num'");
 }
 
 static void test_ct_required_param_rejects_forwarded_runtime_allowed_param() {
@@ -410,7 +411,7 @@ static void test_ct_required_param_rejects_forwarded_runtime_allowed_local() {
 static void test_ct_required_let_annotation_rejects_runtime_allowed_param() {
     must_fail_with_message(
         "fn wrap(count: num) -> num { let forwarded: const num = count; forwarded }",
-        "let binding must be compile-time available");
+        "let binding must be compile-time available: expected 'const num', found 'num'");
 }
 
 static void test_fn_preserves_generic_metadata() {

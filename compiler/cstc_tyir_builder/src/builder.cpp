@@ -355,7 +355,7 @@ using TypeSubstitution =
 }
 
 [[nodiscard]] static std::string ct_required_type_display(const tyir::Ty& ty) {
-    return "!runtime " + erase_runtime_qualifiers(ty).display();
+    return "const " + erase_runtime_qualifiers(ty).display();
 }
 
 [[nodiscard]] static bool call_argument_may_be_compatible_after_generic_substitution(
