@@ -1,0 +1,8 @@
+fn value() -> num {
+    runtime { 1 };
+    1
+}
+
+fn main() -> num {
+    value()
+}

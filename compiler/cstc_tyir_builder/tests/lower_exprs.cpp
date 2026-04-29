@@ -249,6 +249,65 @@ static void test_plain_call_lifted_result_still_prevents_return_demotion() {
         "body type mismatch: expected 'num', found 'runtime num'");
 }
 
+static void test_unused_runtime_let_taints_plain_result_function() {
+    must_fail_with_message(
+        "runtime fn source() -> num { 1 }"
+        "fn value() -> num { let unused: runtime num = source(); 1 }",
+        "function 'value' body has runtime dependence not reflected in its return type");
+}
+
+static void test_runtime_expression_statement_taints_plain_result_function() {
+    must_fail_with_message(
+        "runtime fn source() -> num { 1 }"
+        "fn value() -> num { source(); 1 }",
+        "function 'value' body has runtime dependence not reflected in its return type");
+}
+
+static void test_runtime_block_statement_taints_plain_result_function() {
+    must_fail_with_message(
+        "fn value() -> num { runtime { 1 }; 1 }",
+        "function 'value' body has runtime dependence not reflected in its return type");
+}
+
+static void test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call() {
+    must_fail_with_message(
+        "runtime fn source() -> num { 1 }"
+        "fn helper() -> num { source(); 1 }"
+        "fn reserve(count: !runtime num) -> num { count }"
+        "fn main() -> num { reserve(helper()) }",
+        "function 'helper' body has runtime dependence not reflected in its return type");
+}
+
+static void test_whole_term_runtime_work_accepts_runtime_result_contract() {
+    const auto prog = must_lower(
+        "runtime fn source() -> num { 1 }"
+        "fn value() -> runtime num { source(); 1 }");
+    const auto& fn = second_fn(prog);
+    assert(fn.body->ty == ty::num(true));
+    assert(!fn.body->ct_available);
+}
+
+static void test_runtime_function_accepts_whole_term_runtime_work() {
+    const auto prog = must_lower(
+        "runtime fn source() -> num { 1 }"
+        "runtime fn value() -> num { source(); 1 }");
+    const auto& fn = second_fn(prog);
+    assert(fn.return_ty == ty::num(true));
+    assert(fn.body->ty == ty::num(true));
+}
+
+static void test_ordinarily_polymorphic_helper_still_accepts_runtime_arguments() {
+    const auto prog = must_lower(
+        "runtime fn source() -> num { 1 }"
+        "fn checked_add(a: num, b: num) -> num { let result = a + b; result }"
+        "fn main() { let static_value: num = checked_add(1, 2); "
+        "let dynamic_value: runtime num = checked_add(source(), 2); }");
+    const auto& static_stmt = std::get<TyLetStmt>(nth_fn(prog, 2).body->stmts[0]);
+    const auto& dynamic_stmt = std::get<TyLetStmt>(nth_fn(prog, 2).body->stmts[1]);
+    assert(static_stmt.init->ty == ty::num());
+    assert(dynamic_stmt.init->ty == ty::num(true));
+}
+
 static void test_plain_call_lifts_runtime_arguments() {
     const auto prog = must_lower(
         "fn main() { let value: runtime num = add(runtime { 1 }, runtime { 2 }); }"
@@ -1423,6 +1482,13 @@ int main() {
     test_runtime_argument_promotion();
     test_plain_call_accepts_runtime_argument_and_lifts_result();
     test_plain_call_lifted_result_still_prevents_return_demotion();
+    test_unused_runtime_let_taints_plain_result_function();
+    test_runtime_expression_statement_taints_plain_result_function();
+    test_runtime_block_statement_taints_plain_result_function();
+    test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call();
+    test_whole_term_runtime_work_accepts_runtime_result_contract();
+    test_runtime_function_accepts_whole_term_runtime_work();
+    test_ordinarily_polymorphic_helper_still_accepts_runtime_arguments();
     test_plain_call_lifts_runtime_arguments();
     test_plain_generic_call_accepts_runtime_argument_and_lifts_result();
     test_generic_call_lifts_runtime_arguments();
