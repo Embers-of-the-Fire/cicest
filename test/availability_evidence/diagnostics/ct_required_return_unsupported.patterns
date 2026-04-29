@@ -1,0 +1,5 @@
+# source: test/e2e/fail_compile/type_errors/ct_required_return_unsupported.cst
+# rule: ct_required_surface_scope
+`const`/`!runtime` is only supported for function parameters and explicit local annotations
+-> !runtime num
+^

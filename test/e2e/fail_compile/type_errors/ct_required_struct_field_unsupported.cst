@@ -1,0 +1,7 @@
+struct Config {
+    limit: const num,
+}
+
+fn main() {
+    let _ = Config { limit: 1 };
+}

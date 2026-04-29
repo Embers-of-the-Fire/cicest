@@ -1,6 +1,8 @@
 # source: test/e2e/pass/runtime/availability_validation.cst
 # out-type: tyir
 # rule: call_lifting,runtime_block
+TyFnDecl checked_add(a: num, b: num) -> num
+TyCall(__cst_mod_1__assert): Unit
 Let static_value: num =
 TyLiteral(3): num
 Let dynamic_value: runtime num =

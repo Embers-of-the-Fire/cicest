@@ -268,8 +268,8 @@ void test_runtime_type_prefixes() {
 
 void test_ct_required_type_prefixes() {
     cstc::symbol::SymbolSession session;
-    const auto prog = must_parse(
-        "fn reserve(count: !runtime num, cap: const num) -> !runtime num { count + cap }");
+    const auto prog =
+        must_parse("fn reserve(count: !runtime num, cap: const num) -> num { count + cap }");
     const auto& fn = std::get<cstc::ast::FnDecl>(prog.items[0]);
     assert(fn.params.size() == 2);
     assert(fn.params[0].type.kind == cstc::ast::TypeKind::Num);
@@ -280,7 +280,7 @@ void test_ct_required_type_prefixes() {
     assert(fn.params[1].type.requires_ct);
     assert(fn.return_type.has_value());
     assert(fn.return_type->kind == cstc::ast::TypeKind::Num);
-    assert(fn.return_type->requires_ct);
+    assert(!fn.return_type->requires_ct);
 }
 
 void test_import_decl() {

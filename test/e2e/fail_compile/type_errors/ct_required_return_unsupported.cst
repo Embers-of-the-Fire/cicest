@@ -1,0 +1,7 @@
+fn value() -> !runtime num {
+    1
+}
+
+fn main() {
+    let _ = value();
+}

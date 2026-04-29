@@ -104,6 +104,13 @@ void test_error_struct_missing_colon() {
     expect_error("struct Foo { x num }", "expected `:` after field name");
 }
 
+void test_error_ct_required_struct_field_not_supported() {
+    cstc::symbol::SymbolSession session;
+    expect_error(
+        "struct Foo { x: const num }", "`const`/`!runtime` is only supported for function "
+                                       "parameters and explicit local annotations");
+}
+
 // ---------------------------------------------------------------------------
 // Enum declaration errors
 // ---------------------------------------------------------------------------
@@ -173,6 +180,20 @@ void test_error_nested_const_ref_pointee() {
 void test_error_nested_ct_required_generic_argument() {
     cstc::symbol::SymbolSession session;
     expect_error("fn f(x: Box<const num>) { }", "nested `const` type qualifier is not supported");
+}
+
+void test_error_ct_required_fn_return_not_supported() {
+    cstc::symbol::SymbolSession session;
+    expect_error(
+        "fn f() -> !runtime num { 1 }", "`const`/`!runtime` is only supported for function "
+                                        "parameters and explicit local annotations");
+}
+
+void test_error_ct_required_extern_return_not_supported() {
+    cstc::symbol::SymbolSession session;
+    expect_error(
+        "extern \"lang\" fn f() -> const num;", "`const`/`!runtime` is only supported for function "
+                                                "parameters and explicit local annotations");
 }
 
 void test_error_fn_missing_body() {
@@ -335,6 +356,7 @@ int main() {
     test_error_struct_duplicate_field();
     test_error_struct_initializer_duplicate_field();
     test_error_struct_missing_colon();
+    test_error_ct_required_struct_field_not_supported();
     test_error_enum_missing_name();
     test_error_enum_missing_open_brace();
     test_error_enum_missing_close_brace();
@@ -347,6 +369,8 @@ int main() {
     test_error_nested_ct_required_ref_pointee();
     test_error_nested_const_ref_pointee();
     test_error_nested_ct_required_generic_argument();
+    test_error_ct_required_fn_return_not_supported();
+    test_error_ct_required_extern_return_not_supported();
     test_error_fn_missing_body();
     test_error_duplicate_generic_parameter();
     test_error_missing_generic_parameter_name();

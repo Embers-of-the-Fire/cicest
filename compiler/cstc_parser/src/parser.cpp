@@ -475,6 +475,11 @@ private:
                 auto field_type = parse_type();
                 if (!field_type.has_value())
                     return std::unexpected(field_type.error());
+                if (field_type->requires_ct) {
+                    return std::unexpected(make_error_token(
+                        previous(), "`const`/`!runtime` is only supported for function "
+                                    "parameters and explicit local annotations"));
+                }
 
                 decl.fields.push_back(
                     ast::FieldDecl{
@@ -640,6 +645,11 @@ private:
             auto parsed_return_type = parse_type();
             if (!parsed_return_type.has_value())
                 return std::unexpected(parsed_return_type.error());
+            if (parsed_return_type->requires_ct) {
+                return std::unexpected(make_error_token(
+                    previous(), "`const`/`!runtime` is only supported for function parameters and "
+                                "explicit local annotations"));
+            }
             return_type = std::move(*parsed_return_type);
         }
 
@@ -765,6 +775,11 @@ private:
             auto parsed_return_type = parse_type();
             if (!parsed_return_type.has_value())
                 return std::unexpected(parsed_return_type.error());
+            if (parsed_return_type->requires_ct) {
+                return std::unexpected(make_error_token(
+                    previous(), "`const`/`!runtime` is only supported for function parameters and "
+                                "explicit local annotations"));
+            }
             return_type = std::move(*parsed_return_type);
         }
 

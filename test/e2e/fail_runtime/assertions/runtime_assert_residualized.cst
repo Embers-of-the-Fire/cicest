@@ -1,0 +1,16 @@
+fn non_negative(value: num) -> bool {
+    value >= 0
+}
+
+fn checked(value: num) -> num {
+    assert(non_negative(value));
+    value
+}
+
+runtime fn source() -> num {
+    -1
+}
+
+fn main() -> runtime num {
+    checked(source())
+}
