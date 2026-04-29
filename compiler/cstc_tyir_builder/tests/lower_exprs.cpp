@@ -307,9 +307,13 @@ static void test_runtime_function_accepts_whole_term_runtime_work() {
     const auto prog = must_lower(
         "runtime fn source() -> num { 1 }"
         "runtime fn value() -> num { source(); 1 }");
+    const auto& source = first_fn(prog);
     const auto& fn = second_fn(prog);
+    assert(source.body->ty == ty::num(true));
+    assert(!source.body->ct_available);
     assert(fn.return_ty == ty::num(true));
     assert(fn.body->ty == ty::num(true));
+    assert(!fn.body->ct_available);
 }
 
 static void test_ordinarily_polymorphic_helper_still_accepts_runtime_arguments() {

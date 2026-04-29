@@ -3868,8 +3868,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                + "' may fall through without returning a value of type '"
                                + sig.return_ty.display() + "'");
 
-    if (fn.is_runtime)
+    if (fn.is_runtime) {
         body->ty.is_runtime = true;
+        recompute_block_summary(*body);
+    }
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
     auto lowered_constraints =
