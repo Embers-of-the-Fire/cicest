@@ -512,6 +512,8 @@ static void test_never_call_seals_block() {
         std::nullopt,
         cstc::tyir::ty::never(),
         span,
+        true,
+        std::nullopt,
     });
     const auto if_expr = cstc::tyir::make_ty_expr(
         span, cstc::tyir::TyIf{cond, then_block, std::nullopt}, cstc::tyir::ty::unit());
@@ -531,6 +533,8 @@ static void test_never_call_seals_block() {
         tail,
         cstc::tyir::ty::num(),
         span,
+        true,
+        std::nullopt,
     });
     ty_fn.span = span;
     ty_fn.is_runtime = false;

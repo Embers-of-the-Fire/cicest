@@ -246,7 +246,7 @@ static void test_plain_call_lifted_result_still_prevents_return_demotion() {
         "runtime fn source() -> num { 1 }"
         "fn sink(value: num) -> num { value }"
         "fn main() -> num { sink(source()) }",
-        "body type mismatch: expected 'num', found 'runtime num'");
+        "runtime dependence not reflected in its return type");
 }
 
 static void test_unused_runtime_let_taints_plain_result_function() {
@@ -337,7 +337,7 @@ static void test_runtime_argument_demotion_error() {
         "runtime fn source() -> num { 1 }"
         "fn sink(value: num) -> num { value }"
         "fn main() -> num { sink(source()) }",
-        "body type mismatch: expected 'num', found 'runtime num'");
+        "runtime dependence not reflected in its return type");
 }
 
 static void test_plain_generic_call_accepts_runtime_argument_and_lifts_result() {
@@ -394,14 +394,14 @@ static void test_runtime_arithmetic_preserves_runtime_type() {
 static void test_runtime_arithmetic_prevents_demotion() {
     must_fail_with_message(
         "fn f() -> num { source() + 1 } runtime fn source() -> num { 1 }",
-        "body type mismatch: expected 'num', found 'runtime num'");
+        "runtime dependence not reflected in its return type");
 }
 
 static void test_runtime_deferred_generic_return_prevents_demotion() {
     must_fail_with_message(
         "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
         "fn f() -> num { make_default(true) }",
-        "body type mismatch: expected 'num', found 'runtime num'");
+        "runtime dependence not reflected in its return type");
 }
 
 static void test_runtime_comparison_preserves_runtime_type() {
@@ -425,7 +425,7 @@ static void test_runtime_logical_preserves_runtime_type() {
 static void test_runtime_logical_prevents_demotion() {
     must_fail_with_message(
         "fn f() -> bool { flag() && true } runtime fn flag() -> bool { true }",
-        "body type mismatch: expected 'bool', found 'runtime bool'");
+        "runtime dependence not reflected in its return type");
 }
 
 static void test_runtime_block_promotes_pure_result() {
@@ -438,8 +438,7 @@ static void test_runtime_block_promotes_pure_result() {
 
 static void test_runtime_block_prevents_demotion() {
     must_fail_with_message(
-        "fn f() -> num { runtime { 1 } }",
-        "body type mismatch: expected 'num', found 'runtime num'");
+        "fn f() -> num { runtime { 1 } }", "runtime dependence not reflected in its return type");
 }
 
 // ─── Unary operators ─────────────────────────────────────────────────────────
@@ -502,8 +501,8 @@ static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if x { 
 
 static void test_runtime_if_condition_accepted() {
     const auto prog = must_lower(
-        "fn f() -> num { if flag() { 1 } else { 2 } } runtime fn flag() -> bool { true }");
-    assert((*first_fn(prog).body->tail)->ty == ty::num());
+        "fn f() -> runtime num { if flag() { 1 } else { 2 } } runtime fn flag() -> bool { true }");
+    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
 }
 
 static void test_if_else_runtime_join_produces_runtime_type() {
@@ -526,7 +525,7 @@ static void test_if_else_runtime_join_prevents_demotion() {
     must_fail_with_message(
         "fn choose(flag: bool) -> num { if flag { 1 } else { source() } }"
         "runtime fn source() -> num { 2 }",
-        "expected 'num', found 'runtime num'");
+        "runtime dependence not reflected in its return type");
 }
 
 // ─── Control flow ─────────────────────────────────────────────────────────────
@@ -555,7 +554,7 @@ static void test_runtime_while_condition_accepted() {
         must_lower("fn f() { while flag() { break; } } runtime fn flag() -> bool { true }");
     const auto& while_expr = *first_fn(prog).body->tail;
     assert(std::holds_alternative<TyWhile>(while_expr->node));
-    assert(while_expr->ty == ty::unit());
+    assert(while_expr->ty == ty::unit(true));
 }
 
 static void test_for_loop() {
@@ -595,7 +594,7 @@ static void test_runtime_for_condition_accepted() {
         must_lower("fn f() { for (; flag(); ) { break; } } runtime fn flag() -> bool { true }");
     const auto& for_expr = *first_fn(prog).body->tail;
     assert(std::holds_alternative<TyFor>(for_expr->node));
-    assert(for_expr->ty == ty::unit());
+    assert(for_expr->ty == ty::unit(true));
 }
 
 static void test_break_and_continue_are_never() {
@@ -698,7 +697,7 @@ static void test_loop_break_runtime_join_prevents_demotion() {
         "  }"
         "}"
         "runtime fn source() -> num { 2 }",
-        "body type mismatch: expected 'num', found 'runtime num'");
+        "runtime dependence not reflected in its return type");
 }
 
 // ─── Break/continue outside loop ─────────────────────────────────────────────
@@ -1070,14 +1069,14 @@ static void test_if_branch_join_keeps_runtime_on_deferred_generic_call() {
     must_fail_with_message(
         "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
         "fn f(cond: bool) -> num { if cond { make_default(true) } else { 0 } }",
-        "body type mismatch: expected 'num', found 'runtime num'");
+        "runtime dependence not reflected in its return type");
 }
 
 static void test_expected_type_resolves_nested_deferred_generic_argument() {
     const auto prog = must_lower(
         "fn make_default<T>(flag: bool) -> T { loop {} }"
         "fn pair<T>(left: T, right: T) -> T { left }"
-        "fn f() -> num { pair(1, make_default(true)) }");
+        "fn f() -> runtime num { pair(1, make_default(true)) }");
     const auto& tail = *nth_fn(prog, 2).body->tail;
     assert(tail->ty == ty::num());
     const auto& call = std::get<TyCall>(tail->node);
@@ -1095,7 +1094,7 @@ static void test_deferred_resolution_uses_specialized_parameter_type() {
         "fn make_default<T>(flag: bool) -> T { loop {} }"
         "fn wrap<T>(value: T) -> T { value }"
         "fn pair<T>(left: T, right: T) -> T { left }"
-        "fn f() -> num { pair(1, wrap(make_default(true))) }");
+        "fn f() -> runtime num { pair(1, wrap(make_default(true))) }");
     const auto& tail = *nth_fn(prog, 3).body->tail;
     assert(tail->ty == ty::num());
     const auto& outer = std::get<TyCall>(tail->node);
