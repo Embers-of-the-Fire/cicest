@@ -636,6 +636,22 @@ static void test_return_is_never() {
     assert(std::holds_alternative<TyReturn>(stmt.expr->node));
 }
 
+static void test_runtime_return_payload_marks_body_not_ct_available() {
+    const auto prog = must_lower("fn f(x: runtime num) -> runtime num { return x; }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(!body.ct_available);
+}
+
+static void test_runtime_break_payload_marks_loop_body_not_ct_available() {
+    const auto prog = must_lower("fn f(x: runtime num) -> runtime num { loop { break x; } }");
+    const auto& body = *first_fn(prog).body;
+    const auto& loop = std::get<TyLoop>((*body.tail)->node);
+    assert((*body.tail)->ty == ty::num(true));
+    assert(!body.ct_available);
+    assert(!loop.body->ct_available);
+}
+
 // ─── Loop/break type inference ────────────────────────────────────────────────
 
 static void test_loop_break_num_type() {
@@ -1546,6 +1562,8 @@ int main() {
     test_runtime_for_condition_accepted();
     test_break_and_continue_are_never();
     test_return_is_never();
+    test_runtime_return_payload_marks_body_not_ct_available();
+    test_runtime_break_payload_marks_loop_body_not_ct_available();
 
     // Loop/break type inference
     test_loop_break_num_type();

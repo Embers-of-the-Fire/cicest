@@ -1395,13 +1395,32 @@ struct LoweredExpr {
 }
 
 [[nodiscard]] static bool stmt_value_is_ct_available(const tyir::TyStmt& stmt) {
+    auto expr_stmt_value_is_ct_available = [](const tyir::TyExprPtr& expr) {
+        if (expr == nullptr)
+            return false;
+
+        auto payload_is_ct_available = [](const std::optional<tyir::TyExprPtr>& value) {
+            return !value.has_value() || expr_value_is_ct_available(*value);
+        };
+
+        return std::visit(
+            [&](const auto& node) {
+                using N = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<N, tyir::TyBreak> || std::is_same_v<N, tyir::TyReturn>)
+                    return payload_is_ct_available(node.value);
+                else
+                    return expr_value_is_ct_available(expr);
+            },
+            expr->node);
+    };
+
     return std::visit(
-        [](const auto& s) {
+        [&](const auto& s) {
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, tyir::TyLetStmt>)
                 return expr_value_is_ct_available(s.init);
             else
-                return expr_value_is_ct_available(s.expr);
+                return expr_stmt_value_is_ct_available(s.expr);
         },
         stmt);
 }
