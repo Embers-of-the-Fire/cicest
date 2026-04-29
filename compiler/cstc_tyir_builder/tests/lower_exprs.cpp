@@ -269,6 +269,22 @@ static void test_runtime_block_statement_taints_plain_result_function() {
         "function 'value' body has runtime dependence not reflected in its return type");
 }
 
+static void test_runtime_statement_marks_unit_block_not_ct_available() {
+    const auto prog = must_lower("fn value(x: runtime num) { x; }");
+    const auto& fn = first_fn(prog);
+    assert(fn.body->ty == ty::unit());
+    assert(!fn.body->ct_available);
+    assert(!fn.body->runtime_evidence.has_value());
+}
+
+static void test_unreachable_runtime_statement_does_not_taint_block() {
+    const auto prog = must_lower("fn value() -> num { return 1; runtime { 0 }; }");
+    const auto& fn = first_fn(prog);
+    assert(fn.body->ty == ty::never());
+    assert(fn.body->ct_available);
+    assert(!fn.body->runtime_evidence.has_value());
+}
+
 static void test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call() {
     must_fail_with_message(
         "runtime fn source() -> num { 1 }"
@@ -1484,6 +1500,8 @@ int main() {
     test_unused_runtime_let_taints_plain_result_function();
     test_runtime_expression_statement_taints_plain_result_function();
     test_runtime_block_statement_taints_plain_result_function();
+    test_runtime_statement_marks_unit_block_not_ct_available();
+    test_unreachable_runtime_statement_does_not_taint_block();
     test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call();
     test_whole_term_runtime_work_accepts_runtime_result_contract();
     test_runtime_function_accepts_whole_term_runtime_work();

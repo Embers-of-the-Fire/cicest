@@ -1394,6 +1394,18 @@ struct LoweredExpr {
         stmt);
 }
 
+[[nodiscard]] static bool stmt_value_is_ct_available(const tyir::TyStmt& stmt) {
+    return std::visit(
+        [](const auto& s) {
+            using S = std::decay_t<decltype(s)>;
+            if constexpr (std::is_same_v<S, tyir::TyLetStmt>)
+                return expr_value_is_ct_available(s.init);
+            else
+                return expr_value_is_ct_available(s.expr);
+        },
+        stmt);
+}
+
 static void apply_block_runtime_evidence(tyir::TyBlock& block) {
     if (!block.runtime_evidence.has_value())
         return;
@@ -1422,6 +1434,8 @@ struct LoweredPlace {
 [[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
 
 [[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
+
+static void recompute_block_summary(tyir::TyBlock& block);
 
 [[nodiscard]] static std::expected<tyir::TyExprPtr, LowerError> resolve_expr_against_type(
     const tyir::TyExprPtr& expr, const tyir::Ty& expected_ty, LowerCtx& ctx);
@@ -1801,17 +1815,7 @@ struct ParamReferenceVisitor {
             (*block)->tail = std::move(*resolved_tail);
             (*block)->ty =
                 block_can_fallthrough(**block) ? (*(*block)->tail)->ty : tyir::ty::never();
-            (*block)->runtime_evidence = std::nullopt;
-            for (const tyir::TyStmt& stmt : (*block)->stmts) {
-                (*block)->runtime_evidence =
-                    first_runtime_evidence((*block)->runtime_evidence, stmt_runtime_evidence(stmt));
-            }
-            (*block)->runtime_evidence = first_runtime_evidence(
-                (*block)->runtime_evidence, (*(*block)->tail)->runtime_evidence);
-            (*block)->ct_available = value_is_ct_available(
-                block_can_fallthrough(**block) ? expr_value_is_ct_available(*(*block)->tail) : true,
-                (*block)->ty);
-            apply_block_runtime_evidence(**block);
+            recompute_block_summary(**block);
             expr->ty = (*block)->ty;
             expr->ct_available = (*block)->ct_available;
             expr->runtime_evidence = (*block)->runtime_evidence;
@@ -1832,20 +1836,7 @@ struct ParamReferenceVisitor {
             runtime_block->body->ty = block_can_fallthrough(*runtime_block->body)
                                         ? (*runtime_block->body->tail)->ty
                                         : tyir::ty::never();
-            runtime_block->body->runtime_evidence = std::nullopt;
-            for (const tyir::TyStmt& stmt : runtime_block->body->stmts) {
-                runtime_block->body->runtime_evidence = first_runtime_evidence(
-                    runtime_block->body->runtime_evidence, stmt_runtime_evidence(stmt));
-            }
-            runtime_block->body->runtime_evidence = first_runtime_evidence(
-                runtime_block->body->runtime_evidence,
-                (*runtime_block->body->tail)->runtime_evidence);
-            runtime_block->body->ct_available = value_is_ct_available(
-                block_can_fallthrough(*runtime_block->body)
-                    ? expr_value_is_ct_available(*runtime_block->body->tail)
-                    : true,
-                runtime_block->body->ty);
-            apply_block_runtime_evidence(*runtime_block->body);
+            recompute_block_summary(*runtime_block->body);
             expr->ty = runtime_block->body->ty;
             if (!expr->ty.is_never())
                 expr->ty.is_runtime = true;
@@ -1865,20 +1856,7 @@ struct ParamReferenceVisitor {
             if_expr->then_block->ty = block_can_fallthrough(*if_expr->then_block)
                                         ? (*if_expr->then_block->tail)->ty
                                         : tyir::ty::never();
-            if_expr->then_block->runtime_evidence = std::nullopt;
-            for (const tyir::TyStmt& stmt : if_expr->then_block->stmts) {
-                if_expr->then_block->runtime_evidence = first_runtime_evidence(
-                    if_expr->then_block->runtime_evidence, stmt_runtime_evidence(stmt));
-            }
-            if_expr->then_block->runtime_evidence = first_runtime_evidence(
-                if_expr->then_block->runtime_evidence,
-                (*if_expr->then_block->tail)->runtime_evidence);
-            if_expr->then_block->ct_available = value_is_ct_available(
-                block_can_fallthrough(*if_expr->then_block)
-                    ? expr_value_is_ct_available(*if_expr->then_block->tail)
-                    : true,
-                if_expr->then_block->ty);
-            apply_block_runtime_evidence(*if_expr->then_block);
+            recompute_block_summary(*if_expr->then_block);
         }
 
         if (if_expr->else_branch.has_value() && expr_can_fallthrough(*(*if_expr->else_branch))) {
@@ -2463,6 +2441,31 @@ struct ParamReferenceVisitor {
     return expr_can_fallthrough(**block.tail);
 }
 
+static void recompute_block_summary(tyir::TyBlock& block) {
+    bool reachable = true;
+    bool ct_available = true;
+    block.runtime_evidence = std::nullopt;
+
+    for (const tyir::TyStmt& stmt : block.stmts) {
+        if (!reachable)
+            break;
+
+        ct_available = ct_available && stmt_value_is_ct_available(stmt);
+        block.runtime_evidence =
+            first_runtime_evidence(block.runtime_evidence, stmt_runtime_evidence(stmt));
+        reachable = stmt_can_fallthrough(stmt);
+    }
+
+    if (reachable && block.tail.has_value()) {
+        ct_available = ct_available && expr_value_is_ct_available(*block.tail);
+        block.runtime_evidence =
+            first_runtime_evidence(block.runtime_evidence, (*block.tail)->runtime_evidence);
+    }
+
+    block.ct_available = value_is_ct_available(ct_available, block.ty);
+    apply_block_runtime_evidence(block);
+}
+
 // ─── Block lowering ──────────────────────────────────────────────────────────
 
 [[nodiscard]] static std::expected<tyir::TyBlock, LowerError>
@@ -2478,8 +2481,6 @@ struct ParamReferenceVisitor {
             ctx.scope.pop();
             return std::unexpected(std::move(lowered.error()));
         }
-        result.runtime_evidence =
-            first_runtime_evidence(result.runtime_evidence, stmt_runtime_evidence(*lowered));
         result.stmts.push_back(std::move(*lowered));
     }
 
@@ -2497,17 +2498,12 @@ struct ParamReferenceVisitor {
             return make_error(block.span, "block expressions cannot yield references yet");
         }
         release_temp_borrows(ctx, tail->temp_borrows);
-        result.runtime_evidence =
-            first_runtime_evidence(result.runtime_evidence, tail->expr->runtime_evidence);
         result.tail = std::move(tail->expr);
         result.ty = reaches_tail ? (*result.tail)->ty : tyir::ty::never();
-        result.ct_available = reaches_tail ? expr_value_is_ct_available(*result.tail) : true;
     } else {
         result.ty = reaches_tail ? tyir::ty::unit() : tyir::ty::never();
-        result.ct_available = true;
     }
-    result.ct_available = value_is_ct_available(result.ct_available, result.ty);
-    apply_block_runtime_evidence(result);
+    recompute_block_summary(result);
 
     ctx.scope.pop();
     return result;
@@ -3843,16 +3839,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
             return std::unexpected(std::move(resolved_tail.error()));
         body->tail = std::move(*resolved_tail);
         body->ty = block_can_fallthrough(*body) ? (*body->tail)->ty : tyir::ty::never();
-        body->runtime_evidence = std::nullopt;
-        for (const tyir::TyStmt& stmt : body->stmts) {
-            body->runtime_evidence =
-                first_runtime_evidence(body->runtime_evidence, stmt_runtime_evidence(stmt));
-        }
-        body->runtime_evidence =
-            first_runtime_evidence(body->runtime_evidence, (*body->tail)->runtime_evidence);
-        body->ct_available =
-            value_is_ct_available(expr_value_is_ct_available(*body->tail), body->ty);
-        apply_block_runtime_evidence(*body);
+        recompute_block_summary(*body);
     }
 
     const bool implicit_unit_result = !sig.has_explicit_return_type && sig.return_ty.is_unit();

@@ -96,10 +96,11 @@ struct TyBlock {
 };
 ```
 
-`ct_available` is computed from the whole block term, not just the tail value.
-Statement initializers, expression statements, control-flow headers, loop bodies,
-and the tail all contribute. `runtime_evidence` records the first body-internal
-runtime contributor that must be exposed by an explicit runtime result contract.
+`ct_available` is computed from the whole reachable block term, not just the tail
+value. Reachable statement initializers, expression statements, control-flow
+headers, loop bodies, and the tail all contribute. `runtime_evidence` records the
+first reachable body-internal runtime contributor that must be exposed by an
+explicit runtime result contract.
 
 ### Item declarations
 

@@ -412,11 +412,11 @@ fn f(b: bool) -> num {
 }
 ```
 
-Block availability is a whole-term property. Every statement that is lowered for
-the block contributes its expression availability, even if the statement's value
-is discarded or a `let` binding is never read later. The block result is
-runtime-qualified when a statement, condition, loop header, runtime block, or
-tail expression contains body-internal runtime dependence.
+Block availability is a whole-term property. Every reachable statement in the
+block contributes its expression availability, even if the statement's value is
+discarded or a `let` binding is never read later. The block result is
+runtime-qualified when a reachable statement, condition, loop header, runtime
+block, or tail expression contains body-internal runtime dependence.
 
 Plain helpers remain reusable with compile-time or runtime arguments: ordinary
 parameter dependence is handled at call sites by lifting the call result when an
