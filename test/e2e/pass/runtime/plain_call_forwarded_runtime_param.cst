@@ -1,0 +1,18 @@
+fn id(value: num) -> num { value }
+
+fn generic_id<T>(value: T) -> T { value }
+
+fn forward_plain(value: runtime num) -> runtime num {
+    id(value)
+}
+
+fn forward_generic(value: runtime num) -> runtime num {
+    generic_id(value)
+}
+
+fn main() {
+    let plain: runtime num = forward_plain(runtime { 1 });
+    let generic: runtime num = forward_generic(runtime { 2 });
+    let _ = plain;
+    let _ = generic;
+}

@@ -1,0 +1,10 @@
+runtime fn source() -> num { 1 }
+
+fn value() -> num {
+    let unused: runtime num = source();
+    1
+}
+
+fn main() -> num {
+    value()
+}

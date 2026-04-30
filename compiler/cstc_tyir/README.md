@@ -91,8 +91,16 @@ struct TyBlock {
     std::optional<TyExprPtr> tail;
     Ty ty;   // = tail->ty when tail exists; else Unit or Never (by fallthrough)
     SourceSpan span;
+    bool ct_available;
+    std::optional<TyRuntimeEvidence> runtime_evidence;
 };
 ```
+
+`ct_available` is computed from the whole reachable block term, not just the tail
+value. Reachable statement initializers, expression statements, control-flow
+headers, loop bodies, and the tail all contribute. `runtime_evidence` records the
+first reachable body-internal runtime contributor that must be exposed by an
+explicit runtime result contract.
 
 ### Item declarations
 

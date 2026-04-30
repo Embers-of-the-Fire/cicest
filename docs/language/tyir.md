@@ -62,6 +62,14 @@ normalized during lowering into a runtime-tagged return type, and TyIR also
 preserves the original declaration-level runtime marker on function items for
 later passes such as const-eval.
 
+TyIR also records body-internal runtime evidence separately from ordinary
+parameter availability. This evidence is joined across reachable lowered
+statements, control-flow headers, branch bodies, loop bodies, and the tail
+expression. If a function has an explicit plain result contract, that evidence
+must be reflected by `runtime fn` or a runtime-qualified return type; ordinary
+parameter dependence is still accepted because call-site lifting accounts for the
+actual arguments.
+
 ## Generics and constraints
 
 TyIR is the last IR that may still contain generic declarations.
@@ -121,6 +129,12 @@ TyReturn         — return [value]          → type: !
 A `TyBlock` has type:
 - The tail expression's type when a tail is present.
 - `Unit` when there is no tail expression.
+
+Its `ct_available` flag is whole-term: it joins reachable statement
+contributions and the tail expression rather than considering only the yielded
+value. `runtime_evidence` stores the first reachable body-internal runtime
+contributor so diagnostics can point at the non-tail statement or control-flow
+component that tainted the block.
 
 ## Runtime block type rules
 

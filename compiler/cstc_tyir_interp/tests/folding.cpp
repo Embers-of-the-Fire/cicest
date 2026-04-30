@@ -2600,7 +2600,7 @@ fn main() -> num {
 
 static void test_generic_where_runtime_loop_reports_runtime_only() {
     SymbolSession session;
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+    const auto error = must_fail_to_lower_with_constraint_prelude(R"(
 runtime fn runtime_true() -> bool {
     true
 }
@@ -2620,13 +2620,13 @@ fn main() -> num {
 }
 )");
 
-    assert(error.message.find("runtime-only behavior") != std::string::npos);
-    assert(error.message.find("function 'id'") != std::string::npos);
+    assert(error.message.find("runtime dependence not reflected") != std::string::npos);
+    assert(error.message.find("function 'loop_true'") != std::string::npos);
 }
 
 static void test_generic_where_runtime_while_reports_runtime_only() {
     SymbolSession session;
-    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+    const auto error = must_fail_to_lower_with_constraint_prelude(R"(
 runtime fn runtime_true() -> bool {
     true
 }
@@ -2647,8 +2647,8 @@ fn main() -> num {
 }
 )");
 
-    assert(error.message.find("runtime-only behavior") != std::string::npos);
-    assert(error.message.find("function 'id'") != std::string::npos);
+    assert(error.message.find("runtime dependence not reflected") != std::string::npos);
+    assert(error.message.find("function 'while_true'") != std::string::npos);
 }
 
 static void test_unused_generic_where_is_deferred_until_instantiation() {
