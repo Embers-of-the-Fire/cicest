@@ -1544,11 +1544,11 @@ int main() {
     test_unreachable_runtime_statement_does_not_taint_block();
     test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call();
     test_whole_term_runtime_work_accepts_runtime_result_contract();
+    test_runtime_result_forwarded_param_does_not_count_as_hidden_work();
     test_runtime_function_accepts_whole_term_runtime_work();
     test_ordinarily_polymorphic_helper_still_accepts_runtime_arguments();
     test_plain_call_lifts_runtime_arguments();
     test_plain_generic_call_accepts_runtime_argument_and_lifts_result();
-    test_runtime_result_forwarded_param_does_not_count_as_hidden_work();
     test_generic_runtime_result_forwarded_param_does_not_count_as_hidden_work();
     test_generic_call_lifts_runtime_arguments();
     test_plain_extern_call_accepts_runtime_argument_and_lifts_result();
