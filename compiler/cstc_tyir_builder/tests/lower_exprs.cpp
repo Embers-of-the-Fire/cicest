@@ -374,6 +374,26 @@ static void test_plain_generic_call_accepts_runtime_argument_and_lifts_result() 
     assert(call.args[0]->ty == ty::num(true));
 }
 
+static void test_runtime_result_forwarded_param_does_not_count_as_hidden_work() {
+    const auto prog = must_lower(
+        "fn id(value: num) -> num { value }"
+        "fn f(value: runtime num) -> runtime num { id(value) }");
+    const auto& fn = second_fn(prog);
+    assert(fn.body->ty == ty::num(true));
+    assert(!fn.body->ct_available);
+    assert(!fn.body->runtime_evidence.has_value());
+}
+
+static void test_generic_runtime_result_forwarded_param_does_not_count_as_hidden_work() {
+    const auto prog = must_lower(
+        "fn id<T>(value: T) -> T { value }"
+        "fn f(value: runtime num) -> runtime num { id(value) }");
+    const auto& fn = second_fn(prog);
+    assert(fn.body->ty == ty::num(true));
+    assert(!fn.body->ct_available);
+    assert(!fn.body->runtime_evidence.has_value());
+}
+
 static void test_plain_extern_call_accepts_runtime_argument_and_lifts_result() {
     const auto prog = must_lower(
         "runtime fn source() -> num { 1 }"
@@ -1528,6 +1548,8 @@ int main() {
     test_ordinarily_polymorphic_helper_still_accepts_runtime_arguments();
     test_plain_call_lifts_runtime_arguments();
     test_plain_generic_call_accepts_runtime_argument_and_lifts_result();
+    test_runtime_result_forwarded_param_does_not_count_as_hidden_work();
+    test_generic_runtime_result_forwarded_param_does_not_count_as_hidden_work();
     test_generic_call_lifts_runtime_arguments();
     test_plain_extern_call_accepts_runtime_argument_and_lifts_result();
     test_runtime_argument_demotion_error();

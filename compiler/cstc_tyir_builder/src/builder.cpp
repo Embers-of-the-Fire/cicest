@@ -1951,14 +1951,14 @@ struct ParamReferenceVisitor {
         generic_args.push_back(found->second);
     }
 
-    const tyir::Ty resolved_return_ty = call_result_type(
-        annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env),
-        deferred->args);
+    const tyir::Ty resolved_return_shape =
+        annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env);
+    const tyir::Ty resolved_return_ty = call_result_type(resolved_return_shape, deferred->args);
     const bool deferred_call_ct_available =
         value_is_ct_available(all_exprs_ct_available(deferred->args), resolved_return_ty);
     const auto deferred_runtime_evidence = first_runtime_evidence(
         first_runtime_evidence(deferred->args),
-        type_has_runtime_dependency(sig.return_ty)
+        type_has_runtime_dependency(resolved_return_shape)
             ? runtime_evidence_at(expr->span, "runtime-result call")
             : std::nullopt);
     if (!fully_resolved) {
@@ -2002,7 +2002,7 @@ struct ParamReferenceVisitor {
         value_is_ct_available(all_exprs_ct_available(resolved_args), lifted_return_ty);
     const auto call_runtime_evidence = first_runtime_evidence(
         first_runtime_evidence(resolved_args),
-        type_has_runtime_dependency(resolved_return_ty)
+        type_has_runtime_dependency(resolved_return_shape)
             ? runtime_evidence_at(expr->span, "runtime-result call")
             : std::nullopt);
 
@@ -3205,10 +3205,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     resolved_generic_args.push_back(found->second);
                 }
 
-                const tyir::Ty resolved_return_ty = call_result_type(
-                    annotate_type_semantics(
-                        apply_substitution(sig.return_ty, substitution), ctx.env),
-                    lowered_args);
+                const tyir::Ty resolved_return_shape = annotate_type_semantics(
+                    apply_substitution(sig.return_ty, substitution), ctx.env);
+                const tyir::Ty resolved_return_ty =
+                    call_result_type(resolved_return_shape, lowered_args);
 
                 tyir::TyExprPtr lowered_expr;
                 if (fully_resolved) {
@@ -3247,7 +3247,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     const bool call_ct_available = all_exprs_ct_available(lowered_args);
                     const auto call_runtime_evidence = first_runtime_evidence(
                         args_runtime_evidence,
-                        type_has_runtime_dependency(resolved_return_ty)
+                        type_has_runtime_dependency(resolved_return_shape)
                             ? runtime_evidence_at(expr->span, "runtime-result call")
                             : std::nullopt);
 
@@ -3262,7 +3262,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     const bool call_ct_available = all_exprs_ct_available(lowered_args);
                     const auto call_runtime_evidence = first_runtime_evidence(
                         args_runtime_evidence,
-                        type_has_runtime_dependency(resolved_return_ty)
+                        type_has_runtime_dependency(resolved_return_shape)
                             ? runtime_evidence_at(expr->span, "runtime-result call")
                             : std::nullopt);
                     lowered_expr = tyir::make_ty_expr(
