@@ -2805,6 +2805,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 seen_fields.reserve(node.fields.size());
                 bool fields_ct_available = true;
                 std::optional<tyir::TyRuntimeEvidence> fields_runtime_evidence;
+                bool fields_have_runtime_dependency = false;
 
                 for (const ast::StructInitField& field : node.fields) {
                     auto expected_ty = ctx.env.field_ty(type_name, field.name);
@@ -2830,7 +2831,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(resolved_val.error()));
                     val->expr = std::move(*resolved_val);
 
-                    if (!compatible(val->expr->ty, *expected_ty)
+                    if (!call_argument_compatible(val->expr->ty, *expected_ty)
                         && !should_defer_generic_probe_failure(val->expr->ty, *expected_ty, ctx))
                         return make_error(
                             field.span, "field '" + std::string(field.name.as_str())
@@ -2840,6 +2841,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     append_temp_borrows(temp_borrows, std::move(val->temp_borrows));
                     fields_ct_available =
                         fields_ct_available && expr_value_is_ct_available(val->expr);
+                    fields_have_runtime_dependency = fields_have_runtime_dependency
+                                                  || type_has_runtime_dependency(val->expr->ty);
                     fields_runtime_evidence = first_runtime_evidence(
                         fields_runtime_evidence, val->expr->runtime_evidence);
 
@@ -2856,11 +2859,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 + "' in struct initializer for '" + display_type_name + "'");
                 }
 
-                const tyir::Ty result_ty = annotate_type_semantics(
+                tyir::Ty result_ty = annotate_type_semantics(
                     tyir::ty::named(
                         type_name, node.display_name, tyir::ValueSemantics::Move, false,
                         lowered_generic_args),
                     ctx.env);
+                if (fields_have_runtime_dependency)
+                    result_ty.is_runtime = true;
                 auto lowered = LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span,

@@ -1,0 +1,13 @@
+runtime fn source() -> num { 1 }
+
+struct Point { x: num, y: num }
+
+fn make_point() -> runtime Point {
+    Point { x: source(), y: 0 }
+}
+
+fn main() {
+    let point: runtime Point = make_point();
+    let x: runtime num = point.x;
+    let _ = x;
+}

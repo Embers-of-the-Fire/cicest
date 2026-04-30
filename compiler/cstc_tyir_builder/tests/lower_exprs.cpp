@@ -1335,6 +1335,20 @@ static void test_struct_init() {
     assert(std::holds_alternative<TyStructInit>(tail->node));
 }
 
+static void test_struct_init_lifts_runtime_field() {
+    const auto prog = must_lower(
+        "runtime fn source() -> num { 1 }"
+        "struct Point { x: num, y: num }"
+        "fn f() -> runtime Point { Point { x: source(), y: 0 } }");
+    const auto& tail = *second_fn(prog).body->tail;
+    assert(
+        tail->ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy, true));
+    const auto& init = std::get<TyStructInit>(tail->node);
+    assert(init.fields.size() == 2);
+    assert(init.fields[0].value->ty == ty::num(true));
+    assert(init.fields[1].value->ty == ty::num());
+}
+
 static void test_generic_struct_init() {
     const auto prog = must_lower(
         "struct Box<T> { value: T }"
@@ -1389,6 +1403,15 @@ static void test_struct_init_field_type_error() {
     must_fail(
         "struct Point { x: num, y: num }"
         "fn f() -> Point { Point { x: true, y: 0 } }");
+}
+
+static void test_struct_init_runtime_field_prevents_demotion() {
+    must_fail_with_message(
+        "runtime fn source() -> num { 1 }"
+        "struct Point { x: num }"
+        "fn f() -> Point { Point { x: source() } }",
+        "function 'f' body has runtime dependence not reflected in its return type: runtime-result "
+        "call");
 }
 
 static void test_struct_init_unknown_field_error() {
@@ -1660,11 +1683,13 @@ int main() {
     test_enum_variant_ref();
     test_unknown_variant_error();
     test_struct_init();
+    test_struct_init_lifts_runtime_field();
     test_generic_struct_init();
     test_generic_struct_specialization_tracks_move_semantics();
     test_generic_struct_specialization_keeps_copy_semantics();
     test_generic_fn_return_reannotates_specialized_semantics();
     test_struct_init_field_type_error();
+    test_struct_init_runtime_field_prevents_demotion();
     test_struct_init_unknown_field_error();
     test_struct_init_duplicate_field_error();
     test_struct_init_missing_field_error();
