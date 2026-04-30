@@ -1,0 +1,5 @@
+# source: test/e2e/fail_compile/type_errors/plain_call_forwarded_runtime_param_demotion.cst
+# rule: forwarded_runtime_parameter_demotion
+function 'forward_plain' body type mismatch
+expected 'num'
+found 'runtime num'
