@@ -328,6 +328,14 @@ struct EnumVariantRef {
     cstc::symbol::Symbol variant_name = cstc::symbol::kInvalidSymbol;
 };
 
+/// First source location that introduced body-internal runtime dependence.
+struct TyRuntimeEvidence {
+    /// Source location of the runtime contributor.
+    cstc::span::SourceSpan span;
+    /// Short diagnostic description of the contributor.
+    std::string reason;
+};
+
 /// Single named-field initializer inside a struct construction expression.
 struct TyStructInitField {
     /// Field name.
@@ -518,12 +526,16 @@ struct TyExpr {
     cstc::span::SourceSpan span;
     /// True when this expression is guaranteed not to depend on runtime input.
     bool ct_available = true;
+    /// Body-internal runtime dependence that must be exposed by a result contract.
+    std::optional<TyRuntimeEvidence> runtime_evidence;
 };
 
 /// Constructs a heap-allocated typed expression.
-[[nodiscard]] inline TyExprPtr
-    make_ty_expr(cstc::span::SourceSpan span, TyExpr::Node node, Ty ty, bool ct_available = true) {
-    return std::make_shared<TyExpr>(TyExpr{std::move(node), std::move(ty), span, ct_available});
+[[nodiscard]] inline TyExprPtr make_ty_expr(
+    cstc::span::SourceSpan span, TyExpr::Node node, Ty ty, bool ct_available = true,
+    std::optional<TyRuntimeEvidence> runtime_evidence = std::nullopt) {
+    return std::make_shared<TyExpr>(
+        TyExpr{std::move(node), std::move(ty), span, ct_available, std::move(runtime_evidence)});
 }
 
 // ─── Statements ──────────────────────────────────────────────────────────────
@@ -574,6 +586,8 @@ struct TyBlock {
     cstc::span::SourceSpan span;
     /// True when the block's yielded value is guaranteed compile-time available.
     bool ct_available = true;
+    /// Body-internal runtime dependence joined from reachable statements and tail.
+    std::optional<TyRuntimeEvidence> runtime_evidence;
 };
 
 /// Typed generic constraint attached to a generic declaration.

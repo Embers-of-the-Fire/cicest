@@ -1,0 +1,14 @@
+runtime fn source() -> num { 1 }
+
+fn helper() -> num {
+    source();
+    1
+}
+
+fn reserve(count: !runtime num) -> num {
+    count
+}
+
+fn main() -> num {
+    reserve(helper())
+}

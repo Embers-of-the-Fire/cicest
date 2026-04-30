@@ -1,0 +1,5 @@
+# source: test/e2e/fail_compile/type_errors/struct_literal_runtime_field_demotion.cst
+# rule: struct_literal_runtime_field_demotion
+function 'make_point' body
+runtime dependence not reflected in its return type
+runtime-result call

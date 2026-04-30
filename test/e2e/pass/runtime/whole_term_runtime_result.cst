@@ -1,0 +1,43 @@
+runtime fn source() -> num { 1 }
+
+fn value() -> runtime num {
+    source();
+    1
+}
+
+runtime fn runtime_value() -> num {
+    source();
+    1
+}
+
+fn checked_add(a: num, b: num) -> num {
+    let result = a + b;
+    result
+}
+
+fn id(value: num) -> num { value }
+
+fn forward_runtime_arg(value: runtime num) -> runtime num {
+    id(value)
+}
+
+fn generic_id<T>(value: T) -> T { value }
+
+fn forward_runtime_arg_generic(value: runtime num) -> runtime num {
+    generic_id(value)
+}
+
+fn main() {
+    let static_value: num = checked_add(1, 2);
+    let dynamic_value: runtime num = checked_add(source(), 2);
+    let explicit_runtime: runtime num = value();
+    let runtime_fn_value: runtime num = runtime_value();
+    let forwarded_runtime: runtime num = forward_runtime_arg(source());
+    let generic_forwarded_runtime: runtime num = forward_runtime_arg_generic(source());
+    let _ = static_value;
+    let _ = dynamic_value;
+    let _ = explicit_runtime;
+    let _ = runtime_fn_value;
+    let _ = forwarded_runtime;
+    let _ = generic_forwarded_runtime;
+}

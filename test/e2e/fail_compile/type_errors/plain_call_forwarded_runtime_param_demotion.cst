@@ -1,0 +1,9 @@
+fn id(value: num) -> num { value }
+
+fn forward_plain(value: runtime num) -> num {
+    id(value)
+}
+
+fn main() -> num {
+    forward_plain(runtime { 1 })
+}
