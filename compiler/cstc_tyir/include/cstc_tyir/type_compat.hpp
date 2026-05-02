@@ -19,17 +19,7 @@ namespace cstc::tyir {
 /// Returns true when `ty` or any nested type argument/pointee carries the
 /// `runtime` qualifier.
 [[nodiscard]] inline bool type_has_runtime_dependency(const Ty& ty) {
-    if (ty.is_runtime)
-        return true;
-    if (ty.kind == TyKind::Ref)
-        return ty.pointee != nullptr && type_has_runtime_dependency(*ty.pointee);
-    if (ty.kind != TyKind::Named)
-        return false;
-    for (const Ty& arg : ty.generic_args) {
-        if (type_has_runtime_dependency(arg))
-            return true;
-    }
-    return false;
+    return ty_contains_runtime_tag(ty);
 }
 
 /// Returns true when `actual` may appear where `expected` is required.

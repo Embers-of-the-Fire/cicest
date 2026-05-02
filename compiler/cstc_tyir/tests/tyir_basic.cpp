@@ -70,6 +70,34 @@ static void test_runtime_ty() {
     assert(borrowed_runtime_handle != ty::ref(ty::named(handle)));
 }
 
+static void test_availability_join_preserves_first_evidence() {
+    const Availability ct = availability_ct();
+    const Availability runtime_from_type = availability_from_type(ty::num(true));
+    assert(is_ct_available(ct));
+    assert(!is_ct_available(runtime_from_type));
+    assert(!runtime_from_type.evidence.has_value());
+
+    const TyRuntimeEvidence first{
+        {1, 2},
+        "first"
+    };
+    const TyRuntimeEvidence second{
+        {3, 4},
+        "second"
+    };
+    const Availability joined = availability_join(availability_rt(first), availability_rt(second));
+    assert(!is_ct_available(joined));
+    assert(joined.evidence.has_value());
+    assert(joined.evidence->span.start == 1);
+    assert(joined.evidence->reason == "first");
+}
+
+static void test_availability_projection() {
+    assert(with_availability_projection(ty::num(), availability_ct()) == ty::num());
+    assert(with_availability_projection(ty::num(), availability_rt()) == ty::num(true));
+    assert(with_availability_projection(ty::never(), availability_rt()) == ty::never());
+}
+
 static void test_named_shape_distinguishes_nominal_types() {
     const Symbol point = Symbol::intern("Point");
     const Symbol color = Symbol::intern("Color");
@@ -93,6 +121,17 @@ static void test_make_literal() {
     assert(expr->ty == ty::num());
     assert(std::holds_alternative<TyLiteral>(expr->node));
     assert(std::get<TyLiteral>(expr->node).kind == TyLiteral::Kind::Num);
+    assert(is_ct_available(*expr));
+}
+
+static void test_make_runtime_expr_derives_legacy_shims() {
+    const TyExprPtr expr = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("1"), false}, ty::num(true));
+    assert(expr != nullptr);
+    assert(!is_ct_available(*expr));
+    assert(!expr->ct_available);
+    assert(!expr->runtime_evidence.has_value());
+    assert(expr->availability.kind == AvailabilityKind::Rt);
 }
 
 static void test_make_local_ref() {
@@ -164,9 +203,12 @@ int main() {
     test_ty_named();
     test_ty_named_with_generic_args();
     test_runtime_ty();
+    test_availability_join_preserves_first_evidence();
+    test_availability_projection();
     test_named_shape_distinguishes_nominal_types();
     test_ty_equality_distinguishes_value_semantics();
     test_make_literal();
+    test_make_runtime_expr_derives_legacy_shims();
     test_make_local_ref();
     test_make_binary();
     test_empty_program();
