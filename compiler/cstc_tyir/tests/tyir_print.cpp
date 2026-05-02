@@ -689,8 +689,8 @@ static void test_print_availability_summary() {
     auto runtime_expr = make_ty_expr(
         {
     },
-        TyRuntimeBlock{std::make_shared<TyBlock>()}, ty::num(true), false,
-        TyRuntimeEvidence{{1, 2}, "runtime block"});
+        TyRuntimeBlock{std::make_shared<TyBlock>()}, ty::num(true),
+        availability_rt(TyRuntimeEvidence{{1, 2}, "runtime block"}));
     auto ct_expr =
         make_ty_expr({}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("3"), false}, ty::num());
 
@@ -711,9 +711,9 @@ static void test_print_availability_summary() {
     prog.items.push_back(std::move(fn));
 
     const std::string out = format_program(prog);
-    assert(contains(out, "TyBlock: num [availability: RT]"));
-    assert(contains(out, "TyRuntimeBlock: runtime num [availability: RT]"));
-    assert(contains(out, "TyLiteral(3): num [availability: CT]"));
+    assert(contains(out, "TyBlock: num [availability: runtime]"));
+    assert(contains(out, "TyRuntimeBlock: runtime num [availability: runtime]"));
+    assert(contains(out, "TyLiteral(3): num [availability: const]"));
 }
 
 // ─── Let statement ───────────────────────────────────────────────────────────

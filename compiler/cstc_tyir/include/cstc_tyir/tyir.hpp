@@ -401,16 +401,6 @@ struct Availability {
     return ty_contains_runtime_tag(ty) ? availability_rt() : availability_ct();
 }
 
-/// Converts legacy split fields into the canonical availability summary.
-[[nodiscard]] inline Availability availability_from_legacy(
-    const Ty& ty, cstc::span::SourceSpan span, bool ct_available,
-    const std::optional<TyRuntimeEvidence>& runtime_evidence = std::nullopt) {
-    Availability availability = availability_from_type(ty, span);
-    if (!ct_available || runtime_evidence.has_value())
-        availability = availability_join(availability, availability_rt(runtime_evidence));
-    return availability;
-}
-
 /// Applies an availability summary to a type used for expression display or
 /// lowering decisions.
 [[nodiscard]] inline Ty with_availability_projection(Ty shape, const Availability& availability) {
@@ -612,28 +602,13 @@ struct TyExpr {
     Ty ty;
     /// Source location for this expression.
     cstc::span::SourceSpan span;
-    /// Legacy compatibility shim derived from `availability`.
-    bool ct_available = true;
-    /// Legacy compatibility shim derived from `availability.evidence`.
-    std::optional<TyRuntimeEvidence> runtime_evidence;
     /// Canonical compile-time/runtime availability summary.
     Availability availability;
 };
 
-/// Synchronizes the legacy expression availability shims from the canonical
-/// summary.
+/// Sets expression availability, preserving runtime-qualified type projections.
 inline void set_availability(TyExpr& expr, const Availability& availability) {
-    expr.availability = availability;
-    expr.ct_available = is_ct_available(expr.availability);
-    expr.runtime_evidence = expr.availability.evidence;
-}
-
-/// Recomputes canonical expression availability from the current type and
-/// legacy shims.
-inline void refresh_availability(TyExpr& expr) {
-    set_availability(
-        expr,
-        availability_from_legacy(expr.ty, expr.span, expr.ct_available, expr.runtime_evidence));
+    expr.availability = availability_join(availability_from_type(expr.ty, expr.span), availability);
 }
 
 /// Returns true when an expression value is compile-time available.
@@ -649,13 +624,13 @@ inline void refresh_availability(TyExpr& expr) {
 
 /// Constructs a heap-allocated typed expression.
 [[nodiscard]] inline TyExprPtr make_ty_expr(
-    cstc::span::SourceSpan span, TyExpr::Node node, Ty ty, bool ct_available = true,
-    const std::optional<TyRuntimeEvidence>& runtime_evidence = std::nullopt) {
+    cstc::span::SourceSpan span, TyExpr::Node node, Ty ty,
+    const Availability& availability = availability_ct()) {
     TyExpr expr;
     expr.node = std::move(node);
     expr.ty = std::move(ty);
     expr.span = span;
-    set_availability(expr, availability_from_legacy(expr.ty, span, ct_available, runtime_evidence));
+    set_availability(expr, availability);
     return std::make_shared<TyExpr>(std::move(expr));
 }
 
@@ -705,27 +680,14 @@ struct TyBlock {
     Ty ty;
     /// Source location for the full block.
     cstc::span::SourceSpan span;
-    /// Legacy compatibility shim derived from `availability`.
-    bool ct_available = true;
-    /// Legacy compatibility shim derived from `availability.evidence`.
-    std::optional<TyRuntimeEvidence> runtime_evidence;
     /// Canonical compile-time/runtime availability summary.
     Availability availability;
 };
 
-/// Synchronizes the legacy block availability shims from the canonical summary.
+/// Sets block availability, preserving runtime-qualified type projections.
 inline void set_availability(TyBlock& block, const Availability& availability) {
-    block.availability = availability;
-    block.ct_available = is_ct_available(block.availability);
-    block.runtime_evidence = block.availability.evidence;
-}
-
-/// Recomputes canonical block availability from the current type and legacy
-/// shims.
-inline void refresh_availability(TyBlock& block) {
-    set_availability(
-        block,
-        availability_from_legacy(block.ty, block.span, block.ct_available, block.runtime_evidence));
+    block.availability =
+        availability_join(availability_from_type(block.ty, block.span), availability);
 }
 
 /// Returns true when a block value is compile-time available.

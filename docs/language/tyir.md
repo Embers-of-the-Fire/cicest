@@ -62,8 +62,7 @@ summary. `AvailabilityKind::Ct` means the value is available to compile-time
 evaluation. `AvailabilityKind::Rt` means it depends on a runtime-qualified source,
 a runtime-result declaration, a runtime block, or a whole-term runtime
 contribution. Runtime-qualified display and lowering behavior are projections of
-that summary, while `Ty::is_runtime`, `ct_available`, and `runtime_evidence`
-remain as migration shims.
+that summary.
 
 TyIR also records body-internal runtime evidence in `Availability::evidence` when
 a concrete origin exists. This evidence is joined across reachable lowered
@@ -134,9 +133,7 @@ A `TyBlock` has type:
 - `Unit` when there is no tail expression.
 
 Its `availability` is whole-term: it joins reachable statement contributions and
-the tail expression rather than considering only the yielded value. The legacy
-`ct_available` and `runtime_evidence` fields mirror this summary so older passes
-can migrate incrementally.
+the tail expression rather than considering only the yielded value.
 
 ## Runtime block type rules
 
@@ -176,9 +173,9 @@ fn distance(p: Point, q: Point) -> num {
 }
 ```
 
-Expression and block lines include `[availability: CT]` or `[availability: RT]` in
-the default inspector output. The compact example focuses on tree shape and type
-annotations.
+Expression and block lines include `[availability: const]` or
+`[availability: runtime]` in the default inspector output. The compact example
+focuses on tree shape and type annotations.
 
 ```
 TyProgram

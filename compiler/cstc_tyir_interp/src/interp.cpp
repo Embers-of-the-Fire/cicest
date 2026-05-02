@@ -1158,9 +1158,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
     auto rewritten = std::make_shared<tyir::TyBlock>();
     rewritten->ty = apply_substitution(block->ty, subst);
     rewritten->span = block->span;
-    tyir::set_availability(
-        *rewritten, tyir::availability_from_legacy(
-                        rewritten->ty, block->span, block->ct_available, block->runtime_evidence));
+    tyir::set_availability(*rewritten, block->availability);
     rewritten->stmts.reserve(block->stmts.size());
     for (const tyir::TyStmt& stmt : block->stmts) {
         rewritten->stmts.push_back(
@@ -1331,9 +1329,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
             }
         },
         expr->node);
-    tyir::set_availability(
-        *rewritten_expr, tyir::availability_from_legacy(
-                             rewritten_ty, expr->span, expr->ct_available, expr->runtime_evidence));
+    tyir::set_availability(*rewritten_expr, expr->availability);
     return rewritten_expr;
 }
 
@@ -3628,10 +3624,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
         },
         expr->node);
     if (folded.has_value() && *folded != nullptr) {
-        tyir::set_availability(
-            **folded,
-            tyir::availability_from_legacy(
-                (*folded)->ty, (*folded)->span, expr->ct_available, expr->runtime_evidence));
+        tyir::set_availability(**folded, expr->availability);
     }
     return folded;
 }

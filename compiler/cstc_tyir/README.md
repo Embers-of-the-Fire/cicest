@@ -66,14 +66,11 @@ struct Availability {
 };
 ```
 
-Every expression and block carries a canonical availability summary. `Ct` means
-the value can be used during compile-time evaluation. `Rt` means the value depends
-on a runtime-qualified source, a runtime-result declaration, a runtime block, or a
-whole-term runtime contribution. `evidence` records the first concrete runtime
-origin when one is available for diagnostics.
-
-`Ty::is_runtime`, `ct_available`, and `runtime_evidence` remain as compatibility
-projections while older consumers migrate to `availability`.
+Every expression and block carries this canonical availability summary directly.
+`Ct` means the value can be used during compile-time evaluation. `Rt` means the
+value depends on a runtime-qualified source, a runtime-result declaration, a
+runtime block, or a whole-term runtime contribution. `evidence` records the first
+concrete runtime origin when one is available for diagnostics.
 
 ### `TyExpr` — type-annotated expression
 
@@ -113,16 +110,13 @@ struct TyBlock {
     std::optional<TyExprPtr> tail;
     Ty ty;   // = tail->ty when tail exists; else Unit or Never (by fallthrough)
     SourceSpan span;
-    bool ct_available;
-    std::optional<TyRuntimeEvidence> runtime_evidence;
     Availability availability;
 };
 ```
 
 `availability` is computed from the whole reachable block term, not just the tail
 value. Reachable statement initializers, expression statements, control-flow
-headers, loop bodies, and the tail all contribute. The legacy `ct_available` and
-`runtime_evidence` fields are derived shims.
+headers, loop bodies, and the tail all contribute.
 
 ### Item declarations
 
@@ -156,11 +150,11 @@ TyProgram
     x: num
     y: num
   TyFnDecl add(x: num, y: num) -> num
-    TyBlock: num [availability: CT]
+    TyBlock: num [availability: const]
       Tail
-        TyBinary(+): num [availability: CT]
-          TyLocal(x): num [availability: CT]
-          TyLocal(y): num [availability: CT]
+        TyBinary(+): num [availability: const]
+          TyLocal(x): num [availability: const]
+          TyLocal(y): num [availability: const]
 ```
 
 ## Dependencies

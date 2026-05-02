@@ -64,8 +64,8 @@ inline void indent(std::ostringstream& out, std::size_t level) {
 
 [[nodiscard]] inline std::string_view availability_name(AvailabilityKind kind) {
     switch (kind) {
-    case AvailabilityKind::Ct: return "CT";
-    case AvailabilityKind::Rt: return "RT";
+    case AvailabilityKind::Ct: return "const";
+    case AvailabilityKind::Rt: return "runtime";
     }
     return "?";
 }

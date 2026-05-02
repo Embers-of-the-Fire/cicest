@@ -273,9 +273,8 @@ static void test_runtime_statement_marks_unit_block_not_ct_available() {
     const auto prog = must_lower("fn value(x: runtime num) { x; }");
     const auto& fn = first_fn(prog);
     assert(fn.body->ty == ty::unit());
-    assert(!fn.body->ct_available);
+    assert(!is_ct_available(*fn.body));
     assert(fn.body->availability.kind == AvailabilityKind::Rt);
-    assert(!fn.body->runtime_evidence.has_value());
     assert(!fn.body->availability.evidence.has_value());
 }
 
@@ -283,9 +282,8 @@ static void test_unreachable_runtime_statement_does_not_taint_block() {
     const auto prog = must_lower("fn value() -> num { return 1; runtime { 0 }; }");
     const auto& fn = first_fn(prog);
     assert(fn.body->ty == ty::never());
-    assert(fn.body->ct_available);
+    assert(is_ct_available(*fn.body));
     assert(fn.body->availability.kind == AvailabilityKind::Ct);
-    assert(!fn.body->runtime_evidence.has_value());
 }
 
 static void test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call() {
@@ -303,7 +301,7 @@ static void test_whole_term_runtime_work_accepts_runtime_result_contract() {
         "fn value() -> runtime num { source(); 1 }");
     const auto& fn = second_fn(prog);
     assert(fn.body->ty == ty::num(true));
-    assert(!fn.body->ct_available);
+    assert(!is_ct_available(*fn.body));
     assert(fn.body->availability.kind == AvailabilityKind::Rt);
 }
 
@@ -314,10 +312,10 @@ static void test_runtime_function_accepts_whole_term_runtime_work() {
     const auto& source = first_fn(prog);
     const auto& fn = second_fn(prog);
     assert(source.body->ty == ty::num(true));
-    assert(!source.body->ct_available);
+    assert(!is_ct_available(*source.body));
     assert(fn.return_ty == ty::num(true));
     assert(fn.body->ty == ty::num(true));
-    assert(!fn.body->ct_available);
+    assert(!is_ct_available(*fn.body));
 }
 
 static void test_ordinarily_polymorphic_helper_still_accepts_runtime_arguments() {
@@ -385,8 +383,8 @@ static void test_runtime_result_forwarded_param_does_not_count_as_hidden_work() 
         "fn f(value: runtime num) -> runtime num { id(value) }");
     const auto& fn = second_fn(prog);
     assert(fn.body->ty == ty::num(true));
-    assert(!fn.body->ct_available);
-    assert(!fn.body->runtime_evidence.has_value());
+    assert(!is_ct_available(*fn.body));
+    assert(!fn.body->availability.evidence.has_value());
 }
 
 static void test_generic_runtime_result_forwarded_param_does_not_count_as_hidden_work() {
@@ -395,8 +393,8 @@ static void test_generic_runtime_result_forwarded_param_does_not_count_as_hidden
         "fn f(value: runtime num) -> runtime num { id(value) }");
     const auto& fn = second_fn(prog);
     assert(fn.body->ty == ty::num(true));
-    assert(!fn.body->ct_available);
-    assert(!fn.body->runtime_evidence.has_value());
+    assert(!is_ct_available(*fn.body));
+    assert(!fn.body->availability.evidence.has_value());
 }
 
 static void test_plain_extern_call_accepts_runtime_argument_and_lifts_result() {
@@ -665,7 +663,7 @@ static void test_runtime_return_payload_marks_body_not_ct_available() {
     const auto prog = must_lower("fn f(x: runtime num) -> runtime num { return x; }");
     const auto& body = *first_fn(prog).body;
     assert(body.ty == ty::never());
-    assert(!body.ct_available);
+    assert(!is_ct_available(body));
 }
 
 static void test_runtime_break_payload_marks_loop_body_not_ct_available() {
@@ -673,8 +671,8 @@ static void test_runtime_break_payload_marks_loop_body_not_ct_available() {
     const auto& body = *first_fn(prog).body;
     const auto& loop = std::get<TyLoop>((*body.tail)->node);
     assert((*body.tail)->ty == ty::num(true));
-    assert(!body.ct_available);
-    assert(!loop.body->ct_available);
+    assert(!is_ct_available(body));
+    assert(!is_ct_available(*loop.body));
 }
 
 // ─── Loop/break type inference ────────────────────────────────────────────────

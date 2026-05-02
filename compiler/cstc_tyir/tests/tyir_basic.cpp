@@ -124,14 +124,13 @@ static void test_make_literal() {
     assert(is_ct_available(*expr));
 }
 
-static void test_make_runtime_expr_derives_legacy_shims() {
+static void test_make_runtime_expr_derives_availability() {
     const TyExprPtr expr = make_ty_expr(
         {}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("1"), false}, ty::num(true));
     assert(expr != nullptr);
     assert(!is_ct_available(*expr));
-    assert(!expr->ct_available);
-    assert(!expr->runtime_evidence.has_value());
     assert(expr->availability.kind == AvailabilityKind::Rt);
+    assert(!expr->availability.evidence.has_value());
 }
 
 static void test_make_local_ref() {
@@ -208,7 +207,7 @@ int main() {
     test_named_shape_distinguishes_nominal_types();
     test_ty_equality_distinguishes_value_semantics();
     test_make_literal();
-    test_make_runtime_expr_derives_legacy_shims();
+    test_make_runtime_expr_derives_availability();
     test_make_local_ref();
     test_make_binary();
     test_empty_program();
