@@ -156,11 +156,11 @@ TyProgram
     x: num
     y: num
   TyFnDecl add(x: num, y: num) -> num
-    TyBlock: num
+    TyBlock: num [availability: CT]
       Tail
-        TyBinary(+): num
-          TyLocal(x): num
-          TyLocal(y): num
+        TyBinary(+): num [availability: CT]
+          TyLocal(x): num [availability: CT]
+          TyLocal(y): num [availability: CT]
 ```
 
 ## Dependencies

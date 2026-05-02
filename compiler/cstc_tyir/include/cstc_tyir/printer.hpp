@@ -62,6 +62,26 @@ inline void indent(std::ostringstream& out, std::size_t level) {
     return "";
 }
 
+[[nodiscard]] inline std::string_view availability_name(AvailabilityKind kind) {
+    switch (kind) {
+    case AvailabilityKind::Ct: return "CT";
+    case AvailabilityKind::Rt: return "RT";
+    }
+    return "?";
+}
+
+[[nodiscard]] inline std::string availability_suffix(const Availability& availability) {
+    return " [availability: " + std::string(availability_name(availability.kind)) + "]";
+}
+
+[[nodiscard]] inline std::string expr_type_summary(const TyExprPtr& expr) {
+    return expr->ty.display() + availability_suffix(expr->availability);
+}
+
+[[nodiscard]] inline std::string block_type_summary(const TyBlockPtr& block) {
+    return block->ty.display() + availability_suffix(block->availability);
+}
+
 [[nodiscard]] inline std::string param_type_name(const TyParam& param) {
     if (param.requires_ct())
         return "!runtime " + param.ty.display();
@@ -93,7 +113,7 @@ inline void print_ty_block(std::ostringstream& out, const TyBlockPtr& block, std
 
 inline void print_ty_block(std::ostringstream& out, const TyBlockPtr& block, std::size_t level) {
     indent(out, level);
-    out << "TyBlock: " << block->ty.display() << "\n";
+    out << "TyBlock: " << block_type_summary(block) << "\n";
 
     for (const TyStmt& stmt : block->stmts) {
         std::visit(
@@ -132,33 +152,33 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 switch (node.kind) {
                 case TyLiteral::Kind::Num:
                 case TyLiteral::Kind::Str:
-                    out << "TyLiteral(" << node.symbol.as_str() << "): " << expr->ty.display()
+                    out << "TyLiteral(" << node.symbol.as_str() << "): " << expr_type_summary(expr)
                         << "\n";
                     break;
                 case TyLiteral::Kind::OwnedStr:
-                    out << "TyLiteral(owned " << node.symbol.as_str() << "): " << expr->ty.display()
-                        << "\n";
+                    out << "TyLiteral(owned " << node.symbol.as_str()
+                        << "): " << expr_type_summary(expr) << "\n";
                     break;
                 case TyLiteral::Kind::Bool:
                     out << "TyLiteral(" << (node.bool_value ? "true" : "false")
-                        << "): " << expr->ty.display() << "\n";
+                        << "): " << expr_type_summary(expr) << "\n";
                     break;
                 case TyLiteral::Kind::Unit:
-                    out << "TyLiteral(()): " << expr->ty.display() << "\n";
+                    out << "TyLiteral(()): " << expr_type_summary(expr) << "\n";
                     break;
                 }
             } else if constexpr (std::is_same_v<N, LocalRef>) {
                 indent(out, level);
                 out << "TyLocal(" << node.name.as_str() << ")" << use_kind_suffix(node.use_kind)
-                    << ": " << expr->ty.display() << "\n";
+                    << ": " << expr_type_summary(expr) << "\n";
             } else if constexpr (std::is_same_v<N, EnumVariantRef>) {
                 indent(out, level);
                 out << "TyVariant(" << node.enum_name.as_str() << "::" << node.variant_name.as_str()
-                    << "): " << expr->ty.display() << "\n";
+                    << "): " << expr_type_summary(expr) << "\n";
             } else if constexpr (std::is_same_v<N, TyStructInit>) {
                 indent(out, level);
-                out << "TyStructInit(" << node.type_name.as_str() << "): " << expr->ty.display()
-                    << "\n";
+                out << "TyStructInit(" << node.type_name.as_str()
+                    << "): " << expr_type_summary(expr) << "\n";
                 if (!node.generic_args.empty()) {
                     indent(out, level + 1);
                     out << "GenericArgs\n";
@@ -174,25 +194,28 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 }
             } else if constexpr (std::is_same_v<N, TyBorrow>) {
                 indent(out, level);
-                out << "TyBorrow: " << expr->ty.display() << "\n";
+                out << "TyBorrow: " << expr_type_summary(expr) << "\n";
                 print_ty_expr(out, node.rhs, level + 1);
             } else if constexpr (std::is_same_v<N, TyUnary>) {
                 indent(out, level);
-                out << "TyUnary(" << unary_name(node.op) << "): " << expr->ty.display() << "\n";
+                out << "TyUnary(" << unary_name(node.op) << "): " << expr_type_summary(expr)
+                    << "\n";
                 print_ty_expr(out, node.rhs, level + 1);
             } else if constexpr (std::is_same_v<N, TyBinary>) {
                 indent(out, level);
-                out << "TyBinary(" << binary_name(node.op) << "): " << expr->ty.display() << "\n";
+                out << "TyBinary(" << binary_name(node.op) << "): " << expr_type_summary(expr)
+                    << "\n";
                 print_ty_expr(out, node.lhs, level + 1);
                 print_ty_expr(out, node.rhs, level + 1);
             } else if constexpr (std::is_same_v<N, TyFieldAccess>) {
                 indent(out, level);
                 out << "TyFieldAccess(." << node.field.as_str() << ")"
-                    << use_kind_suffix(node.use_kind) << ": " << expr->ty.display() << "\n";
+                    << use_kind_suffix(node.use_kind) << ": " << expr_type_summary(expr) << "\n";
                 print_ty_expr(out, node.base, level + 1);
             } else if constexpr (std::is_same_v<N, TyCall>) {
                 indent(out, level);
-                out << "TyCall(" << node.fn_name.as_str() << "): " << expr->ty.display() << "\n";
+                out << "TyCall(" << node.fn_name.as_str() << "): " << expr_type_summary(expr)
+                    << "\n";
                 if (!node.generic_args.empty()) {
                     indent(out, level + 1);
                     out << "GenericArgs\n";
@@ -209,7 +232,7 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
             } else if constexpr (std::is_same_v<N, TyDeferredGenericCall>) {
                 indent(out, level);
                 out << "TyDeferredGenericCall(" << node.fn_name.as_str()
-                    << "): " << expr->ty.display() << "\n";
+                    << "): " << expr_type_summary(expr) << "\n";
                 if (!node.generic_args.empty()) {
                     indent(out, level + 1);
                     out << "GenericArgs\n";
@@ -225,7 +248,7 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 }
             } else if constexpr (std::is_same_v<N, TyDeclProbe>) {
                 indent(out, level);
-                out << "TyDeclProbe: " << expr->ty.display();
+                out << "TyDeclProbe: " << expr_type_summary(expr);
                 if (node.is_invalid)
                     out << " [invalid]";
                 out << "\n";
@@ -233,13 +256,13 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                     print_ty_expr(out, *node.expr, level + 1);
             } else if constexpr (std::is_same_v<N, TyRuntimeBlock>) {
                 indent(out, level);
-                out << "TyRuntimeBlock: " << expr->ty.display() << "\n";
+                out << "TyRuntimeBlock: " << expr_type_summary(expr) << "\n";
                 print_ty_block(out, node.body, level + 1);
             } else if constexpr (std::is_same_v<N, TyBlockPtr>) {
                 print_ty_block(out, node, level);
             } else if constexpr (std::is_same_v<N, TyIf>) {
                 indent(out, level);
-                out << "TyIf: " << expr->ty.display() << "\n";
+                out << "TyIf: " << expr_type_summary(expr) << "\n";
                 indent(out, level + 1);
                 out << "Condition\n";
                 print_ty_expr(out, node.condition, level + 2);
@@ -253,11 +276,11 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 }
             } else if constexpr (std::is_same_v<N, TyLoop>) {
                 indent(out, level);
-                out << "TyLoop: " << expr->ty.display() << "\n";
+                out << "TyLoop: " << expr_type_summary(expr) << "\n";
                 print_ty_block(out, node.body, level + 1);
             } else if constexpr (std::is_same_v<N, TyWhile>) {
                 indent(out, level);
-                out << "TyWhile: " << expr->ty.display() << "\n";
+                out << "TyWhile: " << expr_type_summary(expr) << "\n";
                 indent(out, level + 1);
                 out << "Condition\n";
                 print_ty_expr(out, node.condition, level + 2);
@@ -266,7 +289,7 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 print_ty_block(out, node.body, level + 2);
             } else if constexpr (std::is_same_v<N, TyFor>) {
                 indent(out, level);
-                out << "TyFor: " << expr->ty.display() << "\n";
+                out << "TyFor: " << expr_type_summary(expr) << "\n";
                 if (node.init.has_value()) {
                     const TyForInit& init = *node.init;
                     indent(out, level + 1);
@@ -293,15 +316,15 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 print_ty_block(out, node.body, level + 2);
             } else if constexpr (std::is_same_v<N, TyBreak>) {
                 indent(out, level);
-                out << "TyBreak: !\n";
+                out << "TyBreak: " << expr_type_summary(expr) << "\n";
                 if (node.value.has_value())
                     print_ty_expr(out, *node.value, level + 1);
             } else if constexpr (std::is_same_v<N, TyContinue>) {
                 indent(out, level);
-                out << "TyContinue: !\n";
+                out << "TyContinue: " << expr_type_summary(expr) << "\n";
             } else if constexpr (std::is_same_v<N, TyReturn>) {
                 indent(out, level);
-                out << "TyReturn: !\n";
+                out << "TyReturn: " << expr_type_summary(expr) << "\n";
                 if (node.value.has_value())
                     print_ty_expr(out, *node.value, level + 1);
             }

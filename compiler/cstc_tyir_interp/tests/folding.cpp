@@ -339,6 +339,56 @@ fn main() {
     assert(folded_call.symbol.as_str() == std::string_view{"1"});
 }
 
+static void test_plain_type_runtime_availability_is_preserved() {
+    SymbolSession session;
+
+    const auto ast = cstc::parser::parse_source(R"(
+fn one() -> num { 1 }
+
+fn main() {
+    one();
+}
+)");
+    assert(ast.has_value());
+
+    auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+
+    TyProgram program = *tyir;
+    TyFnDecl* main_fn = nullptr;
+    for (TyItem& item : program.items) {
+        if (auto* fn = std::get_if<TyFnDecl>(&item);
+            fn != nullptr && fn->name == Symbol::intern("main")) {
+            main_fn = fn;
+            break;
+        }
+    }
+
+    assert(main_fn != nullptr);
+    assert(main_fn->body != nullptr);
+    auto runtime_unit = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Unit, kInvalidSymbol, false}, ty::unit(), false);
+    assert(runtime_unit->ty == ty::unit());
+    assert(runtime_unit->availability.kind == AvailabilityKind::Rt);
+    main_fn->body->stmts.insert(
+        main_fn->body->stmts.begin(), TyExprStmt{std::move(runtime_unit), {}});
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyFnDecl& folded_main = find_fn(*folded, "main");
+    const auto& runtime_stmt = std::get<TyExprStmt>(folded_main.body->stmts[0]);
+    assert(runtime_stmt.expr->ty == ty::unit());
+    assert(!runtime_stmt.expr->ct_available);
+    assert(runtime_stmt.expr->availability.kind == AvailabilityKind::Rt);
+    assert(std::holds_alternative<TyLiteral>(runtime_stmt.expr->node));
+
+    const auto& folded_call_stmt = std::get<TyExprStmt>(folded_main.body->stmts[1]);
+    const TyLiteral& folded_call = require_literal(folded_call_stmt.expr);
+    assert(folded_call.kind == TyLiteral::Kind::Num);
+    assert(folded_call.symbol.as_str() == std::string_view{"1"});
+}
+
 static void test_short_circuit_boolean_ops_do_not_eval_dead_rhs() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -2773,6 +2823,7 @@ int main() {
     test_runtime_block_preserves_runtime_call_boundary();
     test_runtime_block_with_null_body_is_preserved();
     test_runtime_block_stmt_with_null_body_still_falls_through();
+    test_plain_type_runtime_availability_is_preserved();
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
     test_move_only_local_and_borrow_can_fold();
     test_move_only_return_materializes_owned_string();

@@ -176,6 +176,10 @@ fn distance(p: Point, q: Point) -> num {
 }
 ```
 
+Expression and block lines include `[availability: CT]` or `[availability: RT]` in
+the default inspector output. The compact example focuses on tree shape and type
+annotations.
+
 ```
 TyProgram
   TyStructDecl Point

@@ -256,7 +256,12 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
 }
 
 [[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {
-    return expr != nullptr && expr->ct_available && !type_has_runtime_dependency(expr->ty);
+    return tyir::is_ct_available(expr);
+}
+
+[[nodiscard]] static bool has_concrete_runtime_barrier(const tyir::TyExpr& expr) {
+    return expr.availability.kind == tyir::AvailabilityKind::Rt
+        && (expr.availability.evidence.has_value() || type_has_runtime_dependency(expr.ty));
 }
 
 [[nodiscard]] static bool call_argument_may_be_compatible_after_substitution(
@@ -1153,7 +1158,9 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
     auto rewritten = std::make_shared<tyir::TyBlock>();
     rewritten->ty = apply_substitution(block->ty, subst);
     rewritten->span = block->span;
-    rewritten->ct_available = block->ct_available && !type_has_runtime_dependency(rewritten->ty);
+    tyir::set_availability(
+        *rewritten, tyir::availability_from_legacy(
+                        rewritten->ty, block->span, block->ct_available, block->runtime_evidence));
     rewritten->stmts.reserve(block->stmts.size());
     for (const tyir::TyStmt& stmt : block->stmts) {
         rewritten->stmts.push_back(
@@ -1324,7 +1331,9 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
             }
         },
         expr->node);
-    rewritten_expr->ct_available = expr->ct_available && !type_has_runtime_dependency(rewritten_ty);
+    tyir::set_availability(
+        *rewritten_expr, tyir::availability_from_legacy(
+                             rewritten_ty, expr->span, expr->ct_available, expr->runtime_evidence));
     return rewritten_expr;
 }
 
@@ -1581,7 +1590,7 @@ ConstraintEvalResult evaluate_constraint(
                 ConstraintEvalKind::Unsatisfied, "probed expression is not type-valid",
                 std::nullopt};
         }
-        if (expr->ty.is_runtime && !std::holds_alternative<tyir::TyRuntimeBlock>(expr->node)) {
+        if (has_concrete_runtime_barrier(*expr)) {
             return {
                 ConstraintEvalKind::Unsatisfied,
                 "probed expression uses runtime-only behavior",
@@ -2342,7 +2351,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
 [[nodiscard]] static std::expected<EvalState, EvalError>
     eval_expr(const tyir::TyExprPtr& expr, ConstEnv& env, EvalContext& ctx) {
-    if (expr->ty.is_runtime && !std::holds_alternative<tyir::TyRuntimeBlock>(expr->node))
+    if (has_concrete_runtime_barrier(*expr))
         return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
 
     return std::visit(
@@ -3178,6 +3187,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     tyir::TyBlock folded;
     folded.ty = block.ty;
     folded.span = block.span;
+    tyir::set_availability(folded, block.availability);
 
     for (std::size_t index = 0; index < block.stmts.size(); ++index) {
         const tyir::TyStmt& stmt = block.stmts[index];
@@ -3275,7 +3285,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 [[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError> fold_expr(
     const tyir::TyExprPtr& expr, ConstEnv& env, const ProgramView& program,
     const GenericParamSet& generic_params) {
-    return std::visit(
+    auto folded = std::visit(
         [&](const auto& node) -> std::expected<tyir::TyExprPtr, EvalError> {
             using Node = std::decay_t<decltype(node)>;
 
@@ -3617,6 +3627,13 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             return expr;
         },
         expr->node);
+    if (folded.has_value() && *folded != nullptr) {
+        tyir::set_availability(
+            **folded,
+            tyir::availability_from_legacy(
+                (*folded)->ty, (*folded)->span, expr->ct_available, expr->runtime_evidence));
+    }
+    return folded;
 }
 
 [[nodiscard]] static std::expected<void, EvalError> validate_constraints_in_expr(
