@@ -389,6 +389,47 @@ fn main() {
     assert(folded_call.symbol.as_str() == std::string_view{"1"});
 }
 
+static void test_folded_if_recomputes_availability_after_erasing_runtime_branch() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn choose(value: num) -> num {
+    if true { 1 } else { value }
+}
+)");
+
+    const TyFnDecl& choose = find_fn(program, "choose");
+    const TyExprPtr& tail = require_tail(choose);
+    const TyLiteral& literal = require_literal(tail);
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"1"});
+    assert(is_ct_available(*tail));
+    assert(is_ct_available(*choose.body));
+}
+
+static void test_decl_generic_ct_block_argument_rechecks_availability_after_substitution() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn reserve(value: const num) -> num {
+    value
+}
+
+fn probe<T>() -> Constraint {
+    decl(reserve({ let value: T = 0; value }))
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<runtime num>()
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'wrapper'") != std::string::npos);
+}
+
 static void test_short_circuit_boolean_ops_do_not_eval_dead_rhs() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -2824,6 +2865,8 @@ int main() {
     test_runtime_block_with_null_body_is_preserved();
     test_runtime_block_stmt_with_null_body_still_falls_through();
     test_plain_type_runtime_availability_is_preserved();
+    test_folded_if_recomputes_availability_after_erasing_runtime_branch();
+    test_decl_generic_ct_block_argument_rechecks_availability_after_substitution();
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
     test_move_only_local_and_borrow_can_fold();
     test_move_only_return_materializes_owned_string();
