@@ -377,6 +377,8 @@ fn main() {
     assert(folded.has_value());
 
     const TyFnDecl& folded_main = find_fn(*folded, "main");
+    assert(folded_main.body != nullptr);
+    assert(folded_main.body->stmts.size() == 2);
     const auto& runtime_stmt = std::get<TyExprStmt>(folded_main.body->stmts[0]);
     assert(runtime_stmt.expr->ty == ty::unit());
     assert(!is_ct_available(*runtime_stmt.expr));
