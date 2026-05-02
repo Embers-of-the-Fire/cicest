@@ -274,7 +274,9 @@ static void test_runtime_statement_marks_unit_block_not_ct_available() {
     const auto& fn = first_fn(prog);
     assert(fn.body->ty == ty::unit());
     assert(!fn.body->ct_available);
+    assert(fn.body->availability.kind == AvailabilityKind::Rt);
     assert(!fn.body->runtime_evidence.has_value());
+    assert(!fn.body->availability.evidence.has_value());
 }
 
 static void test_unreachable_runtime_statement_does_not_taint_block() {
@@ -282,6 +284,7 @@ static void test_unreachable_runtime_statement_does_not_taint_block() {
     const auto& fn = first_fn(prog);
     assert(fn.body->ty == ty::never());
     assert(fn.body->ct_available);
+    assert(fn.body->availability.kind == AvailabilityKind::Ct);
     assert(!fn.body->runtime_evidence.has_value());
 }
 
@@ -301,6 +304,7 @@ static void test_whole_term_runtime_work_accepts_runtime_result_contract() {
     const auto& fn = second_fn(prog);
     assert(fn.body->ty == ty::num(true));
     assert(!fn.body->ct_available);
+    assert(fn.body->availability.kind == AvailabilityKind::Rt);
 }
 
 static void test_runtime_function_accepts_whole_term_runtime_work() {
@@ -336,6 +340,7 @@ static void test_plain_call_lifts_runtime_arguments() {
     const auto& call = std::get<TyCall>(stmt.init->node);
     assert(stmt.ty == ty::num(true));
     assert(stmt.init->ty == ty::num(true));
+    assert(stmt.init->availability.kind == AvailabilityKind::Rt);
     assert(call.args[0]->ty == ty::num(true));
     assert(call.args[1]->ty == ty::num(true));
 }

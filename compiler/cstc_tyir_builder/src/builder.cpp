@@ -335,11 +335,11 @@ using TypeSubstitution =
 }
 
 [[nodiscard]] static bool value_is_ct_available(const bool ct_available, const tyir::Ty& ty) {
-    return ct_available && !type_has_runtime_dependency(ty);
+    return tyir::is_ct_available(tyir::availability_from_legacy(ty, {}, ct_available));
 }
 
 [[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {
-    return expr != nullptr && value_is_ct_available(expr->ct_available, expr->ty);
+    return tyir::is_ct_available(expr);
 }
 
 [[nodiscard]] static bool all_exprs_ct_available(const std::vector<tyir::TyExprPtr>& exprs) {
@@ -1375,8 +1375,8 @@ struct LoweredExpr {
 [[nodiscard]] static std::optional<tyir::TyRuntimeEvidence>
     first_runtime_evidence(const std::vector<tyir::TyExprPtr>& exprs) {
     for (const tyir::TyExprPtr& expr : exprs) {
-        if (expr != nullptr && expr->runtime_evidence.has_value())
-            return expr->runtime_evidence;
+        if (expr != nullptr && expr->availability.evidence.has_value())
+            return expr->availability.evidence;
     }
     return std::nullopt;
 }
@@ -1387,9 +1387,9 @@ struct LoweredExpr {
         [](const auto& s) -> std::optional<tyir::TyRuntimeEvidence> {
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, tyir::TyLetStmt>)
-                return s.init != nullptr ? s.init->runtime_evidence : std::nullopt;
+                return s.init != nullptr ? s.init->availability.evidence : std::nullopt;
             else
-                return s.expr != nullptr ? s.expr->runtime_evidence : std::nullopt;
+                return s.expr != nullptr ? s.expr->availability.evidence : std::nullopt;
         },
         stmt);
 }
@@ -1426,11 +1426,9 @@ struct LoweredExpr {
 }
 
 static void apply_block_runtime_evidence(tyir::TyBlock& block) {
-    if (!block.runtime_evidence.has_value())
-        return;
-    block.ct_available = false;
-    if (!block.ty.is_never())
+    if (block.runtime_evidence.has_value() && !block.ty.is_never())
         block.ty.is_runtime = true;
+    tyir::refresh_availability(block);
 }
 
 struct LoweredPlace {
@@ -1836,8 +1834,7 @@ struct ParamReferenceVisitor {
                 block_can_fallthrough(**block) ? (*(*block)->tail)->ty : tyir::ty::never();
             recompute_block_summary(**block);
             expr->ty = (*block)->ty;
-            expr->ct_available = (*block)->ct_available;
-            expr->runtime_evidence = (*block)->runtime_evidence;
+            tyir::set_availability(*expr, (*block)->availability);
         }
         return expr;
     }
@@ -1860,8 +1857,8 @@ struct ParamReferenceVisitor {
             if (!expr->ty.is_never())
                 expr->ty.is_runtime = true;
         }
-        expr->ct_available = false;
-        expr->runtime_evidence = runtime_evidence_at(expr->span, "runtime block");
+        tyir::set_availability(
+            *expr, tyir::availability_rt(runtime_evidence_at(expr->span, "runtime block")));
         return expr;
     }
 
@@ -1897,20 +1894,23 @@ struct ParamReferenceVisitor {
         const bool else_ct_available = if_expr->else_branch.has_value()
                                          ? expr_value_is_ct_available(*if_expr->else_branch)
                                          : true;
-        expr->runtime_evidence = first_runtime_evidence(
+        const auto if_runtime_evidence = first_runtime_evidence(
             first_runtime_evidence(
                 if_expr->condition->runtime_evidence, if_expr->then_block->runtime_evidence),
             if_expr->else_branch.has_value() ? (*if_expr->else_branch)->runtime_evidence
                                              : std::nullopt);
-        expr->ct_available = value_is_ct_available(
+        bool if_ct_available = value_is_ct_available(
             expr_value_is_ct_available(if_expr->condition) && if_expr->then_block->ct_available
                 && else_ct_available,
             expr->ty);
-        if (expr->runtime_evidence.has_value()) {
-            expr->ct_available = false;
+        if (if_runtime_evidence.has_value()) {
+            if_ct_available = false;
             if (!expr->ty.is_never())
                 expr->ty.is_runtime = true;
         }
+        tyir::set_availability(
+            *expr, tyir::availability_from_legacy(
+                       expr->ty, expr->span, if_ct_available, if_runtime_evidence));
         return expr;
     }
 
@@ -2481,7 +2481,9 @@ static void recompute_block_summary(tyir::TyBlock& block) {
             first_runtime_evidence(block.runtime_evidence, (*block.tail)->runtime_evidence);
     }
 
-    block.ct_available = value_is_ct_available(ct_available, block.ty);
+    tyir::set_availability(
+        block,
+        tyir::availability_from_legacy(block.ty, block.span, ct_available, block.runtime_evidence));
     apply_block_runtime_evidence(block);
 }
 
@@ -3818,10 +3820,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
         },
         expr->node);
     if (lowered.has_value()) {
-        lowered->expr->ct_available =
-            value_is_ct_available(lowered->expr->ct_available, lowered->expr->ty);
-        if (lowered->expr->runtime_evidence.has_value())
-            lowered->expr->ct_available = false;
+        tyir::refresh_availability(*lowered->expr);
         lowered->deferred_generic_probe_validation = ctx.defer_generic_probe_validation;
     }
     return lowered;
