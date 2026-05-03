@@ -175,7 +175,7 @@ fn distance(p: Point, q: Point) -> num {
 
 Expression and block lines include `[availability: const]` or
 `[availability: runtime]` in the default inspector output. The compact example
-focuses on tree shape and type annotations.
+below omits availability annotations to focus on tree shape and type annotations.
 
 ```
 TyProgram
