@@ -2830,7 +2830,7 @@ static void test_decl_generic_runtime_result_call_fails_after_substitution() {
         TyExternFnDecl{
             .abi = Symbol::intern("lang"),
             .name = constraint_fn,
-            .link_name = kInvalidSymbol,
+            .link_name = Symbol::intern("cstc_std_constraint"),
             .params = {TyParam{
                 Symbol::intern("value"), ty::bool_(), {}, ParamRequirement::RuntimeAllowed}},
             .return_ty = constraint_ty,
