@@ -286,6 +286,18 @@ static void test_unreachable_runtime_statement_does_not_taint_block() {
     assert(fn.body->availability.kind == AvailabilityKind::Ct);
 }
 
+static void test_resolved_block_tail_can_clear_runtime_projection() {
+    const auto prog = must_lower(
+        "fn make_default<T>() -> T { loop {} }"
+        "fn value() -> num { let result: num = { make_default() }; result }");
+    const auto& fn = second_fn(prog);
+    const auto& stmt = std::get<TyLetStmt>(fn.body->stmts[0]);
+    const auto& block = *std::get<TyBlockPtr>(stmt.init->node);
+    assert(block.ty == ty::num());
+    assert(is_ct_available(block));
+    assert(block.availability.kind == AvailabilityKind::Ct);
+}
+
 static void test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call() {
     must_fail_with_message(
         "runtime fn source() -> num { 1 }"
@@ -1570,6 +1582,7 @@ int main() {
     test_runtime_block_statement_taints_plain_result_function();
     test_runtime_statement_marks_unit_block_not_ct_available();
     test_unreachable_runtime_statement_does_not_taint_block();
+    test_resolved_block_tail_can_clear_runtime_projection();
     test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call();
     test_whole_term_runtime_work_accepts_runtime_result_contract();
     test_runtime_result_forwarded_param_does_not_count_as_hidden_work();

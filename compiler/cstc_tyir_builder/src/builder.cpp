@@ -2409,7 +2409,7 @@ struct ParamReferenceVisitor {
 
 static void recompute_block_summary(tyir::TyBlock& block) {
     bool reachable = true;
-    tyir::Availability availability = tyir::availability_from_type(block.ty, block.span);
+    tyir::Availability availability = tyir::availability_ct();
 
     for (const tyir::TyStmt& stmt : block.stmts) {
         if (!reachable)
@@ -3805,8 +3805,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                + sig.return_ty.display() + "'");
 
     if (fn.is_runtime) {
-        body->ty.is_runtime = true;
-        recompute_block_summary(*body);
+        tyir::set_availability(
+            *body, tyir::availability_join(tyir::availability_rt(), body->availability));
     }
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
