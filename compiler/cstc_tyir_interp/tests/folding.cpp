@@ -288,6 +288,9 @@ static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
 
     const TyExprPtr& tail = require_tail(find_fn(*folded, "main"));
     assert(tail->ty == ty::num(true));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    assert(tail->availability.evidence.has_value());
+    assert(tail->availability.evidence->reason == "runtime-result call");
     const TyCall& call = require_call(tail);
     assert(call.fn_name == Symbol::intern("id"));
     assert(call.generic_args.size() == 1);
