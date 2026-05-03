@@ -1473,6 +1473,14 @@ static void test_runtime_field_access_preserves_runtime_tag() {
     assert(fa.base->ty.is_runtime);
 }
 
+static void test_runtime_field_decl_rejects_ct_required_use() {
+    must_fail_with_message(
+        "struct Box { value: runtime num }"
+        "fn reserve(value: !runtime num) -> num { value }"
+        "fn f(box: Box) -> num { reserve(box.value) }",
+        "argument `value` must be compile-time available");
+}
+
 static void test_field_access_unknown_field_error() {
     must_fail(
         "struct Point { x: num }"
@@ -1713,6 +1721,7 @@ int main() {
     test_struct_init_missing_field_error();
     test_field_access();
     test_runtime_field_access_preserves_runtime_tag();
+    test_runtime_field_decl_rejects_ct_required_use();
     test_field_access_unknown_field_error();
     test_borrow_local_binding();
     test_borrow_runtime_field_binding();

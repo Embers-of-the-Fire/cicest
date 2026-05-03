@@ -2578,7 +2578,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 }
                 tyir::Ty lowered_field_ty =
                     propagate_runtime_tag(*field_ty, base->expr->ty.is_runtime);
-                const tyir::Availability field_availability = base->expr->availability;
+                const tyir::Availability field_availability = tyir::availability_join(
+                    base->expr->availability, tyir::availability_from_type(lowered_field_ty));
 
                 return LoweredPlace{
                     tyir::make_ty_expr(
