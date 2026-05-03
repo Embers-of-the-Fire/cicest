@@ -1376,7 +1376,8 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     rewritten.generic_args.push_back(apply_substitution(generic_arg, subst));
                 for (tyir::TyExprPtr& arg : rewritten.args)
                     arg = apply_substitution(arg, subst);
-                return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
+                return tyir::make_ty_expr(
+                    expr->span, std::move(rewritten), rewritten_ty, expr->availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
                 tyir::TyDeclProbe rewritten = node;
                 if (rewritten.expr.has_value())
@@ -1398,7 +1399,8 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                 for (tyir::TyExprPtr& arg : rewritten.args)
                     arg = apply_substitution(arg, subst);
                 if (!fully_resolved)
-                    return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
+                    return tyir::make_ty_expr(
+                        expr->span, std::move(rewritten), rewritten_ty, expr->availability);
 
                 std::vector<tyir::Ty> concrete_generic_args;
                 concrete_generic_args.reserve(rewritten.generic_args.size());
@@ -1411,7 +1413,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     tyir::TyCall{
                         rewritten.fn_name, std::move(concrete_generic_args),
                         std::move(rewritten.args)},
-                    rewritten_ty);
+                    rewritten_ty, expr->availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
                 return tyir::make_ty_expr(
                     expr->span, tyir::TyRuntimeBlock{apply_substitution(node.body, subst)},
@@ -3524,7 +3526,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 return maybe_fold_constant(
                     tyir::make_ty_expr(
                         expr->span, tyir::TyCall{node.fn_name, node.generic_args, std::move(args)},
-                        expr->ty),
+                        expr->ty, expr->availability),
                     program, env, generic_params);
             }
 
@@ -3555,7 +3557,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 return tyir::make_ty_expr(
                     expr->span,
                     tyir::TyDeferredGenericCall{node.fn_name, node.generic_args, std::move(args)},
-                    expr->ty);
+                    expr->ty, expr->availability);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {

@@ -141,6 +141,39 @@ static const EnumVariantRef& require_constraint_variant(const TyExprPtr& expr) {
     return std::get<EnumVariantRef>(expr->node);
 }
 
+static Ty generic_copy_ty(Symbol generic_name) {
+    return ty::named(generic_name, generic_name, ValueSemantics::Copy);
+}
+
+static Availability runtime_result_call_availability() {
+    return availability_rt(TyRuntimeEvidence{{}, "runtime-result call"});
+}
+
+static TyExprPtr make_num_expr(std::string_view value) {
+    return make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern(value), false}, ty::num());
+}
+
+static TyFnDecl make_generic_identity_fn(Symbol fn_name, Symbol generic_name, Symbol value_name) {
+    const Ty generic_ty = generic_copy_ty(generic_name);
+
+    TyBlock body;
+    body.ty = generic_ty;
+    body.tail = make_ty_expr({}, LocalRef{value_name}, generic_ty);
+
+    return TyFnDecl{
+        .name = fn_name,
+        .generic_params = {{generic_name, {}}},
+        .params = {TyParam{value_name, generic_ty, {}, ParamRequirement::RuntimeAllowed}},
+        .return_ty = generic_ty,
+        .body = std::make_shared<TyBlock>(std::move(body)),
+        .span = {},
+        .is_runtime = false,
+        .where_clause = {},
+        .lowered_where_clause = {},
+    };
+}
+
 struct DeclProbeRecheckCase {
     const char* folded_source;
     TyLiteral::Kind literal_kind;
@@ -221,6 +254,45 @@ fn main() -> runtime num {
     assert(call.fn_name == Symbol::intern("inc"));
     assert(call.args.size() == 1);
     assert(call.args[0]->ty == ty::num(true));
+}
+
+static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
+    SymbolSession session;
+    const Symbol id_name = Symbol::intern("id");
+    const Symbol generic_name = Symbol::intern("T");
+    const Symbol value_name = Symbol::intern("value");
+
+    TyProgram program;
+    program.items.push_back(make_generic_identity_fn(id_name, generic_name, value_name));
+
+    TyBlock main_body;
+    main_body.ty = ty::num(true);
+    main_body.tail = make_ty_expr(
+        {}, TyCall{id_name, {ty::num(true)}, {make_num_expr("1")}}, ty::num(true),
+        runtime_result_call_availability());
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(true),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyExprPtr& tail = require_tail(find_fn(*folded, "main"));
+    assert(tail->ty == ty::num(true));
+    const TyCall& call = require_call(tail);
+    assert(call.fn_name == Symbol::intern("id"));
+    assert(call.generic_args.size() == 1);
+    assert(call.args.size() == 1);
+    assert(call.args.front()->ty == ty::num());
 }
 
 static void test_runtime_block_folds_pure_inner_expression() {
@@ -2691,6 +2763,85 @@ fn main() -> num {
     assert(error.message.find("function 'id'") != std::string::npos);
 }
 
+static void test_decl_generic_runtime_result_call_fails_after_substitution() {
+    SymbolSession session;
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const Symbol constraint_fn = Symbol::intern("constraint");
+    const Symbol id_name = Symbol::intern("id");
+    const Symbol wrapper_name = Symbol::intern("wrapper");
+    const Symbol generic_name = Symbol::intern("T");
+    const Symbol value_name = Symbol::intern("value");
+    const Ty generic_ty = generic_copy_ty(generic_name);
+    const Ty constraint_ty = ty::named(constraint_name, constraint_name, ValueSemantics::Copy);
+
+    TyProgram program;
+    TyEnumDecl constraint_enum;
+    constraint_enum.name = constraint_name;
+    constraint_enum.lang_name = Symbol::intern("cstc_constraint");
+    constraint_enum.variants.push_back(TyEnumVariant{Symbol::intern("Valid"), std::nullopt, {}});
+    constraint_enum.variants.push_back(TyEnumVariant{Symbol::intern("Invalid"), std::nullopt, {}});
+    program.items.push_back(std::move(constraint_enum));
+    program.items.push_back(
+        TyExternFnDecl{
+            .abi = Symbol::intern("lang"),
+            .name = constraint_fn,
+            .link_name = kInvalidSymbol,
+            .params = {TyParam{
+                Symbol::intern("value"), ty::bool_(), {}, ParamRequirement::RuntimeAllowed}},
+            .return_ty = constraint_ty,
+            .span = {},
+            .is_runtime = false,
+        });
+    program.items.push_back(make_generic_identity_fn(id_name, generic_name, value_name));
+
+    auto make_inner_call = [&]() {
+        return make_ty_expr(
+            {}, TyCall{id_name, {generic_ty}, {make_num_expr("0")}}, generic_ty,
+            runtime_result_call_availability());
+    };
+    auto equality = make_ty_expr(
+        {}, TyBinary{cstc::ast::BinaryOp::Eq, make_inner_call(), make_inner_call()}, ty::bool_());
+    auto constraint_expr =
+        make_ty_expr({}, TyCall{constraint_fn, {}, {std::move(equality)}}, constraint_ty);
+
+    TyBlock wrapper_body;
+    wrapper_body.ty = ty::num();
+    wrapper_body.tail = make_num_expr("1");
+    program.items.push_back(
+        TyFnDecl{
+            .name = wrapper_name,
+            .generic_params = {{generic_name, {}}},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(wrapper_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {TyGenericConstraint{constraint_expr, {}}},
+        });
+
+    TyBlock main_body;
+    main_body.ty = ty::num();
+    main_body.tail = make_ty_expr({}, TyCall{wrapper_name, {ty::num(true)}, {}}, ty::num());
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("runtime-only behavior") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
 static void test_generic_where_runtime_loop_reports_runtime_only() {
     SymbolSession session;
     const auto error = must_fail_to_lower_with_constraint_prelude(R"(
@@ -2862,6 +3013,7 @@ int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
     test_plain_call_with_runtime_argument_remains_in_tyir();
+    test_runtime_result_call_with_ct_argument_remains_in_tyir();
     test_runtime_block_folds_pure_inner_expression();
     test_runtime_block_preserves_runtime_call_boundary();
     test_runtime_block_with_null_body_is_preserved();
@@ -2958,6 +3110,7 @@ int main() {
     test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();
     test_generic_where_runtime_call_reports_runtime_only();
+    test_decl_generic_runtime_result_call_fails_after_substitution();
     test_generic_where_runtime_loop_reports_runtime_only();
     test_generic_where_runtime_while_reports_runtime_only();
     test_unused_generic_where_is_deferred_until_instantiation();
