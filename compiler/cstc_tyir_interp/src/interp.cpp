@@ -265,6 +265,10 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
 
 [[nodiscard]] static bool stmt_can_fallthrough(const tyir::TyStmt& stmt);
 
+[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
+
+[[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
+
 [[nodiscard]] static tyir::Availability availability_of_expr(const tyir::TyExprPtr& expr) {
     return expr != nullptr ? expr->availability : tyir::availability_ct();
 }
@@ -364,17 +368,26 @@ static void recompute_expr_availability(tyir::TyExpr& expr) {
                 availability =
                     tyir::availability_join(availability, availability_of_block(node.body));
             } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
-                if (node.init.has_value())
+                bool reachable = true;
+                if (node.init.has_value() && reachable) {
                     availability = tyir::availability_join(
                         availability, availability_of_expr(node.init->init));
-                if (node.condition.has_value())
+                    reachable = expr_can_fallthrough(*node.init->init);
+                }
+                if (node.condition.has_value() && reachable) {
                     availability = tyir::availability_join(
                         availability, availability_of_expr(*node.condition));
-                if (node.step.has_value())
+                    reachable = expr_can_fallthrough(**node.condition);
+                }
+                const bool body_reachable = reachable;
+                if (body_reachable)
+                    availability =
+                        tyir::availability_join(availability, availability_of_block(node.body));
+                if (node.step.has_value() && body_reachable && node.body != nullptr
+                    && block_can_fallthrough(*node.body)) {
                     availability =
                         tyir::availability_join(availability, availability_of_expr(*node.step));
-                availability =
-                    tyir::availability_join(availability, availability_of_block(node.body));
+                }
             } else if constexpr (
                 std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>) {
                 if (node.value.has_value())
@@ -3229,8 +3242,6 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     const tyir::TyExprPtr& expr, ConstEnv& env, const ProgramView& program,
     const GenericParamSet& generic_params);
 
-[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
-
 [[nodiscard]] static bool stmt_can_fallthrough(const tyir::TyStmt& stmt) {
     return std::visit(
         [](const auto& node) {
@@ -3242,8 +3253,6 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
         },
         stmt);
 }
-
-[[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
 
 [[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr) {
     if (expr.ty.is_never())

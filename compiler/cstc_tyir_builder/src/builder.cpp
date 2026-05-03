@@ -3430,6 +3430,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 std::optional<tyir::TyForInit> lowered_init;
                 tyir::Availability for_availability = tyir::availability_ct();
+                bool for_segment_reachable = true;
 
                 if (node.init.has_value()) {
                     const auto& init_var = *node.init;
@@ -3500,8 +3501,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                                     + std::string(init_let->name.as_str()) + "'");
                         }
                         release_temp_borrows(ctx, init_expr->temp_borrows);
-                        for_availability = tyir::availability_join(
-                            for_availability, init_expr->expr->availability);
+                        if (for_segment_reachable) {
+                            for_availability = tyir::availability_join(
+                                for_availability, init_expr->expr->availability);
+                            for_segment_reachable = expr_can_fallthrough(*init_expr->expr);
+                        }
                         lowered_init = tyir::TyForInit{
                             init_let->discard, init_let->name, init_ty, std::move(init_expr->expr),
                             init_let->span};
@@ -3514,8 +3518,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             return std::unexpected(std::move(init_expr.error()));
                         }
                         release_temp_borrows(ctx, init_expr->temp_borrows);
-                        for_availability = tyir::availability_join(
-                            for_availability, init_expr->expr->availability);
+                        if (for_segment_reachable) {
+                            for_availability = tyir::availability_join(
+                                for_availability, init_expr->expr->availability);
+                            for_segment_reachable = expr_can_fallthrough(*init_expr->expr);
+                        }
                         // Treat as a discard init — wrap in TyForInit with discard=true
                         lowered_init = tyir::TyForInit{
                             true, cstc::symbol::kInvalidSymbol, init_expr->expr->ty,
@@ -3540,8 +3547,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 + cond->expr->ty.display() + "'");
                     }
                     release_temp_borrows(ctx, cond->temp_borrows);
-                    for_availability =
-                        tyir::availability_join(for_availability, cond->expr->availability);
+                    if (for_segment_reachable) {
+                        for_availability =
+                            tyir::availability_join(for_availability, cond->expr->availability);
+                        for_segment_reachable = expr_can_fallthrough(*cond->expr);
+                    }
                     lowered_cond = std::move(cond->expr);
                 }
 
@@ -3556,8 +3566,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 }
                 loop_ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
-                for_availability =
-                    tyir::availability_join(for_availability, body_ptr->availability);
+                const bool for_body_reachable = for_segment_reachable;
+                if (for_body_reachable)
+                    for_availability =
+                        tyir::availability_join(for_availability, body_ptr->availability);
 
                 std::optional<tyir::TyExprPtr> lowered_step;
                 if (node.step.has_value()) {
@@ -3567,8 +3579,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(step.error()));
                     }
                     release_temp_borrows(loop_ctx, step->temp_borrows);
-                    for_availability =
-                        tyir::availability_join(for_availability, step->expr->availability);
+                    if (for_body_reachable && block_can_fallthrough(*body_ptr))
+                        for_availability =
+                            tyir::availability_join(for_availability, step->expr->availability);
                     lowered_step = std::move(step->expr);
                 }
 

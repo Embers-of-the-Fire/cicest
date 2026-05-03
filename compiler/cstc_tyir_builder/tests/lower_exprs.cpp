@@ -652,6 +652,31 @@ static void test_runtime_for_condition_accepted() {
     assert(for_expr->ty == ty::unit(true));
 }
 
+static void test_for_unreachable_step_does_not_taint_plain_result() {
+    const auto prog = must_lower("fn f() -> num { for (;; runtime { 1 }) { break; }; 0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.availability.kind == AvailabilityKind::Ct);
+    assert(body.tail.has_value());
+    assert((*body.tail)->ty == ty::num());
+}
+
+static void test_for_diverging_init_skips_later_runtime_segments() {
+    const auto prog = must_lower(
+        "fn f() -> num { for (return 1; runtime { true }; runtime { 2 }) { runtime { 3 }; }; "
+        "0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
+static void test_for_diverging_condition_skips_body_and_step_availability() {
+    const auto prog =
+        must_lower("fn f() -> num { for (; return 1; runtime { 2 }) { runtime { 3 }; }; 0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
 static void test_break_and_continue_are_never() {
     const auto prog = must_lower("fn f() { loop { break; continue; } }");
     // loop is the tail of the outer block
@@ -1631,6 +1656,9 @@ int main() {
     test_runtime_while_condition_accepted();
     test_for_loop();
     test_runtime_for_condition_accepted();
+    test_for_unreachable_step_does_not_taint_plain_result();
+    test_for_diverging_init_skips_later_runtime_segments();
+    test_for_diverging_condition_skips_body_and_step_availability();
     test_break_and_continue_are_never();
     test_return_is_never();
     test_runtime_return_payload_marks_body_not_ct_available();

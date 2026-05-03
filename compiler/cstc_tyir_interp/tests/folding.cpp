@@ -480,6 +480,23 @@ fn choose(value: num) -> num {
     assert(is_ct_available(*choose.body));
 }
 
+static void test_folded_for_recomputes_availability_with_reachability() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn main() -> num {
+    for (return 1; runtime { true }; runtime { 2 }) { runtime { 3 }; };
+    0
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    assert(main_fn.body != nullptr);
+    assert(!main_fn.body->stmts.empty());
+    const auto& for_stmt = std::get<TyExprStmt>(main_fn.body->stmts[0]);
+    assert(is_ct_available(*for_stmt.expr));
+    assert(is_ct_available(*main_fn.body));
+}
+
 static void test_decl_generic_ct_block_argument_rechecks_availability_after_substitution() {
     SymbolSession session;
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
@@ -3020,6 +3037,7 @@ int main() {
     test_runtime_block_stmt_with_null_body_still_falls_through();
     test_plain_type_runtime_availability_is_preserved();
     test_folded_if_recomputes_availability_after_erasing_runtime_branch();
+    test_folded_for_recomputes_availability_with_reachability();
     test_decl_generic_ct_block_argument_rechecks_availability_after_substitution();
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
     test_move_only_local_and_borrow_can_fold();
