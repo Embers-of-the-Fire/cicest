@@ -364,6 +364,29 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
     assert(fn.body->ty.is_runtime);
 }
 
+static void test_runtime_allowed_param_marks_body_runtime_without_evidence() {
+    const auto prog = must_lower("fn echo(value: num) -> runtime num { value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.body->ty == ty::num(true));
+    assert(fn.body->availability.kind == AvailabilityKind::Rt);
+    assert(!fn.body->availability.evidence.has_value());
+    assert(fn.body->tail.has_value());
+    assert((*fn.body->tail)->availability.kind == AvailabilityKind::Rt);
+    assert(!(*fn.body->tail)->availability.evidence.has_value());
+}
+
+static void test_runtime_typed_param_records_runtime_parameter_evidence() {
+    const auto prog = must_lower("struct Job; fn echo(job: runtime Job) -> runtime Job { job }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.body->availability.kind == AvailabilityKind::Rt);
+    assert(fn.body->availability.evidence.has_value());
+    assert(fn.body->availability.evidence->reason == "runtime parameter");
+    assert(fn.body->tail.has_value());
+    assert((*fn.body->tail)->availability.evidence.has_value());
+    assert((*fn.body->tail)->availability.evidence->reason == "runtime parameter");
+}
+
 static void test_ct_required_param_requirement_is_preserved() {
     const auto prog = must_lower("fn reserve(count: !runtime num) -> num { count }");
     const auto& fn = std::get<TyFnDecl>(prog.items[0]);
@@ -997,6 +1020,8 @@ int main() {
     test_fn_ref_return_rejected();
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
+    test_runtime_allowed_param_marks_body_runtime_without_evidence();
+    test_runtime_typed_param_records_runtime_parameter_evidence();
     test_ct_required_param_requirement_is_preserved();
     test_ct_required_param_rejects_runtime_argument();
     test_ct_required_param_rejects_runtime_block_argument();

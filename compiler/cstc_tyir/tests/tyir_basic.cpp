@@ -70,6 +70,20 @@ static void test_runtime_ty() {
     assert(borrowed_runtime_handle != ty::ref(ty::named(handle)));
 }
 
+static void test_availability_from_type_detects_nested_runtime_tags() {
+    const Symbol box = Symbol::intern("Box");
+    const Ty plain_box = ty::named(box, kInvalidSymbol, ValueSemantics::Move, false, {ty::num()});
+    const Ty borrowed_runtime_box =
+        ty::ref(ty::named(box, kInvalidSymbol, ValueSemantics::Move, false, {ty::num(true)}));
+
+    assert(!ty_contains_runtime_tag(plain_box));
+    assert(ty_contains_runtime_tag(borrowed_runtime_box));
+
+    const Availability availability = availability_from_type(borrowed_runtime_box);
+    assert(availability.kind == AvailabilityKind::Rt);
+    assert(!availability.evidence.has_value());
+}
+
 static void test_availability_join_preserves_first_evidence() {
     const Availability ct = availability_ct();
     const Availability runtime_from_type = availability_from_type(ty::num(true));
@@ -222,6 +236,7 @@ int main() {
     test_ty_named();
     test_ty_named_with_generic_args();
     test_runtime_ty();
+    test_availability_from_type_detects_nested_runtime_tags();
     test_availability_join_preserves_first_evidence();
     test_availability_projection();
     test_set_availability_projects_type();

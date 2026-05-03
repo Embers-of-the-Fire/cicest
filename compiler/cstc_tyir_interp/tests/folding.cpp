@@ -309,7 +309,13 @@ fn main() -> runtime num {
     const TyExprPtr& tail = require_tail(find_fn(program, "main"));
     const auto& runtime_block = std::get<TyRuntimeBlock>(tail->node);
     assert(tail->ty == ty::num(true));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    assert(tail->availability.evidence.has_value());
+    assert(tail->availability.evidence->reason == "runtime block");
+    assert(!is_ct_available(*tail));
+    assert(is_ct_available(*runtime_block.body));
     assert(runtime_block.body->tail.has_value());
+    assert(is_ct_available(*runtime_block.body->tail));
     const TyLiteral& literal = require_literal(*runtime_block.body->tail);
     assert(literal.kind == TyLiteral::Kind::Num);
     assert(literal.symbol.as_str() == std::string_view{"3"});

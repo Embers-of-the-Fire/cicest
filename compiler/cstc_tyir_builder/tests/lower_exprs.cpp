@@ -573,7 +573,10 @@ static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if x { 
 static void test_runtime_if_condition_accepted() {
     const auto prog = must_lower(
         "fn f() -> runtime num { if flag() { 1 } else { 2 } } runtime fn flag() -> bool { true }");
-    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num(true));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    assert(tail->availability.evidence.has_value());
 }
 
 static void test_if_else_runtime_join_produces_runtime_type() {
@@ -626,6 +629,8 @@ static void test_runtime_while_condition_accepted() {
     const auto& while_expr = *first_fn(prog).body->tail;
     assert(std::holds_alternative<TyWhile>(while_expr->node));
     assert(while_expr->ty == ty::unit(true));
+    assert(while_expr->availability.kind == AvailabilityKind::Rt);
+    assert(while_expr->availability.evidence.has_value());
 }
 
 static void test_for_loop() {
@@ -666,6 +671,8 @@ static void test_runtime_for_condition_accepted() {
     const auto& for_expr = *first_fn(prog).body->tail;
     assert(std::holds_alternative<TyFor>(for_expr->node));
     assert(for_expr->ty == ty::unit(true));
+    assert(for_expr->availability.kind == AvailabilityKind::Rt);
+    assert(for_expr->availability.evidence.has_value());
 }
 
 static void test_for_unreachable_step_does_not_taint_plain_result() {
