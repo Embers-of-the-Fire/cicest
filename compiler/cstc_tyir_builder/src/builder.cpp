@@ -338,6 +338,16 @@ using TypeSubstitution =
     return tyir::is_ct_available(expr);
 }
 
+[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
+
+[[nodiscard]] static bool exprs_can_fallthrough(const std::vector<tyir::TyExprPtr>& exprs) {
+    for (const tyir::TyExprPtr& expr : exprs) {
+        if (expr != nullptr && !expr_can_fallthrough(*expr))
+            return false;
+    }
+    return true;
+}
+
 [[nodiscard]] static bool
     call_argument_compatible(const tyir::Ty& actual, const tyir::Ty& expected) {
     return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
@@ -355,6 +365,8 @@ using TypeSubstitution =
 
 [[nodiscard]] static tyir::Ty
     lift_call_result_type(tyir::Ty result_ty, const std::vector<tyir::TyExprPtr>& args) {
+    if (!exprs_can_fallthrough(args))
+        return erase_runtime_qualifiers(result_ty);
     if (type_has_runtime_dependency(result_ty))
         result_ty.is_runtime = true;
     for (const tyir::TyExprPtr& arg : args) {
@@ -906,6 +918,8 @@ struct LowerCtx {
     call_result_type(tyir::Ty result_shape, const std::vector<tyir::TyExprPtr>& args) {
     if (result_shape.is_never())
         return result_shape;
+    if (!exprs_can_fallthrough(args))
+        return erase_runtime_qualifiers(result_shape);
     for (const tyir::TyExprPtr& arg : args) {
         if (arg != nullptr && type_has_runtime_dependency(arg->ty)) {
             result_shape.is_runtime = true;
@@ -1354,9 +1368,36 @@ struct LoweredExpr {
 [[nodiscard]] static tyir::Availability
     availability_from_exprs(const std::vector<tyir::TyExprPtr>& exprs) {
     tyir::Availability availability = tyir::availability_ct();
+    bool reachable = true;
     for (const tyir::TyExprPtr& expr : exprs) {
-        if (expr != nullptr)
-            availability = tyir::availability_join(availability, expr->availability);
+        if (expr == nullptr)
+            continue;
+        if (!reachable)
+            break;
+        availability = tyir::availability_join(availability, expr->availability);
+        reachable = expr_can_fallthrough(*expr);
+    }
+    return availability;
+}
+
+[[nodiscard]] static tyir::Availability availability_from_reached_call(
+    const std::vector<tyir::TyExprPtr>& args, cstc::span::SourceSpan span,
+    bool result_has_runtime_dependency) {
+    tyir::Availability availability = availability_from_exprs(args);
+    if (result_has_runtime_dependency && exprs_can_fallthrough(args)) {
+        availability = tyir::availability_join(
+            availability, runtime_availability_at(span, "runtime-result call"));
+    }
+    return availability;
+}
+
+[[nodiscard]] static tyir::Availability
+    availability_from_reached_binary(const tyir::TyExprPtr& lhs, const tyir::TyExprPtr& rhs) {
+    tyir::Availability availability = tyir::availability_ct();
+    if (lhs != nullptr) {
+        availability = tyir::availability_join(availability, lhs->availability);
+        if (expr_can_fallthrough(*lhs) && rhs != nullptr)
+            availability = tyir::availability_join(availability, rhs->availability);
     }
     return availability;
 }
@@ -1409,8 +1450,6 @@ struct LoweredPlace {
 
 [[nodiscard]] static std::expected<tyir::TyBlock, LowerError>
     lower_block(const ast::BlockExpr& block, LowerCtx& ctx);
-
-[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
 
 [[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
 
@@ -1905,11 +1944,8 @@ struct ParamReferenceVisitor {
     const tyir::Ty resolved_return_shape =
         annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env);
     const tyir::Ty resolved_return_ty = call_result_type(resolved_return_shape, deferred->args);
-    tyir::Availability deferred_call_availability = availability_from_exprs(deferred->args);
-    if (type_has_runtime_dependency(resolved_return_shape)) {
-        deferred_call_availability = tyir::availability_join(
-            deferred_call_availability, runtime_availability_at(expr->span, "runtime-result call"));
-    }
+    tyir::Availability deferred_call_availability = availability_from_reached_call(
+        deferred->args, expr->span, type_has_runtime_dependency(resolved_return_shape));
     if (!fully_resolved) {
         return tyir::make_ty_expr(
             expr->span,
@@ -1947,11 +1983,8 @@ struct ParamReferenceVisitor {
     }
 
     const tyir::Ty lifted_return_ty = lift_call_result_type(resolved_return_ty, resolved_args);
-    tyir::Availability call_availability = availability_from_exprs(resolved_args);
-    if (type_has_runtime_dependency(resolved_return_shape)) {
-        call_availability = tyir::availability_join(
-            call_availability, runtime_availability_at(expr->span, "runtime-result call"));
-    }
+    tyir::Availability call_availability = availability_from_reached_call(
+        resolved_args, expr->span, type_has_runtime_dependency(resolved_return_shape));
 
     return tyir::make_ty_expr(
         expr->span,
@@ -2749,6 +2782,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 seen_fields.reserve(node.fields.size());
                 tyir::Availability fields_availability = tyir::availability_ct();
                 bool fields_have_runtime_dependency = false;
+                bool fields_reachable = true;
 
                 for (const ast::StructInitField& field : node.fields) {
                     auto expected_ty = ctx.env.field_ty(type_name, field.name);
@@ -2782,10 +2816,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                             + "', found '" + val->expr->ty.display() + "'");
 
                     append_temp_borrows(temp_borrows, std::move(val->temp_borrows));
-                    fields_availability =
-                        tyir::availability_join(fields_availability, val->expr->availability);
-                    fields_have_runtime_dependency = fields_have_runtime_dependency
-                                                  || type_has_runtime_dependency(val->expr->ty);
+                    if (fields_reachable) {
+                        fields_availability =
+                            tyir::availability_join(fields_availability, val->expr->availability);
+                        fields_have_runtime_dependency |=
+                            type_has_runtime_dependency(val->expr->ty);
+                        fields_reachable = expr_can_fallthrough(*val->expr);
+                    }
 
                     lowered_fields.push_back(
                         tyir::TyStructInitField{field.name, std::move(val->expr), field.span});
@@ -2990,7 +3027,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     break;
                 }
                 const tyir::Availability binary_availability =
-                    tyir::availability_join(lhs->expr->availability, rhs->expr->availability);
+                    availability_from_reached_binary(lhs->expr, rhs->expr);
                 auto lowered = LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span,
@@ -3180,12 +3217,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                     const tyir::Ty lifted_return_ty =
                         lift_call_result_type(resolved_return_ty, lowered_args);
-                    tyir::Availability call_availability = availability_from_exprs(lowered_args);
-                    if (type_has_runtime_dependency(resolved_return_shape)) {
-                        call_availability = tyir::availability_join(
-                            call_availability,
-                            runtime_availability_at(expr->span, "runtime-result call"));
-                    }
+                    tyir::Availability call_availability = availability_from_reached_call(
+                        lowered_args, expr->span,
+                        type_has_runtime_dependency(resolved_return_shape));
 
                     lowered_expr = tyir::make_ty_expr(
                         expr->span,
@@ -3195,12 +3229,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 } else {
                     const tyir::Ty lifted_return_ty =
                         lift_call_result_type(resolved_return_ty, lowered_args);
-                    tyir::Availability call_availability = availability_from_exprs(lowered_args);
-                    if (type_has_runtime_dependency(resolved_return_shape)) {
-                        call_availability = tyir::availability_join(
-                            call_availability,
-                            runtime_availability_at(expr->span, "runtime-result call"));
-                    }
+                    tyir::Availability call_availability = availability_from_reached_call(
+                        lowered_args, expr->span,
+                        type_has_runtime_dependency(resolved_return_shape));
                     lowered_expr = tyir::make_ty_expr(
                         expr->span,
                         tyir::TyDeferredGenericCall{

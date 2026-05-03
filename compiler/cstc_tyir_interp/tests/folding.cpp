@@ -497,6 +497,34 @@ fn main() -> num {
     assert(is_ct_available(*main_fn.body));
 }
 
+static void test_folded_operands_recompute_availability_with_reachability() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+runtime fn source(left: num, right: num) -> num {
+    right
+}
+
+struct Pair { left: num, right: num }
+
+fn call_case() -> num {
+    source((return 1), runtime { 2 })
+}
+
+fn binary_case() -> num {
+    (return 1) + runtime { 2 }
+}
+
+fn struct_case() -> num {
+    Pair { left: return 1, right: runtime { 2 } };
+    0
+}
+)");
+
+    assert(is_ct_available(*find_fn(program, "call_case").body));
+    assert(is_ct_available(*find_fn(program, "binary_case").body));
+    assert(is_ct_available(*find_fn(program, "struct_case").body));
+}
+
 static void test_decl_generic_ct_block_argument_rechecks_availability_after_substitution() {
     SymbolSession session;
     const auto error = must_fail_to_fold_with_constraint_prelude(R"(
@@ -3038,6 +3066,7 @@ int main() {
     test_plain_type_runtime_availability_is_preserved();
     test_folded_if_recomputes_availability_after_erasing_runtime_branch();
     test_folded_for_recomputes_availability_with_reachability();
+    test_folded_operands_recompute_availability_with_reachability();
     test_decl_generic_ct_block_argument_rechecks_availability_after_substitution();
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
     test_move_only_local_and_borrow_can_fold();

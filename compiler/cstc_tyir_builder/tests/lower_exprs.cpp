@@ -176,6 +176,13 @@ static void test_arithmetic() {
 
 static void test_arithmetic_type_error() { must_fail("fn f(x: bool) -> num { x + 1 }"); }
 
+static void test_binary_unreachable_rhs_does_not_taint_plain_result() {
+    const auto prog = must_lower("fn f() -> num { (return 1) + runtime { 2 } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
 // ─── Comparison operators ─────────────────────────────────────────────────────
 
 static void test_comparisons() {
@@ -247,6 +254,15 @@ static void test_plain_call_lifted_result_still_prevents_return_demotion() {
         "fn sink(value: num) -> num { value }"
         "fn main() -> num { sink(source()) }",
         "runtime dependence not reflected in its return type");
+}
+
+static void test_call_unreachable_arg_does_not_taint_plain_result() {
+    const auto prog = must_lower(
+        "runtime fn source(left: num, right: num) -> num { right }"
+        "fn f() -> num { source((return 1), runtime { 2 }) }");
+    const auto& body = *second_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
 }
 
 static void test_unused_runtime_let_taints_plain_result_function() {
@@ -1389,6 +1405,15 @@ static void test_struct_init_lifts_runtime_field() {
     assert(init.fields[1].value->ty == ty::num());
 }
 
+static void test_struct_init_unreachable_field_does_not_taint_plain_result() {
+    const auto prog = must_lower(
+        "struct Pair { left: num, right: num }"
+        "fn f() -> num { Pair { left: return 1, right: runtime { 2 } }; 0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
 static void test_generic_struct_init() {
     const auto prog = must_lower(
         "struct Box<T> { value: T }"
@@ -1603,6 +1628,7 @@ int main() {
     test_undefined_variable_error();
     test_arithmetic();
     test_arithmetic_type_error();
+    test_binary_unreachable_rhs_does_not_taint_plain_result();
     test_comparisons();
     test_equality();
     test_equality_type_mismatch_error();
@@ -1610,6 +1636,7 @@ int main() {
     test_runtime_argument_promotion();
     test_plain_call_accepts_runtime_argument_and_lifts_result();
     test_plain_call_lifted_result_still_prevents_return_demotion();
+    test_call_unreachable_arg_does_not_taint_plain_result();
     test_unused_runtime_let_taints_plain_result_function();
     test_runtime_expression_statement_taints_plain_result_function();
     test_runtime_block_statement_taints_plain_result_function();
@@ -1738,6 +1765,7 @@ int main() {
     test_unknown_variant_error();
     test_struct_init();
     test_struct_init_lifts_runtime_field();
+    test_struct_init_unreachable_field_does_not_taint_plain_result();
     test_generic_struct_init();
     test_generic_struct_specialization_tracks_move_semantics();
     test_generic_struct_specialization_keeps_copy_semantics();

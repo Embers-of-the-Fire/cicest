@@ -323,9 +323,14 @@ static void recompute_expr_availability(tyir::TyExpr& expr) {
                 || std::is_same_v<Node, tyir::TyContinue>) {
                 availability = tyir::availability_join(availability, expr.availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
-                for (const tyir::TyStructInitField& field : node.fields)
+                bool reachable = true;
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    if (!reachable)
+                        break;
                     availability =
                         tyir::availability_join(availability, availability_of_expr(field.value));
+                    reachable = field.value == nullptr || expr_can_fallthrough(*field.value);
+                }
             } else if constexpr (
                 std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
                 availability =
@@ -333,17 +338,26 @@ static void recompute_expr_availability(tyir::TyExpr& expr) {
             } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
                 availability =
                     tyir::availability_join(availability, availability_of_expr(node.lhs));
-                availability =
-                    tyir::availability_join(availability, availability_of_expr(node.rhs));
+                if (node.lhs != nullptr && expr_can_fallthrough(*node.lhs))
+                    availability =
+                        tyir::availability_join(availability, availability_of_expr(node.rhs));
             } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
                 availability =
                     tyir::availability_join(availability, availability_of_expr(node.base));
             } else if constexpr (
                 std::is_same_v<Node, tyir::TyCall>
                 || std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
-                availability = tyir::availability_join(availability, expr.availability);
-                for (const tyir::TyExprPtr& arg : node.args)
+                bool reachable = true;
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (arg == nullptr)
+                        continue;
+                    if (!reachable)
+                        break;
                     availability = tyir::availability_join(availability, availability_of_expr(arg));
+                    reachable = expr_can_fallthrough(*arg);
+                }
+                if (reachable)
+                    availability = tyir::availability_join(availability, expr.availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
                 availability =
                     tyir::availability_join(availability, runtime_block_availability(expr.span));
