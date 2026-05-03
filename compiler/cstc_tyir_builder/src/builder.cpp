@@ -504,9 +504,9 @@ public:
             locals_.at(*borrowed_local).active_borrows += 1;
 
         const std::size_t index = locals_.size();
-        const tyir::Availability stored_availability =
-            tyir::availability_join(tyir::availability_from_type(ty), availability);
-        locals_.push_back(LocalState{std::move(ty), false, 0, borrowed_local, stored_availability});
+        if (tyir::is_ct_available(availability))
+            ty = erase_runtime_qualifiers(ty);
+        locals_.push_back(LocalState{std::move(ty), false, 0, borrowed_local, availability});
         frames_.back().bindings.emplace(name, index);
         return true;
     }

@@ -425,6 +425,21 @@ static void test_ct_required_param_rejects_forwarded_runtime_allowed_local() {
         "argument `count` must be compile-time available");
 }
 
+static void test_ct_required_param_forwards_ct_required_runtime_projection() {
+    const auto prog = must_lower(
+        "struct Box<T> { value: T }"
+        "fn inner(box: !runtime Box<runtime num>) -> num { box.value }"
+        "fn outer(box: !runtime Box<runtime num>) -> num { inner(box) }");
+    const auto& outer = std::get<TyFnDecl>(prog.items[2]);
+    const auto& call = std::get<TyCall>((*outer.body->tail)->node);
+    assert(call.args.size() == 1);
+    assert(call.args[0]->availability.kind == AvailabilityKind::Ct);
+    assert(
+        call.args[0]->ty
+        == ty::named(
+            Symbol::intern("Box"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()}));
+}
+
 static void test_ct_required_let_annotation_rejects_runtime_allowed_param() {
     must_fail_with_message(
         "fn wrap(count: num) -> num { let forwarded: const num = count; forwarded }",
@@ -989,6 +1004,7 @@ int main() {
     test_ct_required_param_rejects_forwarded_runtime_allowed_param();
     test_ct_required_param_rejects_invalid_name_with_argument_number();
     test_ct_required_param_rejects_forwarded_runtime_allowed_local();
+    test_ct_required_param_forwards_ct_required_runtime_projection();
     test_ct_required_let_annotation_rejects_runtime_allowed_param();
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();
