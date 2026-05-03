@@ -98,6 +98,26 @@ static void test_availability_projection() {
     assert(with_availability_projection(ty::never(), availability_rt()) == ty::never());
 }
 
+static void test_set_availability_projects_type() {
+    const TyExprPtr expr = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("1"), false}, ty::num(),
+        availability_rt());
+    assert(expr->ty == ty::num(true));
+    assert(expr->availability.kind == AvailabilityKind::Rt);
+    set_availability(*expr, availability_ct());
+    assert(expr->ty == ty::num());
+    assert(expr->availability.kind == AvailabilityKind::Ct);
+
+    TyBlock block;
+    block.ty = ty::unit();
+    set_availability(block, availability_rt());
+    assert(block.ty == ty::unit(true));
+    assert(block.availability.kind == AvailabilityKind::Rt);
+    set_availability(block, availability_ct());
+    assert(block.ty == ty::unit());
+    assert(block.availability.kind == AvailabilityKind::Ct);
+}
+
 static void test_named_shape_distinguishes_nominal_types() {
     const Symbol point = Symbol::intern("Point");
     const Symbol color = Symbol::intern("Color");
@@ -204,6 +224,7 @@ int main() {
     test_runtime_ty();
     test_availability_join_preserves_first_evidence();
     test_availability_projection();
+    test_set_availability_projects_type();
     test_named_shape_distinguishes_nominal_types();
     test_ty_equality_distinguishes_value_semantics();
     test_make_literal();

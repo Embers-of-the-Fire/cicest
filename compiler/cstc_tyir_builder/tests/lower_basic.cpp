@@ -318,10 +318,10 @@ static void test_fn_with_params_and_return() {
     assert(fn.params[1].name == Symbol::intern("y"));
     assert(fn.params[1].ty == ty::num());
 
-    // Body should have a tail of type num
-    assert(fn.body->ty == ty::num());
+    // Body is runtime-available because ordinary parameters may be runtime inputs.
+    assert(fn.body->ty == ty::num(true));
     assert(fn.body->tail.has_value());
-    assert((*fn.body->tail)->ty == ty::num());
+    assert((*fn.body->tail)->ty == ty::num(true));
 }
 
 static void test_fn_bool_return() {
@@ -428,7 +428,7 @@ static void test_ct_required_param_rejects_forwarded_runtime_allowed_local() {
 static void test_ct_required_let_annotation_rejects_runtime_allowed_param() {
     must_fail_with_message(
         "fn wrap(count: num) -> num { let forwarded: const num = count; forwarded }",
-        "let binding must be compile-time available: expected 'const num', found 'num'");
+        "let binding must be compile-time available: expected 'const num', found 'runtime num'");
 }
 
 static void test_fn_preserves_generic_metadata() {
@@ -471,13 +471,13 @@ static void test_fn_decl_where_clause_allows_parameter_references_in_decl_probe(
 static void test_decl_probe_does_not_relax_matching_body_checks() {
     must_fail_with_constraint_prelude(
         "fn bad<T>(value: T) -> num where decl(value) { value }",
-        "function 'bad' body type mismatch: expected 'num', found 'T'");
+        "function 'bad' body type mismatch: expected 'num', found 'runtime T'");
 }
 
 static void test_decl_probe_inside_disjunction_does_not_relax_matching_body_checks() {
     must_fail_with_constraint_prelude(
         "fn bad<T>(a: T) -> T where true || decl(a + a) { a + a }",
-        "arithmetic operator requires 'num' on left, found 'T'");
+        "arithmetic operator requires 'num' on left, found 'runtime T'");
 }
 
 static void test_struct_where_clause_rejects_return() {
@@ -618,7 +618,8 @@ static void test_decl_probe_keeps_ref_shape_arithmetic_invalid() {
     assert(probe.is_invalid);
     assert(!probe.expr.has_value());
     assert(probe.invalid_reason.has_value());
-    assert(*probe.invalid_reason == "arithmetic operator requires 'num' on left, found '&T'");
+    assert(
+        *probe.invalid_reason == "arithmetic operator requires 'num' on left, found 'runtime &T'");
 }
 
 static void test_decl_probe_defers_generic_let_annotation_validation() {
@@ -664,7 +665,7 @@ static void test_decl_probe_defers_generic_if_join_during_expected_type_resoluti
     const auto& call = std::get<TyCall>((*probe.expr)->node);
     assert(call.fn_name == Symbol::intern("id_num"));
     assert(call.args.size() == 1);
-    assert(call.args[0]->ty == ty::num());
+    assert(call.args[0]->ty == ty::num(true));
     assert(std::holds_alternative<TyIf>(call.args[0]->node));
 }
 
@@ -684,7 +685,7 @@ static void test_decl_probe_reannotates_deferred_generic_if_join_semantics() {
     assert(
         joined.ty
         == ty::named(
-            Symbol::intern("Wrapper"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()}));
+            Symbol::intern("Wrapper"), kInvalidSymbol, ValueSemantics::Copy, true, {ty::num()}));
 }
 
 static void test_decl_probe_rejects_conflicting_generic_let_annotation_bindings() {
@@ -779,7 +780,8 @@ static void test_decl_probe_does_not_drive_if_branch_join_inference() {
 
 static void test_decl_probe_does_not_relax_unrelated_body_checks() {
     must_fail_with_message(
-        "fn f<T>(a: T) -> bool where decl(1 + 1) { !a }", "unary '!' requires 'bool', found 'T'");
+        "fn f<T>(a: T) -> bool where decl(1 + 1) { !a }",
+        "unary '!' requires 'bool', found 'runtime T'");
 }
 
 static void test_decl_runtime_use_is_rejected() {
@@ -814,7 +816,7 @@ static void test_runtime_return_annotation_accepts_plain_value() {
 static void test_runtime_return_type_mismatch_rejected() {
     must_fail_with_message(
         "struct Job; fn unwrap(job: runtime Job) -> Job { job }",
-        "body type mismatch: expected 'Job', found 'runtime Job'");
+        "body has runtime dependence not reflected in its return type");
 }
 
 static void test_runtime_main_return_allowed() {

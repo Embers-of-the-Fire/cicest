@@ -368,7 +368,7 @@ fn main() {
     assert(main_fn->body != nullptr);
     auto runtime_unit = make_ty_expr(
         {}, TyLiteral{TyLiteral::Kind::Unit, kInvalidSymbol, false}, ty::unit(), availability_rt());
-    assert(runtime_unit->ty == ty::unit());
+    assert(runtime_unit->ty == ty::unit(true));
     assert(runtime_unit->availability.kind == AvailabilityKind::Rt);
     main_fn->body->stmts.insert(
         main_fn->body->stmts.begin(), TyExprStmt{std::move(runtime_unit), {}});
@@ -380,7 +380,7 @@ fn main() {
     assert(folded_main.body != nullptr);
     assert(folded_main.body->stmts.size() == 2);
     const auto& runtime_stmt = std::get<TyExprStmt>(folded_main.body->stmts[0]);
-    assert(runtime_stmt.expr->ty == ty::unit());
+    assert(runtime_stmt.expr->ty == ty::unit(true));
     assert(!is_ct_available(*runtime_stmt.expr));
     assert(runtime_stmt.expr->availability.kind == AvailabilityKind::Rt);
     assert(std::holds_alternative<TyLiteral>(runtime_stmt.expr->node));

@@ -711,7 +711,7 @@ static void test_print_availability_summary() {
     prog.items.push_back(std::move(fn));
 
     const std::string out = format_program(prog);
-    assert(contains(out, "TyBlock: num [availability: runtime]"));
+    assert(contains(out, "TyBlock: runtime num [availability: runtime]"));
     assert(contains(out, "TyRuntimeBlock: runtime num [availability: runtime]"));
     assert(contains(out, "TyLiteral(3): num [availability: const]"));
 }

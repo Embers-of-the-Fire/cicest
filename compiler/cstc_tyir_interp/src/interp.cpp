@@ -12,7 +12,6 @@ namespace cstc::tyir_interp::detail {
 using tyir::common_type;
 using tyir::compatible;
 using tyir::matches_type_shape;
-using tyir::type_has_runtime_dependency;
 
 ValuePtr make_num(double value) {
     auto out = std::make_shared<Value>();
@@ -261,7 +260,7 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
 
 [[nodiscard]] static bool has_concrete_runtime_barrier(const tyir::TyExpr& expr) {
     return expr.availability.kind == tyir::AvailabilityKind::Rt
-        && (expr.availability.evidence.has_value() || type_has_runtime_dependency(expr.ty));
+        && expr.availability.evidence.has_value();
 }
 
 [[nodiscard]] static bool stmt_can_fallthrough(const tyir::TyStmt& stmt);
@@ -309,7 +308,7 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
 }
 
 static void recompute_expr_availability(tyir::TyExpr& expr) {
-    tyir::Availability availability = tyir::availability_from_type(expr.ty, expr.span);
+    tyir::Availability availability = tyir::availability_ct();
 
     std::visit(
         [&](const auto& node) {
@@ -338,6 +337,7 @@ static void recompute_expr_availability(tyir::TyExpr& expr) {
             } else if constexpr (
                 std::is_same_v<Node, tyir::TyCall>
                 || std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                availability = tyir::availability_join(availability, expr.availability);
                 for (const tyir::TyExprPtr& arg : node.args)
                     availability = tyir::availability_join(availability, availability_of_expr(arg));
             } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
@@ -389,7 +389,7 @@ static void recompute_expr_availability(tyir::TyExpr& expr) {
 
 static void recompute_block_availability(tyir::TyBlock& block) {
     bool reachable = true;
-    tyir::Availability availability = tyir::availability_from_type(block.ty, block.span);
+    tyir::Availability availability = tyir::availability_ct();
 
     for (const tyir::TyStmt& stmt : block.stmts) {
         if (!reachable)
@@ -2099,9 +2099,12 @@ ConstraintEvalResult evaluate_constraint(
                             [&](const auto& stmt_node) -> ConstraintEvalResult {
                                 using StmtNode = std::decay_t<decltype(stmt_node)>;
                                 if constexpr (std::is_same_v<StmtNode, tyir::TyLetStmt>) {
-                                    if (!compatible(stmt_node.init->ty, stmt_node.ty)) {
-                                        if (auto unresolved = unresolved_compatibility_check(
-                                                stmt_node.init->ty, stmt_node.ty, generic_params);
+                                    if (!call_argument_compatible(
+                                            stmt_node.init->ty, stmt_node.ty)) {
+                                        if (auto unresolved =
+                                                unresolved_call_argument_compatibility_check(
+                                                    stmt_node.init->ty, stmt_node.ty,
+                                                    generic_params);
                                             unresolved.has_value()) {
                                             return *unresolved;
                                         }
@@ -2184,8 +2187,8 @@ ConstraintEvalResult evaluate_constraint(
                     return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
                 } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
                     if (node.init.has_value()) {
-                        if (!compatible(node.init->init->ty, node.init->ty)) {
-                            if (auto unresolved = unresolved_compatibility_check(
+                        if (!call_argument_compatible(node.init->init->ty, node.init->ty)) {
+                            if (auto unresolved = unresolved_call_argument_compatibility_check(
                                     node.init->init->ty, node.init->ty, generic_params);
                                 unresolved.has_value()) {
                                 return *unresolved;
@@ -3414,7 +3417,9 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
         return expr;
     if (!can_fold_reference_expr(expr->ty, value->value))
         return expr;
-    auto folded = value_to_expr(program, value->value, expr->ty, expr->span);
+    auto folded = value_to_expr(
+        program, value->value,
+        tyir::with_availability_projection(expr->ty, tyir::availability_ct()), expr->span);
     if (!folded)
         return std::unexpected(std::move(folded.error()));
     return *folded;

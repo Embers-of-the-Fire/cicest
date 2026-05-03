@@ -608,7 +608,8 @@ struct TyExpr {
 
 /// Sets expression availability, preserving runtime-qualified type projections.
 inline void set_availability(TyExpr& expr, const Availability& availability) {
-    expr.availability = availability_join(availability_from_type(expr.ty, expr.span), availability);
+    expr.availability = availability;
+    expr.ty = with_availability_projection(std::move(expr.ty), expr.availability);
 }
 
 /// Returns true when an expression value is compile-time available.
@@ -630,7 +631,8 @@ inline void set_availability(TyExpr& expr, const Availability& availability) {
     expr.node = std::move(node);
     expr.ty = std::move(ty);
     expr.span = span;
-    set_availability(expr, availability);
+    set_availability(
+        expr, availability_join(availability_from_type(expr.ty, expr.span), availability));
     return std::make_shared<TyExpr>(std::move(expr));
 }
 
@@ -686,8 +688,8 @@ struct TyBlock {
 
 /// Sets block availability, preserving runtime-qualified type projections.
 inline void set_availability(TyBlock& block, const Availability& availability) {
-    block.availability =
-        availability_join(availability_from_type(block.ty, block.span), availability);
+    block.availability = availability;
+    block.ty = with_availability_projection(std::move(block.ty), block.availability);
 }
 
 /// Returns true when a block value is compile-time available.

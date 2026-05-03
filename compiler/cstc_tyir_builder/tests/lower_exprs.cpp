@@ -121,7 +121,7 @@ static void test_unit_literal() {
 static void test_param_ref() {
     const auto prog = must_lower("fn f(x: num) -> num { x }");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::num());
+    assert(tail->ty == ty::num(true));
     assert(std::holds_alternative<LocalRef>(tail->node));
     assert(std::get<LocalRef>(tail->node).name == Symbol::intern("x"));
 }
@@ -170,7 +170,7 @@ static void test_arithmetic() {
              "fn f(x: num, y: num) -> num { x % y }",
          }) {
         const auto prog = must_lower(src);
-        assert((*first_fn(prog).body->tail)->ty == ty::num());
+        assert((*first_fn(prog).body->tail)->ty == ty::num(true));
     }
 }
 
@@ -186,7 +186,7 @@ static void test_comparisons() {
              "fn f(x: num, y: num) -> bool { x >= y }",
          }) {
         const auto prog = must_lower(src);
-        assert((*first_fn(prog).body->tail)->ty == ty::bool_());
+        assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
     }
 }
 
@@ -195,11 +195,11 @@ static void test_comparisons() {
 static void test_equality() {
     {
         const auto prog = must_lower("fn f(x: num, y: num) -> bool { x == y }");
-        assert((*first_fn(prog).body->tail)->ty == ty::bool_());
+        assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
     }
     {
         const auto prog = must_lower("fn f(x: bool, y: bool) -> bool { x != y }");
-        assert((*first_fn(prog).body->tail)->ty == ty::bool_());
+        assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
     }
 }
 
@@ -215,7 +215,7 @@ static void test_logical() {
              "fn f(a: bool, b: bool) -> bool { a || b }",
          }) {
         const auto prog = must_lower(src);
-        assert((*first_fn(prog).body->tail)->ty == ty::bool_());
+        assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
     }
 }
 
@@ -272,10 +272,10 @@ static void test_runtime_block_statement_taints_plain_result_function() {
 static void test_runtime_statement_marks_unit_block_not_ct_available() {
     const auto prog = must_lower("fn value(x: runtime num) { x; }");
     const auto& fn = first_fn(prog);
-    assert(fn.body->ty == ty::unit());
+    assert(fn.body->ty == ty::unit(true));
     assert(!is_ct_available(*fn.body));
     assert(fn.body->availability.kind == AvailabilityKind::Rt);
-    assert(!fn.body->availability.evidence.has_value());
+    assert(fn.body->availability.evidence.has_value());
 }
 
 static void test_unreachable_runtime_statement_does_not_taint_block() {
@@ -384,7 +384,7 @@ static void test_runtime_result_forwarded_param_does_not_count_as_hidden_work() 
     const auto& fn = second_fn(prog);
     assert(fn.body->ty == ty::num(true));
     assert(!is_ct_available(*fn.body));
-    assert(!fn.body->availability.evidence.has_value());
+    assert(fn.body->availability.evidence.has_value());
 }
 
 static void test_generic_runtime_result_forwarded_param_does_not_count_as_hidden_work() {
@@ -394,7 +394,7 @@ static void test_generic_runtime_result_forwarded_param_does_not_count_as_hidden
     const auto& fn = second_fn(prog);
     assert(fn.body->ty == ty::num(true));
     assert(!is_ct_available(*fn.body));
-    assert(!fn.body->availability.evidence.has_value());
+    assert(fn.body->availability.evidence.has_value());
 }
 
 static void test_plain_extern_call_accepts_runtime_argument_and_lifts_result() {
@@ -488,12 +488,12 @@ static void test_runtime_block_prevents_demotion() {
 
 static void test_unary_negate() {
     const auto prog = must_lower("fn f(x: num) -> num { -x }");
-    assert((*first_fn(prog).body->tail)->ty == ty::num());
+    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
 }
 
 static void test_unary_not() {
     const auto prog = must_lower("fn f(b: bool) -> bool { !b }");
-    assert((*first_fn(prog).body->tail)->ty == ty::bool_());
+    assert((*first_fn(prog).body->tail)->ty == ty::bool_(true));
 }
 
 static void test_runtime_unary_negate_preserves_runtime_type() {
@@ -519,17 +519,17 @@ static void test_if_no_else() {
     // Without else: result type is Unit; if becomes the tail expression
     const auto prog = must_lower("fn f(b: bool) { if b { } }");
     const auto& body = *first_fn(prog).body;
-    assert(body.ty == ty::unit());
+    assert(body.ty == ty::unit(true));
     // Parser emits the if as the block's tail expression
     assert(body.tail.has_value());
-    assert((*body.tail)->ty == ty::unit());
+    assert((*body.tail)->ty == ty::unit(true));
     assert(std::holds_alternative<TyIf>((*body.tail)->node));
 }
 
 static void test_if_else() {
     const auto prog = must_lower("fn f(b: bool) -> num { if b { 1 } else { 2 } }");
     const auto& tail = *(*first_fn(prog).body->tail);
-    assert(tail.ty == ty::num());
+    assert(tail.ty == ty::num(true));
     assert(std::holds_alternative<TyIf>(tail.node));
 }
 
@@ -589,7 +589,7 @@ static void test_while() {
     assert(fn_body.tail.has_value());
     const auto& while_expr = *fn_body.tail;
     assert(std::holds_alternative<TyWhile>(while_expr->node));
-    assert(while_expr->ty == ty::unit());
+    assert(while_expr->ty == ty::unit(true));
 }
 
 static void test_runtime_while_condition_accepted() {
@@ -721,7 +721,7 @@ static void test_loop_multiple_breaks_same_type() {
         "  }"
         "}");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::num());
+    assert(tail->ty == ty::num(true));
 }
 
 static void test_loop_break_type_mismatch_error() {
@@ -789,7 +789,7 @@ static void test_break_value_in_for_error() {
 static void test_bare_break_in_while_ok() {
     const auto prog = must_lower("fn f(b: bool) { while b { break; } }");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::unit());
+    assert(tail->ty == ty::unit(true));
 }
 
 static void test_bare_break_in_for_ok() {
@@ -845,7 +845,7 @@ static void test_break_value_in_loop_nested_inside_while() {
         "  }"
         "}");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::num());
+    assert(tail->ty == ty::num(true));
 }
 
 static void test_continue_in_while_ok() {
@@ -940,7 +940,7 @@ static void test_if_one_branch_diverges_other_unit() {
     // if b { return; } (no else) — if without else is always Unit
     const auto prog = must_lower("fn f(b: bool) { if b { return; } }");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::unit());
+    assert(tail->ty == ty::unit(true));
 }
 
 static void test_if_else_one_branch_diverges() {
@@ -950,7 +950,7 @@ static void test_if_else_one_branch_diverges() {
         "  if b { return 1; } else { 42 }"
         "}");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::num());
+    assert(tail->ty == ty::num(true));
 }
 
 static void test_if_diverging_then_does_not_leak_move_state() {
@@ -1101,7 +1101,7 @@ static void test_let_annotation_resolves_direct_deferred_call() {
         "fn f(flag: bool) { let x: num = make_default(flag); }");
     const auto& stmt = std::get<TyLetStmt>(second_fn(prog).body->stmts[0]);
     assert(stmt.ty == ty::num());
-    assert(stmt.init->ty == ty::num());
+    assert(stmt.init->ty == ty::num(true));
     const auto& call = std::get<TyCall>(stmt.init->node);
     assert(call.generic_args.size() == 1);
     assert(call.generic_args[0] == ty::num());
@@ -1115,7 +1115,7 @@ static void test_return_type_resolves_deferred_call_through_if_branches() {
     const auto& ret = std::get<TyReturn>(stmt.expr->node);
     assert(ret.value.has_value());
     const auto& if_expr = **ret.value;
-    assert(if_expr.ty == ty::num());
+    assert(if_expr.ty == ty::num(true));
     const auto& branch = std::get<TyIf>(if_expr.node);
     assert(branch.then_block->ty == ty::num());
     assert(branch.then_block->tail.has_value());
@@ -1443,10 +1443,12 @@ static void test_field_access() {
         "struct Point { x: num, y: num }"
         "fn get_x(p: Point) -> num { p.x }");
     const auto& tail = *first_fn(prog).body->tail;
-    assert(tail->ty == ty::num());
+    assert(tail->ty == ty::num(true));
     const auto& fa = std::get<TyFieldAccess>(tail->node);
     assert(fa.field == Symbol::intern("x"));
-    assert(fa.base->ty == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy));
+    assert(
+        fa.base->ty
+        == ty::named(Symbol::intern("Point"), kInvalidSymbol, ValueSemantics::Copy, true));
 }
 
 static void test_runtime_field_access_preserves_runtime_tag() {

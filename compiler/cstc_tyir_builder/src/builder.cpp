@@ -793,10 +793,6 @@ struct LowerCtx {
         return true;
 
     if (is_generic_param_ty(resolved_actual, generic_params)) {
-        if (resolved_actual.is_runtime && !resolved_expected.is_runtime
-            && !is_generic_param_ty(resolved_expected, generic_params)) {
-            return false;
-        }
         return bind_tentative_generic_substitution(
             resolved_actual, resolved_expected, generic_params, subst);
     }
@@ -2064,8 +2060,12 @@ struct ParamReferenceVisitor {
         }
 
         for (const tyir::TyParam& param : *params) {
-            const tyir::Availability param_availability =
-                param.requires_ct() ? tyir::availability_ct() : tyir::availability_rt();
+            tyir::Availability param_availability = tyir::availability_ct();
+            if (!param.requires_ct()) {
+                param_availability = type_has_runtime_dependency(param.ty)
+                                       ? runtime_availability_at(param.span, "runtime parameter")
+                                       : tyir::availability_rt();
+            }
             if (!ctx.scope.insert(param.name, param.ty, std::nullopt, param_availability)) {
                 ctx.scope.pop();
                 return make_error(
@@ -2252,11 +2252,10 @@ struct ParamReferenceVisitor {
                     if (!resolved_init)
                         return std::unexpected(std::move(resolved_init.error()));
                     init->expr = std::move(*resolved_init);
-                    if (!compatible(init->expr->ty, *ann)
+                    if (!call_argument_compatible(init->expr->ty, *ann)
                         && !should_defer_generic_probe_failure(
                             init->expr->ty, *ann, ctx, init->deferred_generic_probe_validation)) {
-                        if (s.type_annotation->requires_ct
-                            && call_argument_compatible(init->expr->ty, *ann)) {
+                        if (s.type_annotation->requires_ct) {
                             auto ct_check = require_ct_annotation_value(
                                 true, init->expr, *ann, s.span, "let binding");
                             if (!ct_check)
@@ -3455,11 +3454,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 return std::unexpected(std::move(resolved_init.error()));
                             }
                             init_expr->expr = std::move(*resolved_init);
-                            if (!compatible(init_expr->expr->ty, *ann)
+                            if (!call_argument_compatible(init_expr->expr->ty, *ann)
                                 && !should_defer_generic_probe_failure(
                                     init_expr->expr->ty, *ann, ctx)) {
-                                if (init_let->type_annotation->requires_ct
-                                    && call_argument_compatible(init_expr->expr->ty, *ann)) {
+                                if (init_let->type_annotation->requires_ct) {
                                     auto ct_check = require_ct_annotation_value(
                                         true, init_expr->expr, *ann, init_let->span,
                                         "for-init binding");
@@ -3694,7 +3692,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (!resolved_val)
                         return std::unexpected(std::move(resolved_val.error()));
                     val->expr = std::move(*resolved_val);
-                    if (!compatible(val->expr->ty, ctx.current_return_ty)
+                    if (!call_argument_compatible(val->expr->ty, ctx.current_return_ty)
                         && !should_defer_generic_probe_failure(
                             val->expr->ty, ctx.current_return_ty, ctx,
                             val->deferred_generic_probe_validation))
@@ -3755,8 +3753,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
     };
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params) {
-        const tyir::Availability param_availability =
-            p.requires_ct() ? tyir::availability_ct() : tyir::availability_rt();
+        tyir::Availability param_availability = tyir::availability_ct();
+        if (!p.requires_ct()) {
+            param_availability = type_has_runtime_dependency(p.ty)
+                                   ? runtime_availability_at(p.span, "runtime parameter")
+                                   : tyir::availability_rt();
+        }
         if (!ctx.scope.insert(p.name, p.ty, std::nullopt, param_availability))
             return make_error(p.span, "duplicate parameter '" + std::string(p.name.as_str()) + "'");
     }
@@ -3786,7 +3788,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
     }
 
     // Check that body type matches declared return type (when a tail is present)
-    if (body->tail.has_value() && !compatible(body->ty, sig.return_ty) && !implicit_unit_result
+    if (body->tail.has_value() && !call_argument_compatible(body->ty, sig.return_ty)
+        && !implicit_unit_result
         && !should_defer_generic_probe_failure(body->ty, sig.return_ty, ctx))
         return make_error(
             fn.body->span, "function '" + display_decl_name(fn) + "' body type mismatch: expected '"
