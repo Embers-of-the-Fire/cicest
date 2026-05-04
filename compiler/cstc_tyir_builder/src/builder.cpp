@@ -1891,9 +1891,11 @@ struct ParamReferenceVisitor {
                 return std::unexpected(std::move(joined_ty.error()));
             expr->ty = *joined_ty;
         }
-        tyir::Availability if_availability = tyir::availability_join(
-            if_expr->condition->availability, if_expr->then_block->availability);
-        if (if_expr->else_branch.has_value())
+        tyir::Availability if_availability = if_expr->condition->availability;
+        if (expr_can_fallthrough(*if_expr->condition))
+            if_availability =
+                tyir::availability_join(if_availability, if_expr->then_block->availability);
+        if (expr_can_fallthrough(*if_expr->condition) && if_expr->else_branch.has_value())
             if_availability =
                 tyir::availability_join(if_availability, (*if_expr->else_branch)->availability);
         if (if_availability.evidence.has_value()) {
@@ -3311,8 +3313,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 const bool then_reaches_join = block_can_fallthrough(*then_ptr);
 
                 tyir::Ty result_ty = then_ptr->ty;
-                tyir::Availability if_availability =
-                    tyir::availability_join(cond->expr->availability, then_ptr->availability);
+                const bool condition_reaches_branches = expr_can_fallthrough(*cond->expr);
+                tyir::Availability if_availability = cond->expr->availability;
+                if (condition_reaches_branches)
+                    if_availability =
+                        tyir::availability_join(if_availability, then_ptr->availability);
 
                 std::optional<tyir::TyExprPtr> else_branch;
                 if (node.else_branch.has_value()) {
@@ -3346,8 +3351,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (expr_can_fallthrough(*else_val->expr))
                         ctx.scope.merge_from(else_ctx.scope);
 
-                    if_availability =
-                        tyir::availability_join(if_availability, else_val->expr->availability);
+                    if (condition_reaches_branches)
+                        if_availability =
+                            tyir::availability_join(if_availability, else_val->expr->availability);
                     else_branch = std::move(else_val->expr);
                 } else {
                     // No else branch: result type is Unit
@@ -3439,8 +3445,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 }
                 ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
-                const tyir::Availability while_availability =
-                    tyir::availability_join(cond->expr->availability, body_ptr->availability);
+                tyir::Availability while_availability = cond->expr->availability;
+                if (expr_can_fallthrough(*cond->expr))
+                    while_availability =
+                        tyir::availability_join(while_availability, body_ptr->availability);
                 tyir::Ty while_ty = tyir::ty::unit();
                 if (while_availability.evidence.has_value())
                     while_ty.is_runtime = true;
