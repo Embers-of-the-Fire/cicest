@@ -572,6 +572,31 @@ fn main() -> num {
     assert(is_ct_available(*main_fn.body));
 }
 
+static void test_control_children_recompute_availability_with_reachability() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn if_case() -> num {
+    if (return 1) { runtime { 2 } } else { runtime { 3 } }
+}
+
+fn while_case() -> num {
+    while (return 1) { runtime { 2 }; }
+    0
+}
+)");
+
+    const TyFnDecl& if_case = find_fn(program, "if_case");
+    assert(is_ct_available(*require_tail(if_case)));
+    assert(is_ct_available(*if_case.body));
+
+    const TyFnDecl& while_case = find_fn(program, "while_case");
+    assert(while_case.body != nullptr);
+    assert(!while_case.body->stmts.empty());
+    const auto& while_stmt = std::get<TyExprStmt>(while_case.body->stmts[0]);
+    assert(is_ct_available(*while_stmt.expr));
+    assert(is_ct_available(*while_case.body));
+}
+
 static void test_folded_operands_recompute_availability_with_reachability() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -3166,6 +3191,7 @@ int main() {
     test_plain_type_runtime_availability_is_preserved();
     test_folded_if_recomputes_availability_after_erasing_runtime_branch();
     test_folded_for_recomputes_availability_with_reachability();
+    test_control_children_recompute_availability_with_reachability();
     test_folded_operands_recompute_availability_with_reachability();
     test_decl_generic_ct_block_argument_rechecks_availability_after_substitution();
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
