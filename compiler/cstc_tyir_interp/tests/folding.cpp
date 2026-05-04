@@ -286,7 +286,7 @@ static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
     TyBlock main_body;
     main_body.ty = ty::num(true);
     main_body.tail = make_ty_expr(
-        {}, TyCall{id_name, {ty::num(true)}, {make_num_expr("1")}}, ty::num(true),
+        {}, TyCall{id_name, {ty::num()}, {make_num_expr("1")}}, ty::num(true),
         runtime_result_call_availability());
     program.items.push_back(
         TyFnDecl{
