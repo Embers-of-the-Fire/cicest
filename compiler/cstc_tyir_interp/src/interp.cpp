@@ -343,6 +343,7 @@ static void recompute_expr_availability(tyir::TyExpr& expr) {
             } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
                 availability =
                     tyir::availability_join(availability, availability_of_expr(node.base));
+                availability = tyir::availability_join(availability, expr.availability);
             } else if constexpr (
                 std::is_same_v<Node, tyir::TyCall>
                 || std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
@@ -1485,7 +1486,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     expr->span,
                     tyir::TyFieldAccess{
                         apply_substitution(node.base, subst), node.field, node.use_kind},
-                    rewritten_ty);
+                    rewritten_ty, expr->availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
                 tyir::TyCall rewritten = node;
                 rewritten.generic_args.clear();
@@ -3629,8 +3630,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     return std::unexpected(std::move(base.error()));
                 return maybe_fold_constant(
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyFieldAccess{*base, node.field, node.use_kind},
-                        expr->ty),
+                        expr->span, tyir::TyFieldAccess{*base, node.field, node.use_kind}, expr->ty,
+                        expr->availability),
                     program, env, generic_params);
             }
 

@@ -149,6 +149,11 @@ static const TyStructInit& require_struct_init(const TyExprPtr& expr) {
     return std::get<TyStructInit>(expr->node);
 }
 
+static const TyFieldAccess& require_field_access(const TyExprPtr& expr) {
+    assert(std::holds_alternative<TyFieldAccess>(expr->node));
+    return std::get<TyFieldAccess>(expr->node);
+}
+
 static const EnumVariantRef& require_constraint_variant(const TyExprPtr& expr) {
     assert(std::holds_alternative<EnumVariantRef>(expr->node));
     return std::get<EnumVariantRef>(expr->node);
@@ -379,6 +384,27 @@ fn main() -> runtime num {
     assert(std::holds_alternative<TyCall>(binary.lhs->node));
     const TyLiteral& literal = require_literal(binary.rhs);
     assert(literal.symbol.as_str() == std::string_view{"1"});
+}
+
+static void test_runtime_field_decl_preserves_runtime_boundary() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+struct Box {
+    value: runtime num
+}
+
+fn main() -> runtime num {
+    let box: Box = Box { value: 1 };
+    box.value
+}
+)");
+
+    const TyExprPtr& tail = require_tail(find_fn(program, "main"));
+    assert(tail->ty == ty::num(true));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    const TyFieldAccess& access = require_field_access(tail);
+    assert(access.field == Symbol::intern("value"));
+    assert(is_ct_available(access.base));
 }
 
 static void test_runtime_block_with_null_body_is_preserved() {
@@ -3134,6 +3160,7 @@ int main() {
     test_null_evidence_rt_call_remains_in_tyir();
     test_runtime_block_folds_pure_inner_expression();
     test_runtime_block_preserves_runtime_call_boundary();
+    test_runtime_field_decl_preserves_runtime_boundary();
     test_runtime_block_with_null_body_is_preserved();
     test_runtime_block_stmt_with_null_body_still_falls_through();
     test_plain_type_runtime_availability_is_preserved();
