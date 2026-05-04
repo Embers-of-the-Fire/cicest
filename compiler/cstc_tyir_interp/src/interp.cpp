@@ -258,9 +258,8 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
     return tyir::is_ct_available(expr);
 }
 
-[[nodiscard]] static bool has_concrete_runtime_barrier(const tyir::TyExpr& expr) {
-    return expr.availability.kind == tyir::AvailabilityKind::Rt
-        && expr.availability.evidence.has_value();
+[[nodiscard]] static bool has_runtime_barrier(const tyir::TyExpr& expr) {
+    return expr.availability.kind == tyir::AvailabilityKind::Rt;
 }
 
 [[nodiscard]] static bool stmt_can_fallthrough(const tyir::TyStmt& stmt);
@@ -1183,6 +1182,98 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
 [[nodiscard]] static bool expr_depends_on_generic_params(
     const tyir::TyExprPtr& expr, const GenericParamSet& generic_params);
 
+[[nodiscard]] static bool expr_contains_local_ref(const tyir::TyExprPtr& expr);
+
+[[nodiscard]] static bool block_contains_local_ref(const tyir::TyBlockPtr& block) {
+    if (block == nullptr)
+        return false;
+    for (const tyir::TyStmt& stmt : block->stmts) {
+        const bool contains = std::visit(
+            [&](const auto& node) {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<Node, tyir::TyLetStmt>) {
+                    return expr_contains_local_ref(node.init);
+                } else {
+                    return expr_contains_local_ref(node.expr);
+                }
+            },
+            stmt);
+        if (contains)
+            return true;
+    }
+    return block->tail.has_value() && expr_contains_local_ref(*block->tail);
+}
+
+[[nodiscard]] static bool expr_contains_local_ref(const tyir::TyExprPtr& expr) {
+    if (expr == nullptr)
+        return false;
+    return std::visit(
+        [&](const auto& node) {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<Node, tyir::LocalRef>) {
+                return true;
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::EnumVariantRef>
+                || std::is_same_v<Node, tyir::TyContinue>) {
+                return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    if (expr_contains_local_ref(field.value))
+                        return true;
+                }
+                return false;
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                return expr_contains_local_ref(node.rhs);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                return expr_contains_local_ref(node.lhs) || expr_contains_local_ref(node.rhs);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                return expr_contains_local_ref(node.base);
+            } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (expr_contains_local_ref(arg))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                return node.expr.has_value() && expr_contains_local_ref(*node.expr);
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (expr_contains_local_ref(arg))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                return block_contains_local_ref(node);
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                if (expr_contains_local_ref(node.condition)
+                    || block_contains_local_ref(node.then_block)) {
+                    return true;
+                }
+                return node.else_branch.has_value() && expr_contains_local_ref(*node.else_branch);
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyRuntimeBlock> || std::is_same_v<Node, tyir::TyLoop>) {
+                return block_contains_local_ref(node.body);
+            } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                return expr_contains_local_ref(node.condition)
+                    || block_contains_local_ref(node.body);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                if (node.init.has_value() && expr_contains_local_ref(node.init->init))
+                    return true;
+                if (node.condition.has_value() && expr_contains_local_ref(*node.condition))
+                    return true;
+                if (node.step.has_value() && expr_contains_local_ref(*node.step))
+                    return true;
+                return block_contains_local_ref(node.body);
+            } else {
+                static_assert(
+                    std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>);
+                return node.value.has_value() && expr_contains_local_ref(*node.value);
+            }
+        },
+        expr->node);
+}
+
 [[nodiscard]] static bool block_depends_on_generic_params(
     const tyir::TyBlockPtr& block, const GenericParamSet& generic_params) {
     if (block == nullptr)
@@ -1756,7 +1847,7 @@ ConstraintEvalResult evaluate_constraint(
                 ConstraintEvalKind::Unsatisfied, "probed expression is not type-valid",
                 std::nullopt};
         }
-        if (has_concrete_runtime_barrier(*expr)) {
+        if (has_runtime_barrier(*expr) && !expr_contains_local_ref(expr)) {
             return {
                 ConstraintEvalKind::Unsatisfied,
                 "probed expression uses runtime-only behavior",
@@ -2520,7 +2611,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
 [[nodiscard]] static std::expected<EvalState, EvalError>
     eval_expr(const tyir::TyExprPtr& expr, ConstEnv& env, EvalContext& ctx) {
-    if (has_concrete_runtime_barrier(*expr))
+    if (ctx.enforce_runtime_barriers && has_runtime_barrier(*expr))
         return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
 
     return std::visit(
@@ -2785,7 +2876,10 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                     if (!call_budget)
                         return std::unexpected(std::move(call_budget.error()));
                     ctx.stack.push_back(EvalStackFrame{fn.name, expr->span});
+                    const bool was_enforcing_runtime_barriers = ctx.enforce_runtime_barriers;
+                    ctx.enforce_runtime_barriers = false;
                     auto result = eval_block(fn.body, fn_env, ctx);
+                    ctx.enforce_runtime_barriers = was_enforcing_runtime_barriers;
                     ctx.stack.pop_back();
                     ++ctx.remaining_call_depth;
                     if (!result)
@@ -3425,6 +3519,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 [[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError> maybe_fold_constant(
     const tyir::TyExprPtr& expr, const ProgramView& program, const ConstEnv& env,
     const GenericParamSet& generic_params) {
+    tyir::TyExprPtr candidate = std::make_shared<tyir::TyExpr>(*expr);
+    recompute_expr_availability(*candidate);
     ConstEnv eval_env = env;
     EvalContext ctx{
         program,
@@ -3435,16 +3531,17 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
         std::make_shared<ConstraintEvalState>(),
     };
     ctx.generic_params = generic_params;
-    auto value = eval_expr(expr, eval_env, ctx);
+    auto value = eval_expr(candidate, eval_env, ctx);
     if (!value)
         return std::unexpected(std::move(value.error()));
     if (value->kind != EvalState::Kind::Value)
-        return expr;
-    if (!can_fold_reference_expr(expr->ty, value->value))
-        return expr;
+        return candidate;
+    if (!can_fold_reference_expr(candidate->ty, value->value))
+        return candidate;
     auto folded = value_to_expr(
         program, value->value,
-        tyir::with_availability_projection(expr->ty, tyir::availability_ct()), expr->span);
+        tyir::with_availability_projection(candidate->ty, tyir::availability_ct()),
+        candidate->span);
     if (!folded)
         return std::unexpected(std::move(folded.error()));
     return *folded;
@@ -3621,8 +3718,11 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                             return std::unexpected(std::move(then_block.error()));
                         auto then_ptr = std::make_shared<tyir::TyBlock>(std::move(*then_block));
                         return maybe_fold_constant(
-                            tyir::make_ty_expr(expr->span, then_ptr, expr->ty), program, env,
-                            generic_params);
+                            tyir::make_ty_expr(
+                                expr->span, then_ptr,
+                                tyir::with_availability_projection(
+                                    expr->ty, then_ptr->availability)),
+                            program, env, generic_params);
                     }
                     if (node.else_branch.has_value())
                         return fold_expr(*node.else_branch, branch_env, program, generic_params);
