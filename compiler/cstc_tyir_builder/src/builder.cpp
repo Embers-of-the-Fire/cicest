@@ -2604,7 +2604,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         expr->span,
                         "field access on non-struct type '" + base->expr->ty.display() + "'");
 
-                const tyir::TyFieldDecl* field_decl = ctx.env.field_decl(base->expr->ty.name, node.field);
+                const tyir::TyFieldDecl* field_decl =
+                    ctx.env.field_decl(base->expr->ty.name, node.field);
                 if (field_decl == nullptr)
                     return make_error(
                         expr->span, "no field '" + std::string(node.field.as_str())
@@ -2619,7 +2620,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         base->expr->ty.name.as_str());
                     if (!subst)
                         return std::unexpected(std::move(subst.error()));
-                    field_ty = annotate_type_semantics(apply_substitution(field_ty, *subst), ctx.env);
+                    field_ty =
+                        annotate_type_semantics(apply_substitution(field_ty, *subst), ctx.env);
                 }
                 tyir::Ty lowered_field_ty =
                     propagate_runtime_tag(field_ty, base->expr->ty.is_runtime);
