@@ -109,14 +109,24 @@ struct TypeEnv {
     /// `std::nullopt` if the field does not exist.
     [[nodiscard]] std::optional<tyir::Ty>
         field_ty(cstc::symbol::Symbol struct_name, cstc::symbol::Symbol field_name) const {
+        const tyir::TyFieldDecl* field = field_decl(struct_name, field_name);
+        if (field == nullptr)
+            return std::nullopt;
+        return field->ty;
+    }
+
+    /// Returns the resolved declaration of `field_name` on struct `struct_name`,
+    /// or `nullptr` if the field does not exist.
+    [[nodiscard]] const tyir::TyFieldDecl*
+        field_decl(cstc::symbol::Symbol struct_name, cstc::symbol::Symbol field_name) const {
         const auto it = struct_fields.find(struct_name);
         if (it == struct_fields.end())
-            return std::nullopt;
+            return nullptr;
         for (const tyir::TyFieldDecl& f : it->second) {
             if (f.name == field_name)
-                return f.ty;
+                return &f;
         }
-        return std::nullopt;
+        return nullptr;
     }
 
     /// Returns true when `variant_name` is a declared variant of `enum_name`.
@@ -2594,11 +2604,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         expr->span,
                         "field access on non-struct type '" + base->expr->ty.display() + "'");
 
-                auto field_ty = ctx.env.field_ty(base->expr->ty.name, node.field);
-                if (!field_ty)
+                const tyir::TyFieldDecl* field_decl = ctx.env.field_decl(base->expr->ty.name, node.field);
+                if (field_decl == nullptr)
                     return make_error(
                         expr->span, "no field '" + std::string(node.field.as_str())
                                         + "' in struct '" + base->expr->ty.display() + "'");
+                auto field_ty = field_decl->ty;
                 if (!base->expr->ty.generic_args.empty()) {
                     const auto generic_params_it =
                         ctx.env.type_generic_params.find(base->expr->ty.name);
@@ -2608,13 +2619,19 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         base->expr->ty.name.as_str());
                     if (!subst)
                         return std::unexpected(std::move(subst.error()));
-                    field_ty =
-                        annotate_type_semantics(apply_substitution(*field_ty, *subst), ctx.env);
+                    field_ty = annotate_type_semantics(apply_substitution(field_ty, *subst), ctx.env);
                 }
                 tyir::Ty lowered_field_ty =
-                    propagate_runtime_tag(*field_ty, base->expr->ty.is_runtime);
-                const tyir::Availability field_availability = tyir::availability_join(
-                    base->expr->availability, tyir::availability_from_type(lowered_field_ty));
+                    propagate_runtime_tag(field_ty, base->expr->ty.is_runtime);
+                tyir::Availability field_type_availability =
+                    tyir::availability_from_type(lowered_field_ty);
+                if (tyir::ty_contains_runtime_tag(field_ty)) {
+                    field_type_availability = runtime_availability_at(
+                        field_decl->span,
+                        "runtime field '" + std::string(node.field.as_str()) + "'");
+                }
+                const tyir::Availability field_availability =
+                    tyir::availability_join(base->expr->availability, field_type_availability);
 
                 return LoweredPlace{
                     tyir::make_ty_expr(
