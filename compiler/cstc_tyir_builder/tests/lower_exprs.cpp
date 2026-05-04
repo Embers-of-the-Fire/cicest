@@ -602,6 +602,21 @@ static void test_if_else_runtime_join_prevents_demotion() {
         "runtime dependence not reflected in its return type");
 }
 
+static void test_if_diverging_condition_skips_branch_availability() {
+    const auto prog = must_lower("fn f() -> num { if (return 1) { runtime { 2 } } else { 3 } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
+static void test_expected_type_if_diverging_condition_skips_branch_availability() {
+    const auto prog = must_lower(
+        "fn f() -> num { let value: num = if (return 1) { runtime { 2 } } else { 3 }; value }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
 // ─── Control flow ─────────────────────────────────────────────────────────────
 
 static void test_loop_is_unit() {
@@ -631,6 +646,13 @@ static void test_runtime_while_condition_accepted() {
     assert(while_expr->ty == ty::unit(true));
     assert(while_expr->availability.kind == AvailabilityKind::Rt);
     assert(while_expr->availability.evidence.has_value());
+}
+
+static void test_while_diverging_condition_skips_body_availability() {
+    const auto prog = must_lower("fn f() -> num { while (return 1) { runtime { 2 }; }; 0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
 }
 
 static void test_for_loop() {
@@ -1685,9 +1707,12 @@ int main() {
     test_if_else_runtime_join_produces_runtime_type();
     test_if_else_rejects_distinct_nominal_types();
     test_if_else_runtime_join_prevents_demotion();
+    test_if_diverging_condition_skips_branch_availability();
+    test_expected_type_if_diverging_condition_skips_branch_availability();
     test_loop_is_unit();
     test_while();
     test_runtime_while_condition_accepted();
+    test_while_diverging_condition_skips_body_availability();
     test_for_loop();
     test_runtime_for_condition_accepted();
     test_for_unreachable_step_does_not_taint_plain_result();
