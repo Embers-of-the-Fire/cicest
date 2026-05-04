@@ -368,19 +368,22 @@ static void recompute_expr_availability(tyir::TyExpr& expr) {
             } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
                 availability =
                     tyir::availability_join(availability, availability_of_expr(node.condition));
-                availability =
-                    tyir::availability_join(availability, availability_of_block(node.then_block));
-                if (node.else_branch.has_value())
+                if (node.condition != nullptr && expr_can_fallthrough(*node.condition)) {
                     availability = tyir::availability_join(
-                        availability, availability_of_expr(*node.else_branch));
+                        availability, availability_of_block(node.then_block));
+                    if (node.else_branch.has_value())
+                        availability = tyir::availability_join(
+                            availability, availability_of_expr(*node.else_branch));
+                }
             } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
                 availability =
                     tyir::availability_join(availability, availability_of_block(node.body));
             } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
                 availability =
                     tyir::availability_join(availability, availability_of_expr(node.condition));
-                availability =
-                    tyir::availability_join(availability, availability_of_block(node.body));
+                if (node.condition != nullptr && expr_can_fallthrough(*node.condition))
+                    availability =
+                        tyir::availability_join(availability, availability_of_block(node.body));
             } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
                 bool reachable = true;
                 if (node.init.has_value() && reachable) {
