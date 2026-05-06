@@ -1007,6 +1007,31 @@ fn main() {
     assert(folded_assert.kind == TyLiteral::Kind::Unit);
 }
 
+static void test_decl_probe_ignores_dead_stmt_after_nonfallthrough_call() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn stop(flag: bool) -> ! {
+    loop { if flag { } }
+}
+
+fn main() -> num {
+    decl({ stop(true); runtime { 2 }; });
+    0
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    assert(main_fn.body != nullptr);
+    assert(!main_fn.body->stmts.empty());
+    const auto& probe_stmt = std::get<TyExprStmt>(main_fn.body->stmts[0]);
+    const EnumVariantRef& result = require_constraint_variant(probe_stmt.expr);
+    assert(result.variant_name == Symbol::intern("Valid"));
+
+    const TyLiteral& literal = require_literal(require_tail(main_fn));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
+}
+
 static void test_dead_tail_after_break_is_not_folded() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -3211,6 +3236,7 @@ int main() {
     test_dead_for_still_folds_reachable_init();
     test_dead_stmt_after_return_is_not_folded();
     test_decl_probe_does_not_stop_reachable_stmt_folding();
+    test_decl_probe_ignores_dead_stmt_after_nonfallthrough_call();
     test_dead_tail_after_break_is_not_folded();
     test_dead_tail_after_continue_is_not_folded();
     test_reached_assertion_failure_reports_error();

@@ -1851,7 +1851,8 @@ ConstraintEvalResult evaluate_constraint(
                 ConstraintEvalKind::Unsatisfied, "probed expression is not type-valid",
                 std::nullopt};
         }
-        if (has_runtime_barrier(*expr) && !expr_contains_local_ref(expr)) {
+        if (!std::holds_alternative<tyir::TyBlockPtr>(expr->node) && has_runtime_barrier(*expr)
+            && !expr_contains_local_ref(expr)) {
             return {
                 ConstraintEvalKind::Unsatisfied,
                 "probed expression uses runtime-only behavior",
@@ -2245,6 +2246,8 @@ ConstraintEvalResult evaluate_constraint(
                             stmt);
                         if (nested.kind != ConstraintEvalKind::Satisfied)
                             return nested;
+                        if (!stmt_can_fallthrough(stmt))
+                            return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                     }
                     if (node->tail.has_value())
                         return self(self, *node->tail);
