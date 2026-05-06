@@ -344,8 +344,8 @@ using TypeSubstitution =
     return erased;
 }
 
-[[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {
-    return tyir::is_ct_available(expr);
+[[nodiscard]] static bool expr_value_satisfies_ct_requirement(const tyir::TyExprPtr& expr) {
+    return expr != nullptr && tyir::is_ct_required_available(expr->availability);
 }
 
 [[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
@@ -956,7 +956,7 @@ struct LowerCtx {
     const tyir::Ty& expected_ty, cstc::span::SourceSpan span) {
     if (param_index >= sig.param_requirements.size()
         || sig.param_requirements[param_index] != tyir::ParamRequirement::CtRequired
-        || expr_value_is_ct_available(arg)) {
+        || expr_value_satisfies_ct_requirement(arg)) {
         return {};
     }
 
@@ -972,7 +972,7 @@ struct LowerCtx {
 [[nodiscard]] static std::expected<void, LowerError> require_ct_annotation_value(
     bool requires_ct, const tyir::TyExprPtr& value, const tyir::Ty& expected_ty,
     cstc::span::SourceSpan span, std::string_view context) {
-    if (!requires_ct || expr_value_is_ct_available(value))
+    if (!requires_ct || expr_value_satisfies_ct_requirement(value))
         return {};
 
     return make_error(
@@ -1373,6 +1373,15 @@ struct LoweredExpr {
 [[nodiscard]] static tyir::Availability
     runtime_availability_at(cstc::span::SourceSpan span, std::string reason) {
     return tyir::availability_rt(runtime_evidence_at(span, std::move(reason)));
+}
+
+[[nodiscard]] static tyir::Availability
+    parameter_declaration_availability(const tyir::TyParam& param) {
+    if (param.requires_ct())
+        return tyir::availability_ct();
+    if (type_has_runtime_dependency(param.ty))
+        return runtime_availability_at(param.span, "runtime parameter");
+    return tyir::availability_runtime_allowed_param();
 }
 
 [[nodiscard]] static tyir::Availability
@@ -2105,12 +2114,7 @@ struct ParamReferenceVisitor {
         }
 
         for (const tyir::TyParam& param : *params) {
-            tyir::Availability param_availability = tyir::availability_ct();
-            if (!param.requires_ct()) {
-                param_availability = type_has_runtime_dependency(param.ty)
-                                       ? runtime_availability_at(param.span, "runtime parameter")
-                                       : tyir::availability_rt();
-            }
+            const tyir::Availability param_availability = parameter_declaration_availability(param);
             if (!ctx.scope.insert(param.name, param.ty, std::nullopt, param_availability)) {
                 ctx.scope.pop();
                 return make_error(
@@ -3825,12 +3829,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
     };
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params) {
-        tyir::Availability param_availability = tyir::availability_ct();
-        if (!p.requires_ct()) {
-            param_availability = type_has_runtime_dependency(p.ty)
-                                   ? runtime_availability_at(p.span, "runtime parameter")
-                                   : tyir::availability_rt();
-        }
+        const tyir::Availability param_availability = parameter_declaration_availability(p);
         if (!ctx.scope.insert(p.name, p.ty, std::nullopt, param_availability))
             return make_error(p.span, "duplicate parameter '" + std::string(p.name.as_str()) + "'");
     }

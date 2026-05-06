@@ -75,6 +75,13 @@ Runtime block expressions use dedicated lowering: `runtime { ... }` becomes a
 result is promoted to `runtime T`, but pure inner expressions keep their normal
 types so later const-folding can still inspect them.
 
+Ordinary plain parameters are lowered as compile-time-shaped values with symbolic
+runtime-allowed dependence. The declaration body does not become runtime-qualified
+only because such a parameter is used; instead, call lowering instantiates the
+parameter with the actual argument availability and lifts the call result when a
+runtime-dependent argument is passed. CT-required parameters and `const` local
+annotations reject this symbolic dependence before residualization.
+
 ### Main function constraints
 
 The `main` function, if present, is restricted to return one of:

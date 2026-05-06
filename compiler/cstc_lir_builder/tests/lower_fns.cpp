@@ -121,7 +121,7 @@ static void test_temporaries_are_unnamed() {
     // Look for a local without a debug name that is num-typed.
     bool found_temp = false;
     for (const LirLocalDecl& loc : fn.locals) {
-        if (!loc.debug_name.has_value() && loc.ty == cstc::tyir::ty::num(true)) {
+        if (!loc.debug_name.has_value() && loc.ty == cstc::tyir::ty::num()) {
             found_temp = true;
             break;
         }

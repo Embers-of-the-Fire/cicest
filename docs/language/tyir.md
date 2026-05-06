@@ -53,7 +53,7 @@ compatibility:
 - call arguments are matched by their non-`runtime` structure
 - passing `runtime T` to a plain parameter `T` is allowed for calls only
 - the resulting `TyCall` / `TyDeferredGenericCall` type is lifted to
-  `runtime U` when the callee or any argument is runtime-qualified
+  `runtime U` when the callee or any argument is runtime-available
 - this does not introduce a general `runtime T -> T` conversion for lets,
   returns, or other non-call sites
 
@@ -71,6 +71,13 @@ expression. If a function has an explicit plain result contract, that evidence
 must be reflected by `runtime fn` or a runtime-qualified return type; ordinary
 parameter dependence is still accepted because call-site lifting accounts for the
 actual arguments.
+
+Plain runtime-allowed parameters are represented inside a declaration body as
+compile-time-shaped values with symbolic parameter dependence. They do not make
+the body runtime-qualified by themselves, but they also cannot satisfy a
+CT-required position such as a `!runtime` parameter or `const` local annotation.
+At a call site, the argument availability instantiates that symbolic dependence
+and lifts the call result when an allowed argument is runtime-dependent.
 
 ## Generics and constraints
 

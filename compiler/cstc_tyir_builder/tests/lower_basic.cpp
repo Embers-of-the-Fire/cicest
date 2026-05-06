@@ -318,10 +318,11 @@ static void test_fn_with_params_and_return() {
     assert(fn.params[1].name == Symbol::intern("y"));
     assert(fn.params[1].ty == ty::num());
 
-    // Body is runtime-available because ordinary parameters may be runtime inputs.
-    assert(fn.body->ty == ty::num(true));
+    // Body remains compile-time-shaped while retaining symbolic parameter dependence.
+    assert(fn.body->ty == ty::num());
     assert(fn.body->tail.has_value());
-    assert((*fn.body->tail)->ty == ty::num(true));
+    assert((*fn.body->tail)->ty == ty::num());
+    assert(fn.body->availability.depends_on_runtime_allowed_param);
 }
 
 static void test_fn_bool_return() {
@@ -364,14 +365,16 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
     assert(fn.body->ty.is_runtime);
 }
 
-static void test_runtime_allowed_param_marks_body_runtime_without_evidence() {
+static void test_runtime_allowed_param_marks_symbolic_body_dependence() {
     const auto prog = must_lower("fn echo(value: num) -> runtime num { value }");
     const auto& fn = std::get<TyFnDecl>(prog.items[0]);
-    assert(fn.body->ty == ty::num(true));
-    assert(fn.body->availability.kind == AvailabilityKind::Rt);
+    assert(fn.body->ty == ty::num());
+    assert(fn.body->availability.kind == AvailabilityKind::Ct);
+    assert(fn.body->availability.depends_on_runtime_allowed_param);
     assert(!fn.body->availability.evidence.has_value());
     assert(fn.body->tail.has_value());
-    assert((*fn.body->tail)->availability.kind == AvailabilityKind::Rt);
+    assert((*fn.body->tail)->availability.kind == AvailabilityKind::Ct);
+    assert((*fn.body->tail)->availability.depends_on_runtime_allowed_param);
     assert(!(*fn.body->tail)->availability.evidence.has_value());
 }
 
@@ -466,7 +469,7 @@ static void test_ct_required_param_forwards_ct_required_runtime_projection() {
 static void test_ct_required_let_annotation_rejects_runtime_allowed_param() {
     must_fail_with_message(
         "fn wrap(count: num) -> num { let forwarded: const num = count; forwarded }",
-        "let binding must be compile-time available: expected 'const num', found 'runtime num'");
+        "let binding must be compile-time available: expected 'const num', found 'num'");
 }
 
 static void test_fn_preserves_generic_metadata() {
@@ -509,13 +512,13 @@ static void test_fn_decl_where_clause_allows_parameter_references_in_decl_probe(
 static void test_decl_probe_does_not_relax_matching_body_checks() {
     must_fail_with_constraint_prelude(
         "fn bad<T>(value: T) -> num where decl(value) { value }",
-        "function 'bad' body type mismatch: expected 'num', found 'runtime T'");
+        "function 'bad' body type mismatch: expected 'num', found 'T'");
 }
 
 static void test_decl_probe_inside_disjunction_does_not_relax_matching_body_checks() {
     must_fail_with_constraint_prelude(
         "fn bad<T>(a: T) -> T where true || decl(a + a) { a + a }",
-        "arithmetic operator requires 'num' on left, found 'runtime T'");
+        "arithmetic operator requires 'num' on left, found 'T'");
 }
 
 static void test_struct_where_clause_rejects_return() {
@@ -656,8 +659,7 @@ static void test_decl_probe_keeps_ref_shape_arithmetic_invalid() {
     assert(probe.is_invalid);
     assert(!probe.expr.has_value());
     assert(probe.invalid_reason.has_value());
-    assert(
-        *probe.invalid_reason == "arithmetic operator requires 'num' on left, found 'runtime &T'");
+    assert(*probe.invalid_reason == "arithmetic operator requires 'num' on left, found '&T'");
 }
 
 static void test_decl_probe_defers_generic_let_annotation_validation() {
@@ -703,7 +705,7 @@ static void test_decl_probe_defers_generic_if_join_during_expected_type_resoluti
     const auto& call = std::get<TyCall>((*probe.expr)->node);
     assert(call.fn_name == Symbol::intern("id_num"));
     assert(call.args.size() == 1);
-    assert(call.args[0]->ty == ty::num(true));
+    assert(call.args[0]->ty == ty::num());
     assert(std::holds_alternative<TyIf>(call.args[0]->node));
 }
 
@@ -723,7 +725,7 @@ static void test_decl_probe_reannotates_deferred_generic_if_join_semantics() {
     assert(
         joined.ty
         == ty::named(
-            Symbol::intern("Wrapper"), kInvalidSymbol, ValueSemantics::Copy, true, {ty::num()}));
+            Symbol::intern("Wrapper"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()}));
 }
 
 static void test_decl_probe_rejects_conflicting_generic_let_annotation_bindings() {
@@ -818,8 +820,7 @@ static void test_decl_probe_does_not_drive_if_branch_join_inference() {
 
 static void test_decl_probe_does_not_relax_unrelated_body_checks() {
     must_fail_with_message(
-        "fn f<T>(a: T) -> bool where decl(1 + 1) { !a }",
-        "unary '!' requires 'bool', found 'runtime T'");
+        "fn f<T>(a: T) -> bool where decl(1 + 1) { !a }", "unary '!' requires 'bool', found 'T'");
 }
 
 static void test_decl_runtime_use_is_rejected() {
@@ -1020,7 +1021,7 @@ int main() {
     test_fn_ref_return_rejected();
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
-    test_runtime_allowed_param_marks_body_runtime_without_evidence();
+    test_runtime_allowed_param_marks_symbolic_body_dependence();
     test_runtime_typed_param_records_runtime_parameter_evidence();
     test_ct_required_param_requirement_is_preserved();
     test_ct_required_param_rejects_runtime_argument();

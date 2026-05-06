@@ -254,8 +254,8 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
     return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
 }
 
-[[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {
-    return tyir::is_ct_available(expr);
+[[nodiscard]] static bool expr_value_satisfies_ct_requirement(const tyir::TyExprPtr& expr) {
+    return expr != nullptr && tyir::is_ct_required_available(expr->availability);
 }
 
 [[nodiscard]] static bool has_runtime_barrier(const tyir::TyExpr& expr) {
@@ -2116,7 +2116,7 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                             if (fn.params[index].requires_ct()
-                                && !expr_value_is_ct_available(node.args[index])) {
+                                && !expr_value_satisfies_ct_requirement(node.args[index])) {
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",
@@ -2177,7 +2177,7 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                             if (decl.params[index].requires_ct()
-                                && !expr_value_is_ct_available(node.args[index])) {
+                                && !expr_value_satisfies_ct_requirement(node.args[index])) {
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",

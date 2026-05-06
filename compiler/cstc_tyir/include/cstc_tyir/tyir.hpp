@@ -371,6 +371,9 @@ struct Availability {
     AvailabilityKind kind = AvailabilityKind::Ct;
     /// First concrete runtime contributor, when available.
     std::optional<TyRuntimeEvidence> evidence;
+    /// True when a CT-looking expression may depend on a runtime-allowed
+    /// declaration parameter under a non-CT call-site instantiation.
+    bool depends_on_runtime_allowed_param = false;
 };
 
 /// Compile-time-available summary.
@@ -379,19 +382,38 @@ struct Availability {
 /// Runtime-dependent summary, optionally carrying first-origin evidence.
 [[nodiscard]] inline Availability
     availability_rt(std::optional<TyRuntimeEvidence> evidence = std::nullopt) {
-    return Availability{AvailabilityKind::Rt, std::move(evidence)};
+    return Availability{AvailabilityKind::Rt, std::move(evidence), false};
+}
+
+/// Symbolic availability for an ordinary plain parameter inside a declaration.
+[[nodiscard]] inline Availability availability_runtime_allowed_param() {
+    return Availability{AvailabilityKind::Ct, std::nullopt, true};
 }
 
 /// Joins two availability summaries; runtime wins and the first concrete
 /// evidence is preserved.
 [[nodiscard]] inline Availability
     availability_join(const Availability& lhs, const Availability& rhs) {
-    if (lhs.kind == AvailabilityKind::Ct)
-        return rhs;
-    if (rhs.kind == AvailabilityKind::Ct)
-        return lhs;
+    if (lhs.kind == AvailabilityKind::Ct && rhs.kind == AvailabilityKind::Ct) {
+        return Availability{
+            AvailabilityKind::Ct, std::nullopt,
+            lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param};
+    }
+    if (lhs.kind == AvailabilityKind::Ct) {
+        Availability joined = rhs;
+        joined.depends_on_runtime_allowed_param =
+            lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param;
+        return joined;
+    }
+    if (rhs.kind == AvailabilityKind::Ct) {
+        Availability joined = lhs;
+        joined.depends_on_runtime_allowed_param =
+            lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param;
+        return joined;
+    }
     return Availability{
-        AvailabilityKind::Rt, lhs.evidence.has_value() ? lhs.evidence : rhs.evidence};
+        AvailabilityKind::Rt, lhs.evidence.has_value() ? lhs.evidence : rhs.evidence,
+        lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param};
 }
 
 /// Projects a source/runtime-qualified type into an availability summary.
@@ -413,6 +435,12 @@ struct Availability {
 /// Returns true when the canonical availability summary is compile-time.
 [[nodiscard]] inline bool is_ct_available(const Availability& availability) {
     return availability.kind == AvailabilityKind::Ct;
+}
+
+/// Returns true when an expression may satisfy a CT-required position.
+[[nodiscard]] inline bool is_ct_required_available(const Availability& availability) {
+    return availability.kind == AvailabilityKind::Ct
+        && !availability.depends_on_runtime_allowed_param;
 }
 
 /// Single named-field initializer inside a struct construction expression.

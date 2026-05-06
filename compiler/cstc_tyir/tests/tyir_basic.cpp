@@ -106,6 +106,18 @@ static void test_availability_join_preserves_first_evidence() {
     assert(joined.evidence->reason == "first");
 }
 
+static void test_runtime_allowed_param_availability_is_symbolic_ct() {
+    const Availability param = availability_runtime_allowed_param();
+    assert(is_ct_available(param));
+    assert(!is_ct_required_available(param));
+    assert(param.depends_on_runtime_allowed_param);
+
+    const Availability joined = availability_join(availability_ct(), param);
+    assert(is_ct_available(joined));
+    assert(!is_ct_required_available(joined));
+    assert(joined.depends_on_runtime_allowed_param);
+}
+
 static void test_availability_projection() {
     assert(with_availability_projection(ty::num(), availability_ct()) == ty::num());
     assert(with_availability_projection(ty::num(), availability_rt()) == ty::num(true));
@@ -238,6 +250,7 @@ int main() {
     test_runtime_ty();
     test_availability_from_type_detects_nested_runtime_tags();
     test_availability_join_preserves_first_evidence();
+    test_runtime_allowed_param_availability_is_symbolic_ct();
     test_availability_projection();
     test_set_availability_projects_type();
     test_named_shape_distinguishes_nominal_types();
