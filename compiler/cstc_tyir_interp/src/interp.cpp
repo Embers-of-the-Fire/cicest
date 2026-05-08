@@ -2262,12 +2262,9 @@ ConstraintEvalResult evaluate_constraint(
                             [&](const auto& stmt_node) -> ConstraintEvalResult {
                                 using StmtNode = std::decay_t<decltype(stmt_node)>;
                                 if constexpr (std::is_same_v<StmtNode, tyir::TyLetStmt>) {
-                                    if (!call_argument_compatible(
-                                            stmt_node.init->ty, stmt_node.ty)) {
-                                        if (auto unresolved =
-                                                unresolved_call_argument_compatibility_check(
-                                                    stmt_node.init->ty, stmt_node.ty,
-                                                    generic_params);
+                                    if (!compatible(stmt_node.init->ty, stmt_node.ty)) {
+                                        if (auto unresolved = unresolved_compatibility_check(
+                                                stmt_node.init->ty, stmt_node.ty, generic_params);
                                             unresolved.has_value()) {
                                             return *unresolved;
                                         }
@@ -2359,8 +2356,8 @@ ConstraintEvalResult evaluate_constraint(
                     return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
                 } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
                     if (node.init.has_value()) {
-                        if (!call_argument_compatible(node.init->init->ty, node.init->ty)) {
-                            if (auto unresolved = unresolved_call_argument_compatibility_check(
+                        if (!compatible(node.init->init->ty, node.init->ty)) {
+                            if (auto unresolved = unresolved_compatibility_check(
                                     node.init->init->ty, node.init->ty, generic_params);
                                 unresolved.has_value()) {
                                 return *unresolved;

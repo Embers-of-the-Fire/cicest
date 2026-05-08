@@ -1614,6 +1614,32 @@ fn probe(box: Box) -> Constraint {
         == Symbol::intern("Invalid"));
 }
 
+static void test_decl_let_initializer_with_runtime_value_stays_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe(value: runtime num) -> Constraint {
+    decl({ let x: num = value; x })
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_for_initializer_with_runtime_value_stays_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe(value: runtime num) -> Constraint {
+    decl({ for (let i: num = value; false; 0) { }; 0 })
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
 static void test_decl_null_evidence_rt_probe_folds_to_constraint_invalid() {
     SymbolSession session;
     TyProgram program = must_lower_with_constraint_prelude(R"(
@@ -3295,6 +3321,8 @@ int main() {
     test_decl_runtime_probe_folds_to_constraint_invalid();
     test_decl_runtime_block_with_local_ref_folds_to_constraint_invalid();
     test_decl_runtime_field_access_with_local_ref_folds_to_constraint_invalid();
+    test_decl_let_initializer_with_runtime_value_stays_invalid();
+    test_decl_for_initializer_with_runtime_value_stays_invalid();
     test_decl_null_evidence_rt_probe_folds_to_constraint_invalid();
     test_decl_where_clause_accepts_parameter_references();
     test_decl_probe_defers_nested_function_constraint_failures();
