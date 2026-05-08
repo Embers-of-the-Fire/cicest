@@ -2070,6 +2070,44 @@ ConstraintEvalResult evaluate_constraint(
                         return lhs;
                     return self(self, node.rhs);
                 } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                    if (node.base == nullptr || node.base->ty.kind != tyir::TyKind::Named) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
+                    const auto decl_it = program.structs.find(node.base->ty.name);
+                    if (decl_it == program.structs.end()) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
+                    const auto field_it = std::find_if(
+                        decl_it->second->fields.begin(), decl_it->second->fields.end(),
+                        [&](const tyir::TyFieldDecl& field) { return field.name == node.field; });
+                    if (field_it == decl_it->second->fields.end()) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
+                    tyir::Ty field_ty = field_it->ty;
+                    if (!node.base->ty.generic_args.empty()) {
+                        const auto substitution = build_substitution(
+                            decl_it->second->generic_params, node.base->ty.generic_args);
+                        field_ty = apply_substitution(field_ty, substitution);
+                    }
+                    if (tyir::ty_contains_runtime_tag(field_ty)) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression uses runtime-only behavior",
+                            std::nullopt,
+                        };
+                    }
                     return self(self, node.base);
                 } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
                     bool defer_where_clause = false;
@@ -2292,6 +2330,13 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (
                     std::is_same_v<Node, tyir::TyRuntimeBlock>
                     || std::is_same_v<Node, tyir::TyLoop>) {
+                    if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression uses runtime-only behavior",
+                            std::nullopt,
+                        };
+                    }
                     if (node.body == nullptr)
                         return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                     return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
