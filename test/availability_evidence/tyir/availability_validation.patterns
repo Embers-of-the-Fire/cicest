@@ -13,4 +13,6 @@ Let bounded: runtime num =
 TyRuntimeBlock: runtime num
 TyCall(checked_add): runtime num
 TyCall(source): runtime num
-TyLiteral(3): num
+TyCall(checked_add): num
+TyLiteral(1): num
+TyLiteral(2): num

@@ -3684,6 +3684,8 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                if (!tyir::is_ct_available(expr))
+                    return expr;
                 std::vector<tyir::TyExprPtr> args;
                 args.reserve(node.args.size());
                 for (const tyir::TyExprPtr& arg : node.args) {

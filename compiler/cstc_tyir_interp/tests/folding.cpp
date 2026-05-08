@@ -316,6 +316,48 @@ static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
     assert(call.args.front()->ty == ty::num());
 }
 
+static void test_rt_available_call_with_foldable_argument_remains_in_tyir() {
+    SymbolSession session;
+    const Symbol id_name = Symbol::intern("id");
+    const Symbol generic_name = Symbol::intern("T");
+    const Symbol value_name = Symbol::intern("value");
+
+    TyProgram program;
+    program.items.push_back(make_generic_identity_fn(id_name, generic_name, value_name));
+
+    TyBlock main_body;
+    main_body.ty = ty::num(true);
+    TyBinary add_arg{cstc::ast::BinaryOp::Add, make_num_expr("1"), make_num_expr("2")};
+    auto arg = make_ty_expr({}, add_arg, ty::num());
+    main_body.tail = make_ty_expr(
+        {}, TyCall{id_name, {ty::num()}, {std::move(arg)}}, ty::num(true),
+        runtime_result_call_availability());
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(true),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyExprPtr& tail = require_tail(find_fn(*folded, "main"));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    assert(tail->availability.evidence.has_value());
+    assert(tail->availability.evidence->reason == "runtime-result call");
+    const TyCall& call = require_call(tail);
+    assert(call.fn_name == id_name);
+    assert(call.args.size() == 1);
+    assert(std::holds_alternative<TyBinary>(call.args.front()->node));
+}
+
 static void test_null_evidence_rt_call_remains_in_tyir() {
     SymbolSession session;
     TyProgram program = must_lower_with_constraint_prelude(R"(
@@ -850,9 +892,8 @@ fn main() {
     assert(print_call.args.size() == 1);
     assert(std::holds_alternative<TyBorrow>(print_call.args[0]->node));
     const auto& borrow = std::get<TyBorrow>(print_call.args[0]->node);
-    const TyLiteral& borrow_literal = require_literal(borrow.rhs);
-    assert(borrow_literal.kind == TyLiteral::Kind::OwnedStr);
-    assert(borrow_literal.symbol.as_str() == std::string_view{"\"42\""});
+    assert(std::holds_alternative<LocalRef>(borrow.rhs->node));
+    assert(std::get<LocalRef>(borrow.rhs->node).name == Symbol::intern("rendered"));
 }
 
 static void test_borrow_preserves_folded_rhs_when_ref_cannot_materialize() {
@@ -876,9 +917,7 @@ fn main() {
     assert(std::holds_alternative<TyBorrow>(sink_call.args[0]->node));
 
     const auto& borrow = std::get<TyBorrow>(sink_call.args[0]->node);
-    const TyLiteral& literal = require_literal(borrow.rhs);
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"3"});
+    assert(std::holds_alternative<TyBinary>(borrow.rhs->node));
 }
 
 static void test_runtime_intrinsic_call_is_preserved() {
@@ -3263,6 +3302,7 @@ int main() {
     test_runtime_call_remains_in_tyir();
     test_plain_call_with_runtime_argument_remains_in_tyir();
     test_runtime_result_call_with_ct_argument_remains_in_tyir();
+    test_rt_available_call_with_foldable_argument_remains_in_tyir();
     test_null_evidence_rt_call_remains_in_tyir();
     test_runtime_block_folds_pure_inner_expression();
     test_runtime_block_preserves_runtime_call_boundary();
