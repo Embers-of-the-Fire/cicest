@@ -134,6 +134,12 @@ static const TyExprPtr& require_tail(const TyFnDecl& fn) {
     return *fn.body->tail;
 }
 
+static TyExprPtr& require_tail(TyFnDecl& fn) {
+    assert(fn.body != nullptr);
+    assert(fn.body->tail.has_value());
+    return *fn.body->tail;
+}
+
 static const TyLiteral& require_literal(const TyExprPtr& expr) {
     assert(std::holds_alternative<TyLiteral>(expr->node));
     return std::get<TyLiteral>(expr->node);
@@ -370,7 +376,7 @@ fn main() -> runtime num {
 }
 )");
 
-    TyExprPtr& tail = *find_fn(program, "main").body->tail;
+    TyExprPtr& tail = require_tail(find_fn(program, "main"));
     set_availability(*tail, availability_rt());
     assert(tail->availability.kind == AvailabilityKind::Rt);
     assert(!tail->availability.evidence.has_value());
@@ -1687,7 +1693,7 @@ fn probe() -> Constraint {
 }
 )");
 
-    TyExprPtr& tail = *find_fn(program, "probe").body->tail;
+    TyExprPtr& tail = require_tail(find_fn(program, "probe"));
     TyDeclProbe& probe = std::get<TyDeclProbe>(tail->node);
     assert(probe.expr.has_value());
     set_availability(**probe.expr, availability_rt());
