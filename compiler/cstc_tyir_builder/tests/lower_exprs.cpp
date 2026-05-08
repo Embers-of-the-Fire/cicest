@@ -265,6 +265,19 @@ static void test_call_unreachable_arg_does_not_taint_plain_result() {
     assert(body.availability.kind == AvailabilityKind::Ct);
 }
 
+static void test_plain_call_with_diverging_argument_becomes_never_in_if_branch() {
+    const auto prog = must_lower(
+        "fn sink(value: num) -> num { value }"
+        "fn f(cond: bool) -> num { if cond { sink((return 1)) } else { true }; 0 }");
+    const auto& stmt = std::get<TyExprStmt>(second_fn(prog).body->stmts[0]);
+    assert(stmt.expr->ty == ty::bool_());
+    const auto& if_expr = std::get<TyIf>(stmt.expr->node);
+    assert(if_expr.then_block->tail.has_value());
+    const auto& call = std::get<TyCall>((*if_expr.then_block->tail)->node);
+    assert((*if_expr.then_block->tail)->ty == ty::never());
+    assert(call.args[0]->ty == ty::never());
+}
+
 static void test_unused_runtime_let_taints_plain_result_function() {
     must_fail_with_message(
         "runtime fn source() -> num { 1 }"
@@ -1206,6 +1219,19 @@ static void test_return_type_resolves_deferred_call_through_if_branches() {
     assert(call.generic_args[0] == ty::num());
 }
 
+static void test_deferred_generic_call_with_diverging_argument_becomes_never_in_if_branch() {
+    const auto prog = must_lower(
+        "fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn f(cond: bool) -> num { if cond { make_default((return 1)) } else { true }; 0 }");
+    const auto& stmt = std::get<TyExprStmt>(second_fn(prog).body->stmts[0]);
+    assert(stmt.expr->ty == ty::bool_());
+    const auto& if_expr = std::get<TyIf>(stmt.expr->node);
+    assert(if_expr.then_block->tail.has_value());
+    const auto& call = std::get<TyDeferredGenericCall>((*if_expr.then_block->tail)->node);
+    assert((*if_expr.then_block->tail)->ty == ty::never());
+    assert(call.args[0]->ty == ty::never());
+}
+
 static void test_if_branch_join_keeps_runtime_on_deferred_generic_call() {
     must_fail_with_message(
         "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
@@ -1671,6 +1697,7 @@ int main() {
     test_plain_call_accepts_runtime_argument_and_lifts_result();
     test_plain_call_lifted_result_still_prevents_return_demotion();
     test_call_unreachable_arg_does_not_taint_plain_result();
+    test_plain_call_with_diverging_argument_becomes_never_in_if_branch();
     test_unused_runtime_let_taints_plain_result_function();
     test_runtime_expression_statement_taints_plain_result_function();
     test_runtime_block_statement_taints_plain_result_function();
@@ -1793,6 +1820,7 @@ int main() {
     test_let_annotation_resolves_deferred_call_in_block_tail();
     test_let_annotation_resolves_direct_deferred_call();
     test_return_type_resolves_deferred_call_through_if_branches();
+    test_deferred_generic_call_with_diverging_argument_becomes_never_in_if_branch();
     test_if_branch_join_keeps_runtime_on_deferred_generic_call();
     test_expected_type_resolves_nested_deferred_generic_argument();
     test_deferred_resolution_uses_specialized_parameter_type();

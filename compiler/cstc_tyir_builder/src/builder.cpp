@@ -376,7 +376,7 @@ using TypeSubstitution =
 [[nodiscard]] static tyir::Ty
     lift_call_result_type(tyir::Ty result_ty, const std::vector<tyir::TyExprPtr>& args) {
     if (!exprs_can_fallthrough(args))
-        return erase_runtime_qualifiers(result_ty);
+        return tyir::ty::never();
     if (type_has_runtime_dependency(result_ty))
         result_ty.is_runtime = true;
     for (const tyir::TyExprPtr& arg : args) {
@@ -929,7 +929,7 @@ struct LowerCtx {
     if (result_shape.is_never())
         return result_shape;
     if (!exprs_can_fallthrough(args))
-        return erase_runtime_qualifiers(result_shape);
+        return tyir::ty::never();
     for (const tyir::TyExprPtr& arg : args) {
         if (arg != nullptr && type_has_runtime_dependency(arg->ty)) {
             result_shape.is_runtime = true;
