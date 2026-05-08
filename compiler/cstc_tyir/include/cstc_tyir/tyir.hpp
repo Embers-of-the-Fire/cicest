@@ -418,8 +418,7 @@ struct Availability {
 
 /// Projects a source/runtime-qualified type into an availability summary.
 [[nodiscard]] inline Availability
-    availability_from_type(const Ty& ty, cstc::span::SourceSpan span = {}) {
-    (void)span;
+    availability_from_type(const Ty& ty, [[maybe_unused]] cstc::span::SourceSpan span = {}) {
     return ty_contains_runtime_tag(ty) ? availability_rt() : availability_ct();
 }
 
