@@ -104,6 +104,12 @@ static void test_availability_join_preserves_first_evidence() {
     assert(joined.evidence.has_value());
     assert(joined.evidence->span.start == 1);
     assert(joined.evidence->reason == "first");
+
+    const Availability joined_fallback =
+        availability_join(runtime_from_type, availability_rt(second));
+    assert(joined_fallback.evidence.has_value());
+    assert(joined_fallback.evidence->span.start == 3);
+    assert(joined_fallback.evidence->reason == "second");
 }
 
 static void test_runtime_allowed_param_availability_is_symbolic_ct() {
