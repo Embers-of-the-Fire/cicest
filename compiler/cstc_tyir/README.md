@@ -72,6 +72,13 @@ value depends on a runtime-qualified source, a runtime-result declaration, a
 runtime block, or a whole-term runtime contribution. `evidence` records the first
 concrete runtime origin when one is available for diagnostics.
 
+Function declarations also carry a symbolic availability signature. The
+signature records parameter expressions such as `param0`, `CT`, or `RT`, a
+symbolic result expression such as `(param0 | param1)`, and optional internal
+runtime evidence. Calls instantiate the symbolic result expression with actual
+argument availability rather than deriving result runtime-ness solely from the
+argument types after the fact.
+
 ### `TyExpr` — type-annotated expression
 
 Every expression node carries:
@@ -149,7 +156,7 @@ TyProgram
   TyStructDecl Point
     x: num
     y: num
-  TyFnDecl add(x: num, y: num) -> num
+  TyFnDecl add(x: num, y: num) -> num [availability-signature: params=[param0, param1], result=(param0 | param1)]
     TyBlock: num [availability: const]
       Tail
         TyBinary(+): num [availability: const]

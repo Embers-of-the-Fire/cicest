@@ -82,6 +82,13 @@ parameter with the actual argument availability and lifts the call result when a
 runtime-dependent argument is passed. CT-required parameters and `const` local
 annotations reject this symbolic dependence before residualization.
 
+Lowering publishes the same contract in `TyFnDecl` / `TyExternFnDecl` as symbolic
+availability signatures. Runtime-allowed parameters become `paramN`, CT-required
+parameters become `CT`, runtime-qualified parameters and runtime-result
+declarations become `RT`, and result summaries use simple joins. The current
+implementation intentionally keeps joins minimally simplified for stable TyIR
+output and does not introduce source-visible availability parameters.
+
 ### Main function constraints
 
 The `main` function, if present, is restricted to return one of:
