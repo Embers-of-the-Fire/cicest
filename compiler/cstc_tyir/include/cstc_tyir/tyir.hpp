@@ -361,6 +361,120 @@ enum class AvailabilityKind {
     Rt,
 };
 
+struct Availability;
+
+/// Symbolic availability expression kind used by function signatures.
+enum class AvailabilityExprKind {
+    /// Always compile-time available.
+    Ct,
+    /// Unavoidable runtime dependence.
+    Rt,
+    /// Dependence on the availability of a function parameter.
+    Param,
+    /// Join of two symbolic availability expressions.
+    Join,
+};
+
+/// Symbolic availability expression carried by function signatures.
+///
+/// `Availability` remains the concrete per-expression summary used while
+/// lowering. `AvailabilityExpr` records the declaration-level contract that can
+/// be instantiated at call sites with actual argument availability.
+struct AvailabilityExpr {
+    /// Expression variant.
+    AvailabilityExprKind kind = AvailabilityExprKind::Ct;
+    /// Parameter index when `kind == Param`.
+    std::size_t param_index = 0;
+    /// Left child when `kind == Join`.
+    std::shared_ptr<AvailabilityExpr> lhs;
+    /// Right child when `kind == Join`.
+    std::shared_ptr<AvailabilityExpr> rhs;
+};
+
+/// Symbolic compile-time availability.
+[[nodiscard]] inline AvailabilityExpr availability_expr_ct() { return {}; }
+
+/// Symbolic runtime availability.
+[[nodiscard]] inline AvailabilityExpr availability_expr_rt() {
+    AvailabilityExpr expr;
+    expr.kind = AvailabilityExprKind::Rt;
+    return expr;
+}
+
+/// Symbolic parameter availability.
+[[nodiscard]] inline AvailabilityExpr availability_expr_param(std::size_t index) {
+    AvailabilityExpr expr;
+    expr.kind = AvailabilityExprKind::Param;
+    expr.param_index = index;
+    return expr;
+}
+
+/// Joins two symbolic availability expressions with minimal simplification.
+[[nodiscard]] inline AvailabilityExpr
+    availability_expr_join(const AvailabilityExpr& lhs, const AvailabilityExpr& rhs) {
+    if (lhs.kind == AvailabilityExprKind::Ct)
+        return rhs;
+    if (rhs.kind == AvailabilityExprKind::Ct)
+        return lhs;
+    if (lhs.kind == AvailabilityExprKind::Rt || rhs.kind == AvailabilityExprKind::Rt)
+        return availability_expr_rt();
+
+    AvailabilityExpr expr;
+    expr.kind = AvailabilityExprKind::Join;
+    expr.lhs = std::make_shared<AvailabilityExpr>(lhs);
+    expr.rhs = std::make_shared<AvailabilityExpr>(rhs);
+    return expr;
+}
+
+/// Projects a concrete lowering summary into a symbolic expression.
+[[nodiscard]] inline AvailabilityExpr availability_expr_from_availability(
+    const Availability& availability);
+
+/// Substitutes parameter variables with concrete argument availability.
+[[nodiscard]] inline Availability availability_expr_substitute(
+    const AvailabilityExpr& expr, const std::vector<Availability>& args);
+
+/// Returns true when the expression is definitely CT under all instantiations.
+[[nodiscard]] inline bool availability_expr_always_ct(const AvailabilityExpr& expr) {
+    switch (expr.kind) {
+    case AvailabilityExprKind::Ct: return true;
+    case AvailabilityExprKind::Rt:
+    case AvailabilityExprKind::Param: return false;
+    case AvailabilityExprKind::Join:
+        return expr.lhs != nullptr && expr.rhs != nullptr && availability_expr_always_ct(*expr.lhs)
+            && availability_expr_always_ct(*expr.rhs);
+    }
+    return false;
+}
+
+/// Returns true when the expression contains unavoidable runtime dependence.
+[[nodiscard]] inline bool availability_expr_forces_rt(const AvailabilityExpr& expr) {
+    switch (expr.kind) {
+    case AvailabilityExprKind::Ct:
+    case AvailabilityExprKind::Param: return false;
+    case AvailabilityExprKind::Rt: return true;
+    case AvailabilityExprKind::Join:
+        return (expr.lhs != nullptr && availability_expr_forces_rt(*expr.lhs))
+            || (expr.rhs != nullptr && availability_expr_forces_rt(*expr.rhs));
+    }
+    return false;
+}
+
+/// Renders a symbolic availability expression for diagnostics and TyIR output.
+[[nodiscard]] inline std::string availability_expr_display(const AvailabilityExpr& expr) {
+    switch (expr.kind) {
+    case AvailabilityExprKind::Ct: return "CT";
+    case AvailabilityExprKind::Rt: return "RT";
+    case AvailabilityExprKind::Param: return "param" + std::to_string(expr.param_index);
+    case AvailabilityExprKind::Join: {
+        const std::string lhs = expr.lhs != nullptr ? availability_expr_display(*expr.lhs) : "?";
+        const std::string rhs = expr.rhs != nullptr ? availability_expr_display(*expr.rhs) : "?";
+        return "(" + lhs + " | " + rhs + ")";
+    }
+    }
+    return "?";
+}
+
 /// Canonical TyIR availability summary.
 ///
 /// `evidence` records the first concrete runtime origin when one is known. A
@@ -375,6 +489,13 @@ struct Availability {
     /// declaration parameter under a non-CT call-site instantiation.
     bool depends_on_runtime_allowed_param = false;
 };
+
+[[nodiscard]] inline AvailabilityExpr availability_expr_from_availability(
+    const Availability& availability) {
+    if (availability.kind == AvailabilityKind::Rt)
+        return availability_expr_rt();
+    return availability_expr_ct();
+}
 
 /// Compile-time-available summary.
 [[nodiscard]] inline Availability availability_ct() { return {}; }
@@ -414,6 +535,23 @@ struct Availability {
     return Availability{
         AvailabilityKind::Rt, lhs.evidence.has_value() ? lhs.evidence : rhs.evidence,
         lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param};
+}
+
+[[nodiscard]] inline Availability availability_expr_substitute(
+    const AvailabilityExpr& expr, const std::vector<Availability>& args) {
+    switch (expr.kind) {
+    case AvailabilityExprKind::Ct: return availability_ct();
+    case AvailabilityExprKind::Rt: return availability_rt();
+    case AvailabilityExprKind::Param:
+        if (expr.param_index < args.size())
+            return args[expr.param_index];
+        return availability_ct();
+    case AvailabilityExprKind::Join:
+        return availability_join(
+            expr.lhs != nullptr ? availability_expr_substitute(*expr.lhs, args) : availability_ct(),
+            expr.rhs != nullptr ? availability_expr_substitute(*expr.rhs, args) : availability_ct());
+    }
+    return availability_ct();
 }
 
 /// Projects a source/runtime-qualified type into an availability summary.
@@ -846,6 +984,12 @@ struct TyFnDecl {
     std::vector<cstc::ast::GenericConstraint> where_clause;
     /// Lowered generic `where` constraints used by later evaluation passes.
     std::vector<TyGenericConstraint> lowered_where_clause;
+    /// Symbolic availability for each declared parameter.
+    std::vector<AvailabilityExpr> param_availability;
+    /// Symbolic availability summary for the function result.
+    AvailabilityExpr result_availability;
+    /// First unavoidable body-internal runtime contributor, when present.
+    std::optional<TyRuntimeEvidence> internal_runtime_evidence;
 };
 
 /// Typed extern function declaration (no body).
@@ -870,6 +1014,12 @@ struct TyExternFnDecl {
     cstc::span::SourceSpan span;
     /// True when the function was declared with the `runtime` item modifier.
     bool is_runtime = false;
+    /// Symbolic availability for each declared parameter.
+    std::vector<AvailabilityExpr> param_availability;
+    /// Symbolic availability summary for the extern result.
+    AvailabilityExpr result_availability;
+    /// Extern runtime-result declarations are unavoidable runtime contributors.
+    std::optional<TyRuntimeEvidence> internal_runtime_evidence;
 };
 
 /// Typed extern struct declaration (opaque foreign type, no fields).

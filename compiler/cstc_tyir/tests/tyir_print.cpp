@@ -233,6 +233,30 @@ static void test_print_ct_required_parameter() {
     assert(contains(out, "TyFnDecl reserve(count: !runtime num) -> num"));
 }
 
+static void test_print_symbolic_fn_availability_signature() {
+    TyFnDecl fn;
+    fn.name = Symbol::intern("add");
+    fn.params = {
+        TyParam{Symbol::intern("a"), ty::num(), {}},
+        TyParam{Symbol::intern("b"), ty::num(), {}},
+    };
+    fn.return_ty = ty::num();
+    fn.body = std::make_shared<TyBlock>();
+    fn.body->ty = ty::num();
+    fn.param_availability = {availability_expr_param(0), availability_expr_param(1)};
+    fn.result_availability =
+        availability_expr_join(fn.param_availability[0], fn.param_availability[1]);
+
+    TyProgram prog;
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = format_program(prog);
+    assert(contains(
+        out,
+        "TyFnDecl add(a: num, b: num) -> num [availability-signature: params=[param0, "
+        "param1], result=(param0 | param1)]"));
+}
+
 static void test_print_generic_fn_metadata() {
     TyFnDecl fn;
     fn.name = Symbol::intern("id");
@@ -777,6 +801,7 @@ int main() {
     test_print_enum_with_discriminant();
     test_print_runtime_items();
     test_print_ct_required_parameter();
+    test_print_symbolic_fn_availability_signature();
     test_print_generic_fn_metadata();
     test_print_call_and_struct_init_generic_args();
     test_print_deferred_generic_call();

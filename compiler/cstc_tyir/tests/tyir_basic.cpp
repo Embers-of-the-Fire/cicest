@@ -128,6 +128,24 @@ static void test_runtime_allowed_param_availability_is_symbolic_ct() {
     assert(joined.depends_on_runtime_allowed_param);
 }
 
+static void test_symbolic_availability_exprs() {
+    const AvailabilityExpr param0 = availability_expr_param(0);
+    const AvailabilityExpr param1 = availability_expr_param(1);
+    const AvailabilityExpr joined = availability_expr_join(param0, param1);
+    assert(!availability_expr_always_ct(joined));
+    assert(!availability_expr_forces_rt(joined));
+    assert(availability_expr_display(joined) == "(param0 | param1)");
+
+    const Availability substituted = availability_expr_substitute(
+        joined, {availability_runtime_allowed_param(), availability_rt()});
+    assert(substituted.kind == AvailabilityKind::Rt);
+    assert(substituted.depends_on_runtime_allowed_param);
+
+    const AvailabilityExpr forced = availability_expr_join(joined, availability_expr_rt());
+    assert(availability_expr_forces_rt(forced));
+    assert(availability_expr_display(forced) == "RT");
+}
+
 static void test_availability_projection() {
     assert(with_availability_projection(ty::num(), availability_ct()) == ty::num());
     assert(with_availability_projection(ty::num(), availability_rt()) == ty::num(true));
@@ -261,6 +279,7 @@ int main() {
     test_availability_from_type_detects_nested_runtime_tags();
     test_availability_join_preserves_first_evidence();
     test_runtime_allowed_param_availability_is_symbolic_ct();
+    test_symbolic_availability_exprs();
     test_availability_projection();
     test_set_availability_projects_type();
     test_named_shape_distinguishes_nominal_types();
