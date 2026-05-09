@@ -621,6 +621,12 @@ struct LowerCtx {
     const tyir::Ty& actual, const tyir::Ty& expected, const GenericParamSet& generic_params,
     TypeSubstitution& subst);
 
+[[nodiscard]] static bool
+    type_depends_on_generic_params(const tyir::Ty& ty, const GenericParamSet& generic_params);
+
+[[nodiscard]] static tyir::Availability
+    runtime_availability_at(cstc::span::SourceSpan span, std::string reason);
+
 [[nodiscard]] static std::optional<tyir::Ty> joined_type_after_generic_substitution(
     const tyir::Ty& lhs, const tyir::Ty& rhs, const GenericParamSet& generic_params);
 
@@ -921,23 +927,51 @@ struct LowerCtx {
     return availabilities;
 }
 
+[[nodiscard]] static tyir::Availability reached_arg_availability(
+    const std::vector<tyir::TyExprPtr>& args) {
+    tyir::Availability availability = tyir::availability_ct();
+    for (const tyir::TyExprPtr& arg : args) {
+        if (arg == nullptr)
+            continue;
+        availability = tyir::availability_join(availability, arg->availability);
+        if (!expr_can_fallthrough(*arg))
+            break;
+    }
+    return availability;
+}
+
 [[nodiscard]] static tyir::Availability call_result_availability(
     const FnSignature& sig, const std::vector<tyir::TyExprPtr>& args,
-    const tyir::Ty& resolved_return_shape) {
+    const tyir::Ty& resolved_return_shape, cstc::span::SourceSpan call_span) {
+    if (!exprs_can_fallthrough(args))
+        return reached_arg_availability(args);
+
     tyir::Availability result =
         tyir::availability_expr_substitute(sig.result_availability, call_arg_availabilities(args));
-    if (type_has_runtime_dependency(resolved_return_shape))
+    if (type_depends_on_generic_params(resolved_return_shape, make_generic_param_set(sig.generic_params))) {
+        for (const tyir::TyExprPtr& arg : args) {
+            if (arg != nullptr)
+                result = tyir::availability_join(result, arg->availability);
+        }
+    }
+    if (type_has_runtime_dependency(resolved_return_shape)) {
+        result = tyir::availability_join(
+            result, runtime_availability_at(call_span, "runtime-result call"));
+    } else if (result.kind == tyir::AvailabilityKind::Rt && !result.evidence.has_value()) {
         result = tyir::availability_join(result, tyir::availability_rt(sig.internal_runtime_evidence));
+    }
     return result;
 }
 
 [[nodiscard]] static tyir::Ty call_result_type(
-    tyir::Ty result_shape, const std::vector<tyir::TyExprPtr>& args, const FnSignature& sig) {
+    tyir::Ty result_shape, const std::vector<tyir::TyExprPtr>& args, const FnSignature& sig,
+    cstc::span::SourceSpan call_span) {
     if (result_shape.is_never())
         return result_shape;
     if (!exprs_can_fallthrough(args))
         return tyir::ty::never();
-    return tyir::with_availability_projection(result_shape, call_result_availability(sig, args, result_shape));
+    return tyir::with_availability_projection(
+        result_shape, call_result_availability(sig, args, result_shape, call_span));
 }
 
 [[nodiscard]] static tyir::Ty propagate_runtime_tag(tyir::Ty ty, bool inherited_runtime) {
@@ -1975,9 +2009,10 @@ struct ParamReferenceVisitor {
 
     const tyir::Ty resolved_return_shape =
         annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env);
-    const tyir::Ty resolved_return_ty = call_result_type(resolved_return_shape, deferred->args, sig);
+    const tyir::Ty resolved_return_ty =
+        call_result_type(resolved_return_shape, deferred->args, sig, expr->span);
     tyir::Availability deferred_call_availability =
-        call_result_availability(sig, deferred->args, resolved_return_shape);
+        call_result_availability(sig, deferred->args, resolved_return_shape, expr->span);
     if (!fully_resolved) {
         return tyir::make_ty_expr(
             expr->span,
@@ -2015,7 +2050,7 @@ struct ParamReferenceVisitor {
     }
 
     const tyir::Availability call_availability =
-        call_result_availability(sig, resolved_args, resolved_return_shape);
+        call_result_availability(sig, resolved_args, resolved_return_shape, expr->span);
     const tyir::Ty lifted_return_ty = tyir::with_availability_projection(resolved_return_ty, call_availability);
 
     return tyir::make_ty_expr(
@@ -3217,7 +3252,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 const tyir::Ty resolved_return_shape = annotate_type_semantics(
                     apply_substitution(sig.return_ty, substitution), ctx.env);
                 const tyir::Ty resolved_return_ty =
-                    call_result_type(resolved_return_shape, lowered_args, sig);
+                    call_result_type(resolved_return_shape, lowered_args, sig, expr->span);
 
                 tyir::TyExprPtr lowered_expr;
                 if (fully_resolved) {
@@ -3252,7 +3287,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     }
 
                     const tyir::Availability call_availability =
-                        call_result_availability(sig, lowered_args, resolved_return_shape);
+                        call_result_availability(sig, lowered_args, resolved_return_shape, expr->span);
                     const tyir::Ty lifted_return_ty =
                         tyir::with_availability_projection(resolved_return_ty, call_availability);
 
@@ -3263,7 +3298,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         lifted_return_ty, call_availability);
                 } else {
                     const tyir::Availability call_availability =
-                        call_result_availability(sig, lowered_args, resolved_return_shape);
+                        call_result_availability(sig, lowered_args, resolved_return_shape, expr->span);
                     const tyir::Ty lifted_return_ty =
                         tyir::with_availability_projection(resolved_return_ty, call_availability);
                     lowered_expr = tyir::make_ty_expr(
