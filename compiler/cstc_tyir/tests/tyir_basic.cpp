@@ -82,6 +82,10 @@ static void test_availability_from_type_detects_nested_runtime_tags() {
     const Availability availability = availability_from_type(borrowed_runtime_box);
     assert(availability.kind == AvailabilityKind::Rt);
     assert(!availability.evidence.has_value());
+
+    const Availability runtime_num = availability_from_type(ty::num(true));
+    assert(runtime_num.kind == AvailabilityKind::Rt);
+    assert(runtime_num.evidence == std::nullopt);
 }
 
 static void test_availability_join_preserves_first_evidence() {

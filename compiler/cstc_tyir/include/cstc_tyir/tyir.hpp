@@ -417,8 +417,7 @@ struct Availability {
 }
 
 /// Projects a source/runtime-qualified type into an availability summary.
-[[nodiscard]] inline Availability
-    availability_from_type(const Ty& ty, [[maybe_unused]] cstc::span::SourceSpan span = {}) {
+[[nodiscard]] inline Availability availability_from_type(const Ty& ty) {
     return ty_contains_runtime_tag(ty) ? availability_rt() : availability_ct();
 }
 
@@ -658,8 +657,7 @@ inline void set_availability(TyExpr& expr, const Availability& availability) {
     expr.node = std::move(node);
     expr.ty = std::move(ty);
     expr.span = span;
-    set_availability(
-        expr, availability_join(availability_from_type(expr.ty, expr.span), availability));
+    set_availability(expr, availability_join(availability_from_type(expr.ty), availability));
     return std::make_shared<TyExpr>(std::move(expr));
 }
 
