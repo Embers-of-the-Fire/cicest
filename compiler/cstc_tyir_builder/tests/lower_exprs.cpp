@@ -714,6 +714,7 @@ static void test_for_unreachable_step_does_not_taint_plain_result() {
     const auto prog = must_lower("fn f() -> num { for (;; runtime { 1 }) { break; }; 0 }");
     const auto& body = *first_fn(prog).body;
     assert(body.availability.kind == AvailabilityKind::Ct);
+    assert(body.availability.evidence == std::nullopt);
     assert(body.tail.has_value());
     assert((*body.tail)->ty == ty::num());
 }
