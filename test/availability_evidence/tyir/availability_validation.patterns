@@ -1,7 +1,7 @@
 # source: test/e2e/pass/runtime/availability_validation.cst
 # out-type: tyir
 # rule: call_lifting,runtime_block
-TyFnDecl checked_add(a: num, b: num) -> num
+TyFnDecl checked_add(a: num, b: num) -> num [availability-signature: params=[param0, param1], result=(param0 | param1)]
 TyCall(__cst_mod_1__assert): Unit
 Let static_value: num =
 TyLiteral(3): num
