@@ -252,9 +252,8 @@ static void test_print_symbolic_fn_availability_signature() {
 
     const std::string out = format_program(prog);
     assert(contains(
-        out,
-        "TyFnDecl add(a: num, b: num) -> num [availability-signature: params=[param0, "
-        "param1], result=(param0 | param1)]"));
+        out, "TyFnDecl add(a: num, b: num) -> num [availability-signature: params=[param0, "
+             "param1], result=(param0 | param1)]"));
 }
 
 static void test_print_generic_fn_metadata() {

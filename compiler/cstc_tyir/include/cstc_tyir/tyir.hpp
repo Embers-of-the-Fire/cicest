@@ -427,8 +427,8 @@ struct AvailabilityExpr {
 }
 
 /// Projects a concrete lowering summary into a symbolic expression.
-[[nodiscard]] inline AvailabilityExpr availability_expr_from_availability(
-    const Availability& availability);
+[[nodiscard]] inline AvailabilityExpr
+    availability_expr_from_availability(const Availability& availability);
 
 /// Substitutes parameter variables with concrete argument availability.
 [[nodiscard]] inline Availability availability_expr_substitute(
@@ -490,8 +490,8 @@ struct Availability {
     bool depends_on_runtime_allowed_param = false;
 };
 
-[[nodiscard]] inline AvailabilityExpr availability_expr_from_availability(
-    const Availability& availability) {
+[[nodiscard]] inline AvailabilityExpr
+    availability_expr_from_availability(const Availability& availability) {
     if (availability.kind == AvailabilityKind::Rt)
         return availability_expr_rt();
     return availability_expr_ct();
@@ -549,7 +549,8 @@ struct Availability {
     case AvailabilityExprKind::Join:
         return availability_join(
             expr.lhs != nullptr ? availability_expr_substitute(*expr.lhs, args) : availability_ct(),
-            expr.rhs != nullptr ? availability_expr_substitute(*expr.rhs, args) : availability_ct());
+            expr.rhs != nullptr ? availability_expr_substitute(*expr.rhs, args)
+                                : availability_ct());
     }
     return availability_ct();
 }
