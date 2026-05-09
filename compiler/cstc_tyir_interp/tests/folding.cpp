@@ -102,6 +102,19 @@ static const TyFnDecl& find_fn(const TyProgram& program, std::string_view name) 
     std::abort();
 }
 
+static TyFnDecl& find_fn(TyProgram& program, std::string_view name) {
+    const Symbol fn_name = Symbol::intern(name);
+    for (TyItem& item : program.items) {
+        if (auto* fn = std::get_if<TyFnDecl>(&item)) {
+            if (fn->name == fn_name)
+                return *fn;
+        }
+    }
+
+    assert(false && "function not found");
+    std::abort();
+}
+
 static const TyStructDecl& find_struct(const TyProgram& program, std::string_view name) {
     const Symbol struct_name = Symbol::intern(name);
     for (const TyItem& item : program.items) {
@@ -116,6 +129,12 @@ static const TyStructDecl& find_struct(const TyProgram& program, std::string_vie
 }
 
 static const TyExprPtr& require_tail(const TyFnDecl& fn) {
+    assert(fn.body != nullptr);
+    assert(fn.body->tail.has_value());
+    return *fn.body->tail;
+}
+
+static TyExprPtr& require_tail(TyFnDecl& fn) {
     assert(fn.body != nullptr);
     assert(fn.body->tail.has_value());
     return *fn.body->tail;
@@ -136,9 +155,47 @@ static const TyStructInit& require_struct_init(const TyExprPtr& expr) {
     return std::get<TyStructInit>(expr->node);
 }
 
+static const TyFieldAccess& require_field_access(const TyExprPtr& expr) {
+    assert(std::holds_alternative<TyFieldAccess>(expr->node));
+    return std::get<TyFieldAccess>(expr->node);
+}
+
 static const EnumVariantRef& require_constraint_variant(const TyExprPtr& expr) {
     assert(std::holds_alternative<EnumVariantRef>(expr->node));
     return std::get<EnumVariantRef>(expr->node);
+}
+
+static Ty generic_copy_ty(Symbol generic_name) {
+    return ty::named(generic_name, generic_name, ValueSemantics::Copy);
+}
+
+static Availability runtime_result_call_availability() {
+    return availability_rt(TyRuntimeEvidence{{}, "runtime-result call"});
+}
+
+static TyExprPtr make_num_expr(std::string_view value) {
+    return make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern(value), false}, ty::num());
+}
+
+static TyFnDecl make_generic_identity_fn(Symbol fn_name, Symbol generic_name, Symbol value_name) {
+    const Ty generic_ty = generic_copy_ty(generic_name);
+
+    TyBlock body;
+    body.ty = generic_ty;
+    body.tail = make_ty_expr({}, LocalRef{value_name}, generic_ty);
+
+    return TyFnDecl{
+        .name = fn_name,
+        .generic_params = {{generic_name, {}}},
+        .params = {TyParam{value_name, generic_ty, {}, ParamRequirement::RuntimeAllowed}},
+        .return_ty = generic_ty,
+        .body = std::make_shared<TyBlock>(std::move(body)),
+        .span = {},
+        .is_runtime = false,
+        .where_clause = {},
+        .lowered_where_clause = {},
+    };
 }
 
 struct DeclProbeRecheckCase {
@@ -223,6 +280,117 @@ fn main() -> runtime num {
     assert(call.args[0]->ty == ty::num(true));
 }
 
+static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
+    SymbolSession session;
+    const Symbol id_name = Symbol::intern("id");
+    const Symbol generic_name = Symbol::intern("T");
+    const Symbol value_name = Symbol::intern("value");
+
+    TyProgram program;
+    program.items.push_back(make_generic_identity_fn(id_name, generic_name, value_name));
+
+    TyBlock main_body;
+    main_body.ty = ty::num(true);
+    main_body.tail = make_ty_expr(
+        {}, TyCall{id_name, {ty::num()}, {make_num_expr("1")}}, ty::num(true),
+        runtime_result_call_availability());
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(true),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyExprPtr& tail = require_tail(find_fn(*folded, "main"));
+    assert(tail->ty == ty::num(true));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    assert(tail->availability.evidence.has_value());
+    assert(tail->availability.evidence->reason == "runtime-result call");
+    const TyCall& call = require_call(tail);
+    assert(call.fn_name == Symbol::intern("id"));
+    assert(call.generic_args.size() == 1);
+    assert(call.args.size() == 1);
+    assert(call.args.front()->ty == ty::num());
+}
+
+static void test_rt_available_call_with_foldable_argument_remains_in_tyir() {
+    SymbolSession session;
+    const Symbol id_name = Symbol::intern("id");
+    const Symbol generic_name = Symbol::intern("T");
+    const Symbol value_name = Symbol::intern("value");
+
+    TyProgram program;
+    program.items.push_back(make_generic_identity_fn(id_name, generic_name, value_name));
+
+    TyBlock main_body;
+    main_body.ty = ty::num(true);
+    TyBinary add_arg{cstc::ast::BinaryOp::Add, make_num_expr("1"), make_num_expr("2")};
+    auto arg = make_ty_expr({}, add_arg, ty::num());
+    main_body.tail = make_ty_expr(
+        {}, TyCall{id_name, {ty::num()}, {std::move(arg)}}, ty::num(true),
+        runtime_result_call_availability());
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(true),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyExprPtr& tail = require_tail(find_fn(*folded, "main"));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    assert(tail->availability.evidence.has_value());
+    assert(tail->availability.evidence->reason == "runtime-result call");
+    const TyCall& call = require_call(tail);
+    assert(call.fn_name == id_name);
+    assert(call.args.size() == 1);
+    assert(std::holds_alternative<TyBinary>(call.args.front()->node));
+}
+
+static void test_null_evidence_rt_call_remains_in_tyir() {
+    SymbolSession session;
+    TyProgram program = must_lower_with_constraint_prelude(R"(
+fn one() -> num {
+    1
+}
+
+fn main() -> runtime num {
+    one()
+}
+)");
+
+    TyExprPtr& tail = require_tail(find_fn(program, "main"));
+    set_availability(*tail, availability_rt());
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    assert(!tail->availability.evidence.has_value());
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyExprPtr& folded_tail = require_tail(find_fn(*folded, "main"));
+    assert(folded_tail->availability.kind == AvailabilityKind::Rt);
+    assert(!folded_tail->availability.evidence.has_value());
+    const TyCall& call = require_call(folded_tail);
+    assert(call.fn_name == Symbol::intern("one"));
+}
+
 static void test_runtime_block_folds_pure_inner_expression() {
     SymbolSession session;
     const auto program = must_fold(R"(
@@ -234,7 +402,13 @@ fn main() -> runtime num {
     const TyExprPtr& tail = require_tail(find_fn(program, "main"));
     const auto& runtime_block = std::get<TyRuntimeBlock>(tail->node);
     assert(tail->ty == ty::num(true));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    assert(tail->availability.evidence.has_value());
+    assert(tail->availability.evidence->reason == "runtime block");
+    assert(!is_ct_available(*tail));
+    assert(is_ct_available(*runtime_block.body));
     assert(runtime_block.body->tail.has_value());
+    assert(is_ct_available(*runtime_block.body->tail));
     const TyLiteral& literal = require_literal(*runtime_block.body->tail);
     assert(literal.kind == TyLiteral::Kind::Num);
     assert(literal.symbol.as_str() == std::string_view{"3"});
@@ -258,6 +432,27 @@ fn main() -> runtime num {
     assert(std::holds_alternative<TyCall>(binary.lhs->node));
     const TyLiteral& literal = require_literal(binary.rhs);
     assert(literal.symbol.as_str() == std::string_view{"1"});
+}
+
+static void test_runtime_field_decl_preserves_runtime_boundary() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+struct Box {
+    value: runtime num
+}
+
+fn main() -> runtime num {
+    let box: Box = Box { value: 1 };
+    box.value
+}
+)");
+
+    const TyExprPtr& tail = require_tail(find_fn(program, "main"));
+    assert(tail->ty == ty::num(true));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    const TyFieldAccess& access = require_field_access(tail);
+    assert(access.field == Symbol::intern("value"));
+    assert(is_ct_available(access.base));
 }
 
 static void test_runtime_block_with_null_body_is_preserved() {
@@ -337,6 +532,169 @@ fn main() {
     const TyLiteral& folded_call = require_literal(folded_call_stmt.expr);
     assert(folded_call.kind == TyLiteral::Kind::Num);
     assert(folded_call.symbol.as_str() == std::string_view{"1"});
+}
+
+static void test_plain_type_runtime_availability_is_preserved() {
+    SymbolSession session;
+
+    const auto ast = cstc::parser::parse_source(R"(
+fn one() -> num { 1 }
+
+fn main() {
+    one();
+}
+)");
+    assert(ast.has_value());
+
+    auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+
+    TyProgram program = *tyir;
+    TyFnDecl* main_fn = nullptr;
+    for (TyItem& item : program.items) {
+        if (auto* fn = std::get_if<TyFnDecl>(&item);
+            fn != nullptr && fn->name == Symbol::intern("main")) {
+            main_fn = fn;
+            break;
+        }
+    }
+
+    assert(main_fn != nullptr);
+    assert(main_fn->body != nullptr);
+    auto runtime_unit = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Unit, kInvalidSymbol, false}, ty::unit(), availability_rt());
+    assert(runtime_unit->ty == ty::unit(true));
+    assert(runtime_unit->availability.kind == AvailabilityKind::Rt);
+    main_fn->body->stmts.insert(
+        main_fn->body->stmts.begin(), TyExprStmt{std::move(runtime_unit), {}});
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    const TyFnDecl& folded_main = find_fn(*folded, "main");
+    assert(folded_main.body != nullptr);
+    assert(folded_main.body->stmts.size() == 2);
+    const auto& runtime_stmt = std::get<TyExprStmt>(folded_main.body->stmts[0]);
+    assert(runtime_stmt.expr->ty == ty::unit(true));
+    assert(!is_ct_available(*runtime_stmt.expr));
+    assert(runtime_stmt.expr->availability.kind == AvailabilityKind::Rt);
+    assert(std::holds_alternative<TyLiteral>(runtime_stmt.expr->node));
+
+    const auto& folded_call_stmt = std::get<TyExprStmt>(folded_main.body->stmts[1]);
+    const TyLiteral& folded_call = require_literal(folded_call_stmt.expr);
+    assert(folded_call.kind == TyLiteral::Kind::Num);
+    assert(folded_call.symbol.as_str() == std::string_view{"1"});
+}
+
+static void test_folded_if_recomputes_availability_after_erasing_runtime_branch() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn choose(value: num) -> num {
+    if true { 1 } else { value }
+}
+)");
+
+    const TyFnDecl& choose = find_fn(program, "choose");
+    const TyExprPtr& tail = require_tail(choose);
+    const TyLiteral& literal = require_literal(tail);
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"1"});
+    assert(is_ct_available(*tail));
+    assert(is_ct_available(*choose.body));
+}
+
+static void test_folded_for_recomputes_availability_with_reachability() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn main() -> num {
+    for (return 1; runtime { true }; runtime { 2 }) { runtime { 3 }; };
+    0
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    assert(main_fn.body != nullptr);
+    assert(!main_fn.body->stmts.empty());
+    const auto& for_stmt = std::get<TyExprStmt>(main_fn.body->stmts[0]);
+    assert(is_ct_available(*for_stmt.expr));
+    assert(is_ct_available(*main_fn.body));
+}
+
+static void test_control_children_recompute_availability_with_reachability() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn if_case() -> num {
+    if (return 1) { runtime { 2 } } else { runtime { 3 } }
+}
+
+fn while_case() -> num {
+    while (return 1) { runtime { 2 }; }
+    0
+}
+)");
+
+    const TyFnDecl& if_case = find_fn(program, "if_case");
+    assert(is_ct_available(*require_tail(if_case)));
+    assert(is_ct_available(*if_case.body));
+
+    const TyFnDecl& while_case = find_fn(program, "while_case");
+    assert(while_case.body != nullptr);
+    assert(!while_case.body->stmts.empty());
+    const auto& while_stmt = std::get<TyExprStmt>(while_case.body->stmts[0]);
+    assert(is_ct_available(*while_stmt.expr));
+    assert(is_ct_available(*while_case.body));
+}
+
+static void test_folded_operands_recompute_availability_with_reachability() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+runtime fn source(left: num, right: num) -> num {
+    right
+}
+
+struct Pair { left: num, right: num }
+
+fn call_case() -> num {
+    source((return 1), runtime { 2 })
+}
+
+fn binary_case() -> num {
+    (return 1) + runtime { 2 }
+}
+
+fn struct_case() -> num {
+    Pair { left: return 1, right: runtime { 2 } };
+    0
+}
+)");
+
+    assert(is_ct_available(*find_fn(program, "call_case").body));
+    assert(is_ct_available(*find_fn(program, "binary_case").body));
+    assert(is_ct_available(*find_fn(program, "struct_case").body));
+}
+
+static void test_decl_generic_ct_block_argument_rechecks_availability_after_substitution() {
+    SymbolSession session;
+    const auto error = must_fail_to_fold_with_constraint_prelude(R"(
+fn reserve(value: const num) -> num {
+    value
+}
+
+fn probe<T>() -> Constraint {
+    decl(reserve({ let value: T = 0; value }))
+}
+
+fn wrapper<T>() -> num where probe::<T>() {
+    1
+}
+
+fn main() -> num {
+    wrapper::<runtime num>()
+}
+)");
+
+    assert(error.message.find("generic constraint failed") != std::string::npos);
+    assert(error.message.find("function 'wrapper'") != std::string::npos);
 }
 
 static void test_short_circuit_boolean_ops_do_not_eval_dead_rhs() {
@@ -540,9 +898,8 @@ fn main() {
     assert(print_call.args.size() == 1);
     assert(std::holds_alternative<TyBorrow>(print_call.args[0]->node));
     const auto& borrow = std::get<TyBorrow>(print_call.args[0]->node);
-    const TyLiteral& borrow_literal = require_literal(borrow.rhs);
-    assert(borrow_literal.kind == TyLiteral::Kind::OwnedStr);
-    assert(borrow_literal.symbol.as_str() == std::string_view{"\"42\""});
+    assert(std::holds_alternative<LocalRef>(borrow.rhs->node));
+    assert(std::get<LocalRef>(borrow.rhs->node).name == Symbol::intern("rendered"));
 }
 
 static void test_borrow_preserves_folded_rhs_when_ref_cannot_materialize() {
@@ -566,9 +923,7 @@ fn main() {
     assert(std::holds_alternative<TyBorrow>(sink_call.args[0]->node));
 
     const auto& borrow = std::get<TyBorrow>(sink_call.args[0]->node);
-    const TyLiteral& literal = require_literal(borrow.rhs);
-    assert(literal.kind == TyLiteral::Kind::Num);
-    assert(literal.symbol.as_str() == std::string_view{"3"});
+    assert(std::holds_alternative<TyBinary>(borrow.rhs->node));
 }
 
 static void test_runtime_intrinsic_call_is_preserved() {
@@ -695,6 +1050,31 @@ fn main() {
     const auto& assert_stmt = std::get<TyExprStmt>(main_fn.body->stmts[1]);
     const TyLiteral& folded_assert = require_literal(assert_stmt.expr);
     assert(folded_assert.kind == TyLiteral::Kind::Unit);
+}
+
+static void test_decl_probe_ignores_dead_stmt_after_nonfallthrough_call() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn stop(flag: bool) -> ! {
+    loop { if flag { } }
+}
+
+fn main() -> num {
+    decl({ stop(true); runtime { 2 }; });
+    0
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    assert(main_fn.body != nullptr);
+    assert(!main_fn.body->stmts.empty());
+    const auto& probe_stmt = std::get<TyExprStmt>(main_fn.body->stmts[0]);
+    const EnumVariantRef& result = require_constraint_variant(probe_stmt.expr);
+    assert(result.variant_name == Symbol::intern("Valid"));
+
+    const TyLiteral& literal = require_literal(require_tail(main_fn));
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"0"});
 }
 
 static void test_dead_tail_after_break_is_not_folded() {
@@ -1246,6 +1626,85 @@ fn probe() -> Constraint {
 
     assert(
         require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_runtime_block_with_local_ref_folds_to_constraint_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe(value: num) -> Constraint {
+    decl(runtime { value })
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_runtime_field_access_with_local_ref_folds_to_constraint_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+struct Box {
+    value: runtime num
+}
+
+fn probe(box: Box) -> Constraint {
+    decl(box.value)
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_let_initializer_with_runtime_value_stays_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe(value: runtime num) -> Constraint {
+    decl({ let x: num = value; x })
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_for_initializer_with_runtime_value_stays_invalid() {
+    SymbolSession session;
+    const auto program = must_fold_with_constraint_prelude(R"(
+fn probe(value: runtime num) -> Constraint {
+    decl({ for (let i: num = value; false; 0) { }; 0 })
+}
+)");
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(program, "probe"))).variant_name
+        == Symbol::intern("Invalid"));
+}
+
+static void test_decl_null_evidence_rt_probe_folds_to_constraint_invalid() {
+    SymbolSession session;
+    TyProgram program = must_lower_with_constraint_prelude(R"(
+fn probe() -> Constraint {
+    decl(1)
+}
+)");
+
+    TyExprPtr& tail = require_tail(find_fn(program, "probe"));
+    TyDeclProbe& probe = std::get<TyDeclProbe>(tail->node);
+    assert(probe.expr.has_value());
+    set_availability(**probe.expr, availability_rt());
+    assert((*probe.expr)->availability.kind == AvailabilityKind::Rt);
+    assert(!(*probe.expr)->availability.evidence.has_value());
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(folded.has_value());
+
+    assert(
+        require_constraint_variant(require_tail(find_fn(*folded, "probe"))).variant_name
         == Symbol::intern("Invalid"));
 }
 
@@ -2598,6 +3057,85 @@ fn main() -> num {
     assert(error.message.find("function 'id'") != std::string::npos);
 }
 
+static void test_decl_generic_runtime_result_call_fails_after_substitution() {
+    SymbolSession session;
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const Symbol constraint_fn = Symbol::intern("constraint");
+    const Symbol id_name = Symbol::intern("id");
+    const Symbol wrapper_name = Symbol::intern("wrapper");
+    const Symbol generic_name = Symbol::intern("T");
+    const Symbol value_name = Symbol::intern("value");
+    const Ty generic_ty = generic_copy_ty(generic_name);
+    const Ty constraint_ty = ty::named(constraint_name, constraint_name, ValueSemantics::Copy);
+
+    TyProgram program;
+    TyEnumDecl constraint_enum;
+    constraint_enum.name = constraint_name;
+    constraint_enum.lang_name = Symbol::intern("cstc_constraint");
+    constraint_enum.variants.push_back(TyEnumVariant{Symbol::intern("Valid"), std::nullopt, {}});
+    constraint_enum.variants.push_back(TyEnumVariant{Symbol::intern("Invalid"), std::nullopt, {}});
+    program.items.push_back(std::move(constraint_enum));
+    program.items.push_back(
+        TyExternFnDecl{
+            .abi = Symbol::intern("lang"),
+            .name = constraint_fn,
+            .link_name = Symbol::intern("cstc_std_constraint"),
+            .params = {TyParam{
+                Symbol::intern("value"), ty::bool_(), {}, ParamRequirement::RuntimeAllowed}},
+            .return_ty = constraint_ty,
+            .span = {},
+            .is_runtime = false,
+        });
+    program.items.push_back(make_generic_identity_fn(id_name, generic_name, value_name));
+
+    auto make_inner_call = [&]() {
+        return make_ty_expr(
+            {}, TyCall{id_name, {generic_ty}, {make_num_expr("0")}}, generic_ty,
+            runtime_result_call_availability());
+    };
+    auto equality = make_ty_expr(
+        {}, TyBinary{cstc::ast::BinaryOp::Eq, make_inner_call(), make_inner_call()}, ty::bool_());
+    auto constraint_expr =
+        make_ty_expr({}, TyCall{constraint_fn, {}, {std::move(equality)}}, constraint_ty);
+
+    TyBlock wrapper_body;
+    wrapper_body.ty = ty::num();
+    wrapper_body.tail = make_num_expr("1");
+    program.items.push_back(
+        TyFnDecl{
+            .name = wrapper_name,
+            .generic_params = {{generic_name, {}}},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(wrapper_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {TyGenericConstraint{constraint_expr, {}}},
+        });
+
+    TyBlock main_body;
+    main_body.ty = ty::num();
+    main_body.tail = make_ty_expr({}, TyCall{wrapper_name, {ty::num(true)}, {}}, ty::num());
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("runtime-only behavior") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
 static void test_generic_where_runtime_loop_reports_runtime_only() {
     SymbolSession session;
     const auto error = must_fail_to_lower_with_constraint_prelude(R"(
@@ -2769,10 +3307,20 @@ int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
     test_plain_call_with_runtime_argument_remains_in_tyir();
+    test_runtime_result_call_with_ct_argument_remains_in_tyir();
+    test_rt_available_call_with_foldable_argument_remains_in_tyir();
+    test_null_evidence_rt_call_remains_in_tyir();
     test_runtime_block_folds_pure_inner_expression();
     test_runtime_block_preserves_runtime_call_boundary();
+    test_runtime_field_decl_preserves_runtime_boundary();
     test_runtime_block_with_null_body_is_preserved();
     test_runtime_block_stmt_with_null_body_still_falls_through();
+    test_plain_type_runtime_availability_is_preserved();
+    test_folded_if_recomputes_availability_after_erasing_runtime_branch();
+    test_folded_for_recomputes_availability_with_reachability();
+    test_control_children_recompute_availability_with_reachability();
+    test_folded_operands_recompute_availability_with_reachability();
+    test_decl_generic_ct_block_argument_rechecks_availability_after_substitution();
     test_short_circuit_boolean_ops_do_not_eval_dead_rhs();
     test_move_only_local_and_borrow_can_fold();
     test_move_only_return_materializes_owned_string();
@@ -2790,6 +3338,7 @@ int main() {
     test_dead_for_still_folds_reachable_init();
     test_dead_stmt_after_return_is_not_folded();
     test_decl_probe_does_not_stop_reachable_stmt_folding();
+    test_decl_probe_ignores_dead_stmt_after_nonfallthrough_call();
     test_dead_tail_after_break_is_not_folded();
     test_dead_tail_after_continue_is_not_folded();
     test_reached_assertion_failure_reports_error();
@@ -2816,6 +3365,11 @@ int main() {
     test_decl_valid_probe_folds_to_constraint_valid();
     test_decl_invalid_probe_folds_to_constraint_invalid();
     test_decl_runtime_probe_folds_to_constraint_invalid();
+    test_decl_runtime_block_with_local_ref_folds_to_constraint_invalid();
+    test_decl_runtime_field_access_with_local_ref_folds_to_constraint_invalid();
+    test_decl_let_initializer_with_runtime_value_stays_invalid();
+    test_decl_for_initializer_with_runtime_value_stays_invalid();
+    test_decl_null_evidence_rt_probe_folds_to_constraint_invalid();
     test_decl_where_clause_accepts_parameter_references();
     test_decl_probe_defers_nested_function_constraint_failures();
     test_decl_probe_defers_nested_struct_constraint_failures();
@@ -2862,6 +3416,7 @@ int main() {
     test_explicit_constraint_invalid_reports_constraint_failure();
     test_generic_where_parameter_references_are_rejected_while_lowering();
     test_generic_where_runtime_call_reports_runtime_only();
+    test_decl_generic_runtime_result_call_fails_after_substitution();
     test_generic_where_runtime_loop_reports_runtime_only();
     test_generic_where_runtime_while_reports_runtime_only();
     test_unused_generic_where_is_deferred_until_instantiation();

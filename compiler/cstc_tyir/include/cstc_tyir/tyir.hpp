@@ -28,6 +28,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -198,6 +199,22 @@ struct Ty {
     }
 };
 
+/// Returns true when `ty` or any nested type argument/pointee carries the
+/// source-level `runtime` qualifier.
+[[nodiscard]] inline bool ty_contains_runtime_tag(const Ty& ty) {
+    if (ty.is_runtime)
+        return true;
+    if (ty.kind == TyKind::Ref)
+        return ty.pointee != nullptr && ty_contains_runtime_tag(*ty.pointee);
+    if (ty.kind != TyKind::Named)
+        return false;
+    for (const Ty& arg : ty.generic_args) {
+        if (ty_contains_runtime_tag(arg))
+            return true;
+    }
+    return false;
+}
+
 /// Factory helpers for the well-known primitive types.
 namespace ty {
 /// Unit type `()`.
@@ -335,6 +352,94 @@ struct TyRuntimeEvidence {
     /// Short diagnostic description of the contributor.
     std::string reason;
 };
+
+/// Canonical compile-time/runtime availability classification for a TyIR value.
+enum class AvailabilityKind {
+    /// The value is known to be available during compile-time evaluation.
+    Ct,
+    /// The value depends on runtime input or a runtime authorization boundary.
+    Rt,
+};
+
+/// Canonical TyIR availability summary.
+///
+/// `evidence` records the first concrete runtime origin when one is known. A
+/// runtime-qualified source type can make an expression `Rt` without producing a
+/// body-internal diagnostic evidence span.
+struct Availability {
+    /// Availability lattice point for the expression or block.
+    AvailabilityKind kind = AvailabilityKind::Ct;
+    /// First concrete runtime contributor, when available.
+    std::optional<TyRuntimeEvidence> evidence;
+    /// True when a CT-looking expression may depend on a runtime-allowed
+    /// declaration parameter under a non-CT call-site instantiation.
+    bool depends_on_runtime_allowed_param = false;
+};
+
+/// Compile-time-available summary.
+[[nodiscard]] inline Availability availability_ct() { return {}; }
+
+/// Runtime-dependent summary, optionally carrying first-origin evidence.
+[[nodiscard]] inline Availability
+    availability_rt(std::optional<TyRuntimeEvidence> evidence = std::nullopt) {
+    return Availability{AvailabilityKind::Rt, std::move(evidence), false};
+}
+
+/// Symbolic availability for an ordinary plain parameter inside a declaration.
+[[nodiscard]] inline Availability availability_runtime_allowed_param() {
+    return Availability{AvailabilityKind::Ct, std::nullopt, true};
+}
+
+/// Joins two availability summaries; runtime wins and the first concrete
+/// evidence is preserved.
+[[nodiscard]] inline Availability
+    availability_join(const Availability& lhs, const Availability& rhs) {
+    if (lhs.kind == AvailabilityKind::Ct && rhs.kind == AvailabilityKind::Ct) {
+        return Availability{
+            AvailabilityKind::Ct, std::nullopt,
+            lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param};
+    }
+    if (lhs.kind == AvailabilityKind::Ct) {
+        Availability joined = rhs;
+        joined.depends_on_runtime_allowed_param =
+            lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param;
+        return joined;
+    }
+    if (rhs.kind == AvailabilityKind::Ct) {
+        Availability joined = lhs;
+        joined.depends_on_runtime_allowed_param =
+            lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param;
+        return joined;
+    }
+    return Availability{
+        AvailabilityKind::Rt, lhs.evidence.has_value() ? lhs.evidence : rhs.evidence,
+        lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param};
+}
+
+/// Projects a source/runtime-qualified type into an availability summary.
+[[nodiscard]] inline Availability availability_from_type(const Ty& ty) {
+    return ty_contains_runtime_tag(ty) ? availability_rt() : availability_ct();
+}
+
+/// Applies an availability summary to a type used for expression display or
+/// lowering decisions.
+[[nodiscard]] inline Ty with_availability_projection(Ty shape, const Availability& availability) {
+    if (shape.is_never())
+        return shape;
+    shape.is_runtime = availability.kind == AvailabilityKind::Rt;
+    return shape;
+}
+
+/// Returns true when the canonical availability summary is compile-time.
+[[nodiscard]] inline bool is_ct_available(const Availability& availability) {
+    return availability.kind == AvailabilityKind::Ct;
+}
+
+/// Returns true when an expression may satisfy a CT-required position.
+[[nodiscard]] inline bool is_ct_required_available(const Availability& availability) {
+    return availability.kind == AvailabilityKind::Ct
+        && !availability.depends_on_runtime_allowed_param;
+}
 
 /// Single named-field initializer inside a struct construction expression.
 struct TyStructInitField {
@@ -509,8 +614,7 @@ struct TyReturn {
 /// - `node`: the concrete expression variant,
 /// - `ty`:   the inferred or annotated type,
 /// - `span`: the source location,
-/// - `ct_available`: whether the expression value is guaranteed available at
-///   compile time, independent of the static type shape.
+/// - `availability`: canonical compile-time/runtime availability for the value.
 struct TyExpr {
     /// Variant payload for all typed expression forms.
     using Node = std::variant<
@@ -524,18 +628,37 @@ struct TyExpr {
     Ty ty;
     /// Source location for this expression.
     cstc::span::SourceSpan span;
-    /// True when this expression is guaranteed not to depend on runtime input.
-    bool ct_available = true;
-    /// Body-internal runtime dependence that must be exposed by a result contract.
-    std::optional<TyRuntimeEvidence> runtime_evidence;
+    /// Canonical compile-time/runtime availability summary.
+    Availability availability;
 };
+
+/// Sets expression availability, preserving runtime-qualified type projections.
+inline void set_availability(TyExpr& expr, const Availability& availability) {
+    expr.availability = availability;
+    expr.ty = with_availability_projection(std::move(expr.ty), expr.availability);
+}
+
+/// Returns true when an expression value is compile-time available.
+[[nodiscard]] inline bool is_ct_available(const TyExpr& expr) {
+    return is_ct_available(expr.availability);
+}
+
+/// Returns true when an expression pointer is non-null and compile-time
+/// available.
+[[nodiscard]] inline bool is_ct_available(const TyExprPtr& expr) {
+    return expr != nullptr && is_ct_available(*expr);
+}
 
 /// Constructs a heap-allocated typed expression.
 [[nodiscard]] inline TyExprPtr make_ty_expr(
-    cstc::span::SourceSpan span, TyExpr::Node node, Ty ty, bool ct_available = true,
-    std::optional<TyRuntimeEvidence> runtime_evidence = std::nullopt) {
-    return std::make_shared<TyExpr>(
-        TyExpr{std::move(node), std::move(ty), span, ct_available, std::move(runtime_evidence)});
+    cstc::span::SourceSpan span, TyExpr::Node node, Ty ty,
+    const Availability& availability = availability_ct()) {
+    TyExpr expr;
+    expr.node = std::move(node);
+    expr.ty = std::move(ty);
+    expr.span = span;
+    set_availability(expr, availability_join(availability_from_type(expr.ty), availability));
+    return std::make_shared<TyExpr>(std::move(expr));
 }
 
 // ─── Statements ──────────────────────────────────────────────────────────────
@@ -584,11 +707,25 @@ struct TyBlock {
     Ty ty;
     /// Source location for the full block.
     cstc::span::SourceSpan span;
-    /// True when the block's yielded value is guaranteed compile-time available.
-    bool ct_available = true;
-    /// Body-internal runtime dependence joined from reachable statements and tail.
-    std::optional<TyRuntimeEvidence> runtime_evidence;
+    /// Canonical compile-time/runtime availability summary.
+    Availability availability;
 };
+
+/// Sets block availability, preserving runtime-qualified type projections.
+inline void set_availability(TyBlock& block, const Availability& availability) {
+    block.availability = availability;
+    block.ty = with_availability_projection(std::move(block.ty), block.availability);
+}
+
+/// Returns true when a block value is compile-time available.
+[[nodiscard]] inline bool is_ct_available(const TyBlock& block) {
+    return is_ct_available(block.availability);
+}
+
+/// Returns true when a block pointer is non-null and compile-time available.
+[[nodiscard]] inline bool is_ct_available(const TyBlockPtr& block) {
+    return block != nullptr && is_ct_available(*block);
+}
 
 /// Typed generic constraint attached to a generic declaration.
 struct TyGenericConstraint {

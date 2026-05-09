@@ -12,7 +12,6 @@ namespace cstc::tyir_interp::detail {
 using tyir::common_type;
 using tyir::compatible;
 using tyir::matches_type_shape;
-using tyir::type_has_runtime_dependency;
 
 ValuePtr make_num(double value) {
     auto out = std::make_shared<Value>();
@@ -255,8 +254,185 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
     return compatible(erase_runtime_qualifiers(actual), erase_runtime_qualifiers(expected));
 }
 
-[[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {
-    return expr != nullptr && expr->ct_available && !type_has_runtime_dependency(expr->ty);
+[[nodiscard]] static bool expr_value_satisfies_ct_requirement(const tyir::TyExprPtr& expr) {
+    return expr != nullptr && tyir::is_ct_required_available(expr->availability);
+}
+
+[[nodiscard]] static bool has_runtime_barrier(const tyir::TyExpr& expr) {
+    return expr.availability.kind == tyir::AvailabilityKind::Rt;
+}
+
+[[nodiscard]] static bool stmt_can_fallthrough(const tyir::TyStmt& stmt);
+
+[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
+
+[[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
+
+[[nodiscard]] static tyir::Availability availability_of_expr(const tyir::TyExprPtr& expr) {
+    return expr != nullptr ? expr->availability : tyir::availability_ct();
+}
+
+[[nodiscard]] static tyir::Availability availability_of_block(const tyir::TyBlockPtr& block) {
+    return block != nullptr ? block->availability : tyir::availability_ct();
+}
+
+[[nodiscard]] static tyir::Availability runtime_block_availability(SourceSpan span) {
+    return tyir::availability_rt(tyir::TyRuntimeEvidence{span, "runtime block"});
+}
+
+[[nodiscard]] static tyir::Availability stmt_availability(const tyir::TyStmt& stmt) {
+    return std::visit(
+        [&](const auto& node) -> tyir::Availability {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<Node, tyir::TyLetStmt>) {
+                return availability_of_expr(node.init);
+            } else {
+                tyir::Availability availability = availability_of_expr(node.expr);
+                if (node.expr == nullptr)
+                    return availability;
+
+                return std::visit(
+                    [&](const auto& expr_node) -> tyir::Availability {
+                        using ExprNode = std::decay_t<decltype(expr_node)>;
+                        if constexpr (
+                            std::is_same_v<ExprNode, tyir::TyBreak>
+                            || std::is_same_v<ExprNode, tyir::TyReturn>) {
+                            if (expr_node.value.has_value()) {
+                                return tyir::availability_join(
+                                    availability, availability_of_expr(*expr_node.value));
+                            }
+                        }
+                        return availability;
+                    },
+                    node.expr->node);
+            }
+        },
+        stmt);
+}
+
+static void recompute_expr_availability(tyir::TyExpr& expr) {
+    tyir::Availability availability = tyir::availability_ct();
+
+    std::visit(
+        [&](const auto& node) {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (
+                std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
+                || std::is_same_v<Node, tyir::EnumVariantRef>
+                || std::is_same_v<Node, tyir::TyContinue>) {
+                availability = tyir::availability_join(availability, expr.availability);
+            } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                bool reachable = true;
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    if (!reachable)
+                        break;
+                    availability =
+                        tyir::availability_join(availability, availability_of_expr(field.value));
+                    reachable = field.value == nullptr || expr_can_fallthrough(*field.value);
+                }
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                availability =
+                    tyir::availability_join(availability, availability_of_expr(node.rhs));
+            } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                availability =
+                    tyir::availability_join(availability, availability_of_expr(node.lhs));
+                if (node.lhs != nullptr && expr_can_fallthrough(*node.lhs))
+                    availability =
+                        tyir::availability_join(availability, availability_of_expr(node.rhs));
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                availability =
+                    tyir::availability_join(availability, availability_of_expr(node.base));
+                availability = tyir::availability_join(availability, expr.availability);
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyCall>
+                || std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                bool reachable = true;
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (arg == nullptr)
+                        continue;
+                    if (!reachable)
+                        break;
+                    availability = tyir::availability_join(availability, availability_of_expr(arg));
+                    reachable = expr_can_fallthrough(*arg);
+                }
+                if (reachable)
+                    availability = tyir::availability_join(availability, expr.availability);
+            } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                availability =
+                    tyir::availability_join(availability, runtime_block_availability(expr.span));
+                availability =
+                    tyir::availability_join(availability, availability_of_block(node.body));
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                availability = tyir::availability_join(availability, availability_of_block(node));
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                availability =
+                    tyir::availability_join(availability, availability_of_expr(node.condition));
+                if (node.condition != nullptr && expr_can_fallthrough(*node.condition)) {
+                    availability = tyir::availability_join(
+                        availability, availability_of_block(node.then_block));
+                    if (node.else_branch.has_value())
+                        availability = tyir::availability_join(
+                            availability, availability_of_expr(*node.else_branch));
+                }
+            } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
+                availability =
+                    tyir::availability_join(availability, availability_of_block(node.body));
+            } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                availability =
+                    tyir::availability_join(availability, availability_of_expr(node.condition));
+                if (node.condition != nullptr && expr_can_fallthrough(*node.condition))
+                    availability =
+                        tyir::availability_join(availability, availability_of_block(node.body));
+            } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                bool reachable = true;
+                if (node.init.has_value() && reachable) {
+                    availability = tyir::availability_join(
+                        availability, availability_of_expr(node.init->init));
+                    reachable = expr_can_fallthrough(*node.init->init);
+                }
+                if (node.condition.has_value() && reachable) {
+                    availability = tyir::availability_join(
+                        availability, availability_of_expr(*node.condition));
+                    reachable = expr_can_fallthrough(**node.condition);
+                }
+                const bool body_reachable = reachable;
+                if (body_reachable)
+                    availability =
+                        tyir::availability_join(availability, availability_of_block(node.body));
+                if (node.step.has_value() && body_reachable && node.body != nullptr
+                    && block_can_fallthrough(*node.body)) {
+                    availability =
+                        tyir::availability_join(availability, availability_of_expr(*node.step));
+                }
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>) {
+                if (node.value.has_value())
+                    availability =
+                        tyir::availability_join(availability, availability_of_expr(*node.value));
+            }
+        },
+        expr.node);
+
+    tyir::set_availability(expr, availability);
+}
+
+static void recompute_block_availability(tyir::TyBlock& block) {
+    bool reachable = true;
+    tyir::Availability availability = tyir::availability_ct();
+
+    for (const tyir::TyStmt& stmt : block.stmts) {
+        if (!reachable)
+            break;
+
+        availability = tyir::availability_join(availability, stmt_availability(stmt));
+        reachable = stmt_can_fallthrough(stmt);
+    }
+
+    if (reachable && block.tail.has_value())
+        availability = tyir::availability_join(availability, availability_of_expr(*block.tail));
+
+    tyir::set_availability(block, availability);
 }
 
 [[nodiscard]] static bool call_argument_may_be_compatible_after_substitution(
@@ -1010,6 +1186,98 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
 [[nodiscard]] static bool expr_depends_on_generic_params(
     const tyir::TyExprPtr& expr, const GenericParamSet& generic_params);
 
+[[nodiscard]] static bool expr_contains_local_ref(const tyir::TyExprPtr& expr);
+
+[[nodiscard]] static bool block_contains_local_ref(const tyir::TyBlockPtr& block) {
+    if (block == nullptr)
+        return false;
+    for (const tyir::TyStmt& stmt : block->stmts) {
+        const bool contains = std::visit(
+            [&](const auto& node) {
+                using Node = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<Node, tyir::TyLetStmt>) {
+                    return expr_contains_local_ref(node.init);
+                } else {
+                    return expr_contains_local_ref(node.expr);
+                }
+            },
+            stmt);
+        if (contains)
+            return true;
+    }
+    return block->tail.has_value() && expr_contains_local_ref(*block->tail);
+}
+
+[[nodiscard]] static bool expr_contains_local_ref(const tyir::TyExprPtr& expr) {
+    if (expr == nullptr)
+        return false;
+    return std::visit(
+        [&](const auto& node) {
+            using Node = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<Node, tyir::LocalRef>) {
+                return true;
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::EnumVariantRef>
+                || std::is_same_v<Node, tyir::TyContinue>) {
+                return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
+                for (const tyir::TyStructInitField& field : node.fields) {
+                    if (expr_contains_local_ref(field.value))
+                        return true;
+                }
+                return false;
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyBorrow> || std::is_same_v<Node, tyir::TyUnary>) {
+                return expr_contains_local_ref(node.rhs);
+            } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
+                return expr_contains_local_ref(node.lhs) || expr_contains_local_ref(node.rhs);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                return expr_contains_local_ref(node.base);
+            } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (expr_contains_local_ref(arg))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
+                return node.expr.has_value() && expr_contains_local_ref(*node.expr);
+            } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
+                for (const tyir::TyExprPtr& arg : node.args) {
+                    if (expr_contains_local_ref(arg))
+                        return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
+                return block_contains_local_ref(node);
+            } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
+                if (expr_contains_local_ref(node.condition)
+                    || block_contains_local_ref(node.then_block)) {
+                    return true;
+                }
+                return node.else_branch.has_value() && expr_contains_local_ref(*node.else_branch);
+            } else if constexpr (
+                std::is_same_v<Node, tyir::TyRuntimeBlock> || std::is_same_v<Node, tyir::TyLoop>) {
+                return block_contains_local_ref(node.body);
+            } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
+                return expr_contains_local_ref(node.condition)
+                    || block_contains_local_ref(node.body);
+            } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
+                if (node.init.has_value() && expr_contains_local_ref(node.init->init))
+                    return true;
+                if (node.condition.has_value() && expr_contains_local_ref(*node.condition))
+                    return true;
+                if (node.step.has_value() && expr_contains_local_ref(*node.step))
+                    return true;
+                return block_contains_local_ref(node.body);
+            } else {
+                static_assert(
+                    std::is_same_v<Node, tyir::TyBreak> || std::is_same_v<Node, tyir::TyReturn>);
+                return node.value.has_value() && expr_contains_local_ref(*node.value);
+            }
+        },
+        expr->node);
+}
+
 [[nodiscard]] static bool block_depends_on_generic_params(
     const tyir::TyBlockPtr& block, const GenericParamSet& generic_params) {
     if (block == nullptr)
@@ -1153,7 +1421,6 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
     auto rewritten = std::make_shared<tyir::TyBlock>();
     rewritten->ty = apply_substitution(block->ty, subst);
     rewritten->span = block->span;
-    rewritten->ct_available = block->ct_available && !type_has_runtime_dependency(rewritten->ty);
     rewritten->stmts.reserve(block->stmts.size());
     for (const tyir::TyStmt& stmt : block->stmts) {
         rewritten->stmts.push_back(
@@ -1176,6 +1443,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
     }
     if (block->tail.has_value())
         rewritten->tail = apply_substitution(*block->tail, subst);
+    recompute_block_availability(*rewritten);
     return rewritten;
 }
 
@@ -1192,7 +1460,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                 std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
                 || std::is_same_v<Node, tyir::EnumVariantRef>
                 || std::is_same_v<Node, tyir::TyContinue>) {
-                return tyir::make_ty_expr(expr->span, node, rewritten_ty);
+                return tyir::make_ty_expr(expr->span, node, rewritten_ty, expr->availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyStructInit>) {
                 tyir::TyStructInit rewritten = node;
                 rewritten.generic_args.clear();
@@ -1221,7 +1489,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     expr->span,
                     tyir::TyFieldAccess{
                         apply_substitution(node.base, subst), node.field, node.use_kind},
-                    rewritten_ty);
+                    rewritten_ty, expr->availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
                 tyir::TyCall rewritten = node;
                 rewritten.generic_args.clear();
@@ -1230,7 +1498,8 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     rewritten.generic_args.push_back(apply_substitution(generic_arg, subst));
                 for (tyir::TyExprPtr& arg : rewritten.args)
                     arg = apply_substitution(arg, subst);
-                return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
+                return tyir::make_ty_expr(
+                    expr->span, std::move(rewritten), rewritten_ty, expr->availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
                 tyir::TyDeclProbe rewritten = node;
                 if (rewritten.expr.has_value())
@@ -1252,7 +1521,8 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                 for (tyir::TyExprPtr& arg : rewritten.args)
                     arg = apply_substitution(arg, subst);
                 if (!fully_resolved)
-                    return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
+                    return tyir::make_ty_expr(
+                        expr->span, std::move(rewritten), rewritten_ty, expr->availability);
 
                 std::vector<tyir::Ty> concrete_generic_args;
                 concrete_generic_args.reserve(rewritten.generic_args.size());
@@ -1265,7 +1535,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     tyir::TyCall{
                         rewritten.fn_name, std::move(concrete_generic_args),
                         std::move(rewritten.args)},
-                    rewritten_ty);
+                    rewritten_ty, expr->availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
                 return tyir::make_ty_expr(
                     expr->span, tyir::TyRuntimeBlock{apply_substitution(node.body, subst)},
@@ -1324,7 +1594,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
             }
         },
         expr->node);
-    rewritten_expr->ct_available = expr->ct_available && !type_has_runtime_dependency(rewritten_ty);
+    recompute_expr_availability(*rewritten_expr);
     return rewritten_expr;
 }
 
@@ -1581,7 +1851,8 @@ ConstraintEvalResult evaluate_constraint(
                 ConstraintEvalKind::Unsatisfied, "probed expression is not type-valid",
                 std::nullopt};
         }
-        if (expr->ty.is_runtime && !std::holds_alternative<tyir::TyRuntimeBlock>(expr->node)) {
+        if (!std::holds_alternative<tyir::TyBlockPtr>(expr->node) && has_runtime_barrier(*expr)
+            && !expr_contains_local_ref(expr)) {
             return {
                 ConstraintEvalKind::Unsatisfied,
                 "probed expression uses runtime-only behavior",
@@ -1799,6 +2070,44 @@ ConstraintEvalResult evaluate_constraint(
                         return lhs;
                     return self(self, node.rhs);
                 } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
+                    if (node.base == nullptr || node.base->ty.kind != tyir::TyKind::Named) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
+                    const auto decl_it = program.structs.find(node.base->ty.name);
+                    if (decl_it == program.structs.end()) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
+                    const auto field_it = std::find_if(
+                        decl_it->second->fields.begin(), decl_it->second->fields.end(),
+                        [&](const tyir::TyFieldDecl& field) { return field.name == node.field; });
+                    if (field_it == decl_it->second->fields.end()) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression is not type-valid",
+                            std::nullopt,
+                        };
+                    }
+                    tyir::Ty field_ty = field_it->ty;
+                    if (!node.base->ty.generic_args.empty()) {
+                        const auto substitution = build_substitution(
+                            decl_it->second->generic_params, node.base->ty.generic_args);
+                        field_ty = apply_substitution(field_ty, substitution);
+                    }
+                    if (tyir::ty_contains_runtime_tag(field_ty)) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression uses runtime-only behavior",
+                            std::nullopt,
+                        };
+                    }
                     return self(self, node.base);
                 } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
                     bool defer_where_clause = false;
@@ -1846,7 +2155,7 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                             if (fn.params[index].requires_ct()
-                                && !expr_value_is_ct_available(node.args[index])) {
+                                && !expr_value_satisfies_ct_requirement(node.args[index])) {
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",
@@ -1907,7 +2216,7 @@ ConstraintEvalResult evaluate_constraint(
                                 };
                             }
                             if (decl.params[index].requires_ct()
-                                && !expr_value_is_ct_available(node.args[index])) {
+                                && !expr_value_satisfies_ct_requirement(node.args[index])) {
                                 return {
                                     ConstraintEvalKind::Unsatisfied,
                                     "probed expression is not type-valid",
@@ -1972,6 +2281,8 @@ ConstraintEvalResult evaluate_constraint(
                             stmt);
                         if (nested.kind != ConstraintEvalKind::Satisfied)
                             return nested;
+                        if (!stmt_can_fallthrough(stmt))
+                            return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                     }
                     if (node->tail.has_value())
                         return self(self, *node->tail);
@@ -2016,6 +2327,13 @@ ConstraintEvalResult evaluate_constraint(
                 } else if constexpr (
                     std::is_same_v<Node, tyir::TyRuntimeBlock>
                     || std::is_same_v<Node, tyir::TyLoop>) {
+                    if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
+                        return {
+                            ConstraintEvalKind::Unsatisfied,
+                            "probed expression uses runtime-only behavior",
+                            std::nullopt,
+                        };
+                    }
                     if (node.body == nullptr)
                         return {ConstraintEvalKind::Satisfied, {}, std::nullopt};
                     return self(self, tyir::make_ty_expr(expr->span, node.body, node.body->ty));
@@ -2342,7 +2660,7 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
 [[nodiscard]] static std::expected<EvalState, EvalError>
     eval_expr(const tyir::TyExprPtr& expr, ConstEnv& env, EvalContext& ctx) {
-    if (expr->ty.is_runtime && !std::holds_alternative<tyir::TyRuntimeBlock>(expr->node))
+    if (ctx.enforce_runtime_barriers && has_runtime_barrier(*expr))
         return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
 
     return std::visit(
@@ -2607,7 +2925,10 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                     if (!call_budget)
                         return std::unexpected(std::move(call_budget.error()));
                     ctx.stack.push_back(EvalStackFrame{fn.name, expr->span});
+                    const bool was_enforcing_runtime_barriers = ctx.enforce_runtime_barriers;
+                    ctx.enforce_runtime_barriers = false;
                     auto result = eval_block(fn.body, fn_env, ctx);
+                    ctx.enforce_runtime_barriers = was_enforcing_runtime_barriers;
                     ctx.stack.pop_back();
                     ++ctx.remaining_call_depth;
                     if (!result)
@@ -3078,8 +3399,6 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     const tyir::TyExprPtr& expr, ConstEnv& env, const ProgramView& program,
     const GenericParamSet& generic_params);
 
-[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
-
 [[nodiscard]] static bool stmt_can_fallthrough(const tyir::TyStmt& stmt) {
     return std::visit(
         [](const auto& node) {
@@ -3091,8 +3410,6 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
         },
         stmt);
 }
-
-[[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
 
 [[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr) {
     if (expr.ty.is_never())
@@ -3229,6 +3546,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 block.stmts.end());
             folded.tail = block.tail;
             env.pop();
+            recompute_block_availability(folded);
             return folded;
         }
     }
@@ -3243,12 +3561,15 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
     }
 
     env.pop();
+    recompute_block_availability(folded);
     return folded;
 }
 
 [[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError> maybe_fold_constant(
     const tyir::TyExprPtr& expr, const ProgramView& program, const ConstEnv& env,
     const GenericParamSet& generic_params) {
+    tyir::TyExprPtr candidate = std::make_shared<tyir::TyExpr>(*expr);
+    recompute_expr_availability(*candidate);
     ConstEnv eval_env = env;
     EvalContext ctx{
         program,
@@ -3259,14 +3580,17 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
         std::make_shared<ConstraintEvalState>(),
     };
     ctx.generic_params = generic_params;
-    auto value = eval_expr(expr, eval_env, ctx);
+    auto value = eval_expr(candidate, eval_env, ctx);
     if (!value)
         return std::unexpected(std::move(value.error()));
     if (value->kind != EvalState::Kind::Value)
-        return expr;
-    if (!can_fold_reference_expr(expr->ty, value->value))
-        return expr;
-    auto folded = value_to_expr(program, value->value, expr->ty, expr->span);
+        return candidate;
+    if (!can_fold_reference_expr(candidate->ty, value->value))
+        return candidate;
+    auto folded = value_to_expr(
+        program, value->value,
+        tyir::with_availability_projection(candidate->ty, tyir::availability_ct()),
+        candidate->span);
     if (!folded)
         return std::unexpected(std::move(folded.error()));
     return *folded;
@@ -3275,13 +3599,15 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 [[nodiscard]] static std::expected<tyir::TyExprPtr, EvalError> fold_expr(
     const tyir::TyExprPtr& expr, ConstEnv& env, const ProgramView& program,
     const GenericParamSet& generic_params) {
-    return std::visit(
+    auto folded = std::visit(
         [&](const auto& node) -> std::expected<tyir::TyExprPtr, EvalError> {
             using Node = std::decay_t<decltype(node)>;
 
             if constexpr (
                 std::is_same_v<Node, tyir::TyLiteral> || std::is_same_v<Node, tyir::LocalRef>
                 || std::is_same_v<Node, tyir::EnumVariantRef>) {
+                if (!tyir::is_ct_available(expr))
+                    return expr;
                 return maybe_fold_constant(expr, program, env, generic_params);
             }
 
@@ -3352,12 +3678,14 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     return std::unexpected(std::move(base.error()));
                 return maybe_fold_constant(
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyFieldAccess{*base, node.field, node.use_kind},
-                        expr->ty),
+                        expr->span, tyir::TyFieldAccess{*base, node.field, node.use_kind}, expr->ty,
+                        expr->availability),
                     program, env, generic_params);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyCall>) {
+                if (!tyir::is_ct_available(expr))
+                    return expr;
                 std::vector<tyir::TyExprPtr> args;
                 args.reserve(node.args.size());
                 for (const tyir::TyExprPtr& arg : node.args) {
@@ -3369,7 +3697,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 return maybe_fold_constant(
                     tyir::make_ty_expr(
                         expr->span, tyir::TyCall{node.fn_name, node.generic_args, std::move(args)},
-                        expr->ty),
+                        expr->ty, expr->availability),
                     program, env, generic_params);
             }
 
@@ -3400,7 +3728,7 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                 return tyir::make_ty_expr(
                     expr->span,
                     tyir::TyDeferredGenericCall{node.fn_name, node.generic_args, std::move(args)},
-                    expr->ty);
+                    expr->ty, expr->availability);
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
@@ -3441,8 +3769,11 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                             return std::unexpected(std::move(then_block.error()));
                         auto then_ptr = std::make_shared<tyir::TyBlock>(std::move(*then_block));
                         return maybe_fold_constant(
-                            tyir::make_ty_expr(expr->span, then_ptr, expr->ty), program, env,
-                            generic_params);
+                            tyir::make_ty_expr(
+                                expr->span, then_ptr,
+                                tyir::with_availability_projection(
+                                    expr->ty, then_ptr->availability)),
+                            program, env, generic_params);
                     }
                     if (node.else_branch.has_value())
                         return fold_expr(*node.else_branch, branch_env, program, generic_params);
@@ -3617,6 +3948,9 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             return expr;
         },
         expr->node);
+    if (folded.has_value() && *folded != nullptr)
+        recompute_expr_availability(**folded);
+    return folded;
 }
 
 [[nodiscard]] static std::expected<void, EvalError> validate_constraints_in_expr(

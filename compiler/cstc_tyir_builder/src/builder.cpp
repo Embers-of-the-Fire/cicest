@@ -109,14 +109,24 @@ struct TypeEnv {
     /// `std::nullopt` if the field does not exist.
     [[nodiscard]] std::optional<tyir::Ty>
         field_ty(cstc::symbol::Symbol struct_name, cstc::symbol::Symbol field_name) const {
+        const tyir::TyFieldDecl* field = field_decl(struct_name, field_name);
+        if (field == nullptr)
+            return std::nullopt;
+        return field->ty;
+    }
+
+    /// Returns the resolved declaration of `field_name` on struct `struct_name`,
+    /// or `nullptr` if the field does not exist.
+    [[nodiscard]] const tyir::TyFieldDecl*
+        field_decl(cstc::symbol::Symbol struct_name, cstc::symbol::Symbol field_name) const {
         const auto it = struct_fields.find(struct_name);
         if (it == struct_fields.end())
-            return std::nullopt;
+            return nullptr;
         for (const tyir::TyFieldDecl& f : it->second) {
             if (f.name == field_name)
-                return f.ty;
+                return &f;
         }
-        return std::nullopt;
+        return nullptr;
     }
 
     /// Returns true when `variant_name` is a declared variant of `enum_name`.
@@ -334,17 +344,15 @@ using TypeSubstitution =
     return erased;
 }
 
-[[nodiscard]] static bool value_is_ct_available(const bool ct_available, const tyir::Ty& ty) {
-    return ct_available && !type_has_runtime_dependency(ty);
+[[nodiscard]] static bool expr_value_satisfies_ct_requirement(const tyir::TyExprPtr& expr) {
+    return expr != nullptr && tyir::is_ct_required_available(expr->availability);
 }
 
-[[nodiscard]] static bool expr_value_is_ct_available(const tyir::TyExprPtr& expr) {
-    return expr != nullptr && value_is_ct_available(expr->ct_available, expr->ty);
-}
+[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
 
-[[nodiscard]] static bool all_exprs_ct_available(const std::vector<tyir::TyExprPtr>& exprs) {
+[[nodiscard]] static bool exprs_can_fallthrough(const std::vector<tyir::TyExprPtr>& exprs) {
     for (const tyir::TyExprPtr& expr : exprs) {
-        if (!expr_value_is_ct_available(expr))
+        if (expr != nullptr && !expr_can_fallthrough(*expr))
             return false;
     }
     return true;
@@ -367,6 +375,8 @@ using TypeSubstitution =
 
 [[nodiscard]] static tyir::Ty
     lift_call_result_type(tyir::Ty result_ty, const std::vector<tyir::TyExprPtr>& args) {
+    if (!exprs_can_fallthrough(args))
+        return tyir::ty::never();
     if (type_has_runtime_dependency(result_ty))
         result_ty.is_runtime = true;
     for (const tyir::TyExprPtr& arg : args) {
@@ -486,8 +496,7 @@ public:
         bool moved = false;
         std::size_t active_borrows = 0;
         std::optional<std::size_t> borrowed_local;
-        bool ct_available = true;
-        std::optional<tyir::TyRuntimeEvidence> runtime_evidence;
+        tyir::Availability availability;
     };
 
     void push() { frames_.push_back(Frame{{}, locals_.size()}); }
@@ -507,8 +516,8 @@ public:
 
     [[nodiscard]] bool insert(
         cstc::symbol::Symbol name, tyir::Ty ty,
-        std::optional<std::size_t> borrowed_local = std::nullopt, bool ct_available = true,
-        std::optional<tyir::TyRuntimeEvidence> runtime_evidence = std::nullopt) {
+        std::optional<std::size_t> borrowed_local = std::nullopt,
+        const tyir::Availability& availability = tyir::availability_ct()) {
         assert(!frames_.empty());
         if (frames_.back().bindings.contains(name))
             return false;
@@ -517,11 +526,9 @@ public:
             locals_.at(*borrowed_local).active_borrows += 1;
 
         const std::size_t index = locals_.size();
-        const bool stored_ct_available = value_is_ct_available(ct_available, ty);
-        locals_.push_back(
-            LocalState{
-                std::move(ty), false, 0, borrowed_local, stored_ct_available,
-                std::move(runtime_evidence)});
+        if (tyir::is_ct_available(availability))
+            ty = erase_runtime_qualifiers(ty);
+        locals_.push_back(LocalState{std::move(ty), false, 0, borrowed_local, availability});
         frames_.back().bindings.emplace(name, index);
         return true;
     }
@@ -552,7 +559,8 @@ public:
             locals_[i].moved = locals_[i].moved || other.locals_[i].moved;
             locals_[i].active_borrows =
                 std::max(locals_[i].active_borrows, other.locals_[i].active_borrows);
-            locals_[i].ct_available = locals_[i].ct_available && other.locals_[i].ct_available;
+            locals_[i].availability =
+                tyir::availability_join(locals_[i].availability, other.locals_[i].availability);
         }
     }
 
@@ -578,8 +586,8 @@ struct LoopCtx {
     /// yet; once a `break` is encountered the type is set (bare `break` → Unit,
     /// `break expr` → expr type).  Subsequent breaks must unify.
     std::optional<tyir::Ty> break_ty;
-    /// Compile-time availability of accumulated break values.
-    std::optional<bool> break_ct_available;
+    /// Availability of accumulated break values.
+    std::optional<tyir::Availability> break_availability;
 };
 
 // ─── Lowering context ────────────────────────────────────────────────────────
@@ -807,10 +815,6 @@ struct LowerCtx {
         return true;
 
     if (is_generic_param_ty(resolved_actual, generic_params)) {
-        if (resolved_actual.is_runtime && !resolved_expected.is_runtime
-            && !is_generic_param_ty(resolved_expected, generic_params)) {
-            return false;
-        }
         return bind_tentative_generic_substitution(
             resolved_actual, resolved_expected, generic_params, subst);
     }
@@ -924,6 +928,8 @@ struct LowerCtx {
     call_result_type(tyir::Ty result_shape, const std::vector<tyir::TyExprPtr>& args) {
     if (result_shape.is_never())
         return result_shape;
+    if (!exprs_can_fallthrough(args))
+        return tyir::ty::never();
     for (const tyir::TyExprPtr& arg : args) {
         if (arg != nullptr && type_has_runtime_dependency(arg->ty)) {
             result_shape.is_runtime = true;
@@ -950,7 +956,7 @@ struct LowerCtx {
     const tyir::Ty& expected_ty, cstc::span::SourceSpan span) {
     if (param_index >= sig.param_requirements.size()
         || sig.param_requirements[param_index] != tyir::ParamRequirement::CtRequired
-        || expr_value_is_ct_available(arg)) {
+        || expr_value_satisfies_ct_requirement(arg)) {
         return {};
     }
 
@@ -966,7 +972,7 @@ struct LowerCtx {
 [[nodiscard]] static std::expected<void, LowerError> require_ct_annotation_value(
     bool requires_ct, const tyir::TyExprPtr& value, const tyir::Ty& expected_ty,
     cstc::span::SourceSpan span, std::string_view context) {
-    if (!requires_ct || expr_value_is_ct_available(value))
+    if (!requires_ct || expr_value_satisfies_ct_requirement(value))
         return {};
 
     return make_error(
@@ -1364,73 +1370,87 @@ struct LoweredExpr {
     return tyir::TyRuntimeEvidence{span, std::move(reason)};
 }
 
-[[nodiscard]] static std::optional<tyir::TyRuntimeEvidence> first_runtime_evidence(
-    const std::optional<tyir::TyRuntimeEvidence>& lhs,
-    const std::optional<tyir::TyRuntimeEvidence>& rhs) {
-    if (lhs.has_value())
-        return lhs;
-    return rhs;
+[[nodiscard]] static tyir::Availability
+    runtime_availability_at(cstc::span::SourceSpan span, std::string reason) {
+    return tyir::availability_rt(runtime_evidence_at(span, std::move(reason)));
 }
 
-[[nodiscard]] static std::optional<tyir::TyRuntimeEvidence>
-    first_runtime_evidence(const std::vector<tyir::TyExprPtr>& exprs) {
+[[nodiscard]] static tyir::Availability
+    parameter_declaration_availability(const tyir::TyParam& param) {
+    if (param.requires_ct())
+        return tyir::availability_ct();
+    if (type_has_runtime_dependency(param.ty))
+        return runtime_availability_at(param.span, "runtime parameter");
+    return tyir::availability_runtime_allowed_param();
+}
+
+[[nodiscard]] static tyir::Availability
+    availability_from_exprs(const std::vector<tyir::TyExprPtr>& exprs) {
+    tyir::Availability availability = tyir::availability_ct();
+    bool reachable = true;
     for (const tyir::TyExprPtr& expr : exprs) {
-        if (expr != nullptr && expr->runtime_evidence.has_value())
-            return expr->runtime_evidence;
-    }
-    return std::nullopt;
-}
-
-[[nodiscard]] static std::optional<tyir::TyRuntimeEvidence>
-    stmt_runtime_evidence(const tyir::TyStmt& stmt) {
-    return std::visit(
-        [](const auto& s) -> std::optional<tyir::TyRuntimeEvidence> {
-            using S = std::decay_t<decltype(s)>;
-            if constexpr (std::is_same_v<S, tyir::TyLetStmt>)
-                return s.init != nullptr ? s.init->runtime_evidence : std::nullopt;
-            else
-                return s.expr != nullptr ? s.expr->runtime_evidence : std::nullopt;
-        },
-        stmt);
-}
-
-[[nodiscard]] static bool stmt_value_is_ct_available(const tyir::TyStmt& stmt) {
-    auto expr_stmt_value_is_ct_available = [](const tyir::TyExprPtr& expr) {
         if (expr == nullptr)
-            return false;
+            continue;
+        if (!reachable)
+            break;
+        availability = tyir::availability_join(availability, expr->availability);
+        reachable = expr_can_fallthrough(*expr);
+    }
+    return availability;
+}
 
-        auto payload_is_ct_available = [](const std::optional<tyir::TyExprPtr>& value) {
-            return !value.has_value() || expr_value_is_ct_available(*value);
-        };
+[[nodiscard]] static tyir::Availability availability_from_reached_call(
+    const std::vector<tyir::TyExprPtr>& args, cstc::span::SourceSpan span,
+    bool result_has_runtime_dependency) {
+    tyir::Availability availability = availability_from_exprs(args);
+    if (result_has_runtime_dependency && exprs_can_fallthrough(args)) {
+        availability = tyir::availability_join(
+            availability, runtime_availability_at(span, "runtime-result call"));
+    }
+    return availability;
+}
+
+[[nodiscard]] static tyir::Availability
+    availability_from_reached_binary(const tyir::TyExprPtr& lhs, const tyir::TyExprPtr& rhs) {
+    tyir::Availability availability = tyir::availability_ct();
+    if (lhs != nullptr) {
+        availability = tyir::availability_join(availability, lhs->availability);
+        if (expr_can_fallthrough(*lhs) && rhs != nullptr)
+            availability = tyir::availability_join(availability, rhs->availability);
+    }
+    return availability;
+}
+
+[[nodiscard]] static tyir::Availability stmt_availability(const tyir::TyStmt& stmt) {
+    auto expr_stmt_availability = [](const tyir::TyExprPtr& expr) {
+        if (expr == nullptr)
+            return tyir::availability_ct();
 
         return std::visit(
             [&](const auto& node) {
                 using N = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<N, tyir::TyBreak> || std::is_same_v<N, tyir::TyReturn>)
-                    return payload_is_ct_available(node.value);
-                else
-                    return expr_value_is_ct_available(expr);
+                if constexpr (
+                    std::is_same_v<N, tyir::TyBreak> || std::is_same_v<N, tyir::TyReturn>) {
+                    return node.value.has_value()
+                             ? tyir::availability_join(
+                                   expr->availability, (*node.value)->availability)
+                             : expr->availability;
+                } else {
+                    return expr->availability;
+                }
             },
             expr->node);
     };
 
     return std::visit(
-        [&](const auto& s) {
+        [&](const auto& s) -> tyir::Availability {
             using S = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<S, tyir::TyLetStmt>)
-                return expr_value_is_ct_available(s.init);
+                return s.init != nullptr ? s.init->availability : tyir::availability_ct();
             else
-                return expr_stmt_value_is_ct_available(s.expr);
+                return expr_stmt_availability(s.expr);
         },
         stmt);
-}
-
-static void apply_block_runtime_evidence(tyir::TyBlock& block) {
-    if (!block.runtime_evidence.has_value())
-        return;
-    block.ct_available = false;
-    if (!block.ty.is_never())
-        block.ty.is_runtime = true;
 }
 
 struct LoweredPlace {
@@ -1449,8 +1469,6 @@ struct LoweredPlace {
 
 [[nodiscard]] static std::expected<tyir::TyBlock, LowerError>
     lower_block(const ast::BlockExpr& block, LowerCtx& ctx);
-
-[[nodiscard]] static bool expr_can_fallthrough(const tyir::TyExpr& expr);
 
 [[nodiscard]] static bool block_can_fallthrough(const tyir::TyBlock& block);
 
@@ -1836,8 +1854,7 @@ struct ParamReferenceVisitor {
                 block_can_fallthrough(**block) ? (*(*block)->tail)->ty : tyir::ty::never();
             recompute_block_summary(**block);
             expr->ty = (*block)->ty;
-            expr->ct_available = (*block)->ct_available;
-            expr->runtime_evidence = (*block)->runtime_evidence;
+            tyir::set_availability(*expr, (*block)->availability);
         }
         return expr;
     }
@@ -1860,8 +1877,7 @@ struct ParamReferenceVisitor {
             if (!expr->ty.is_never())
                 expr->ty.is_runtime = true;
         }
-        expr->ct_available = false;
-        expr->runtime_evidence = runtime_evidence_at(expr->span, "runtime block");
+        tyir::set_availability(*expr, runtime_availability_at(expr->span, "runtime block"));
         return expr;
     }
 
@@ -1894,23 +1910,18 @@ struct ParamReferenceVisitor {
                 return std::unexpected(std::move(joined_ty.error()));
             expr->ty = *joined_ty;
         }
-        const bool else_ct_available = if_expr->else_branch.has_value()
-                                         ? expr_value_is_ct_available(*if_expr->else_branch)
-                                         : true;
-        expr->runtime_evidence = first_runtime_evidence(
-            first_runtime_evidence(
-                if_expr->condition->runtime_evidence, if_expr->then_block->runtime_evidence),
-            if_expr->else_branch.has_value() ? (*if_expr->else_branch)->runtime_evidence
-                                             : std::nullopt);
-        expr->ct_available = value_is_ct_available(
-            expr_value_is_ct_available(if_expr->condition) && if_expr->then_block->ct_available
-                && else_ct_available,
-            expr->ty);
-        if (expr->runtime_evidence.has_value()) {
-            expr->ct_available = false;
+        tyir::Availability if_availability = if_expr->condition->availability;
+        if (expr_can_fallthrough(*if_expr->condition))
+            if_availability =
+                tyir::availability_join(if_availability, if_expr->then_block->availability);
+        if (expr_can_fallthrough(*if_expr->condition) && if_expr->else_branch.has_value())
+            if_availability =
+                tyir::availability_join(if_availability, (*if_expr->else_branch)->availability);
+        if (if_availability.evidence.has_value()) {
             if (!expr->ty.is_never())
                 expr->ty.is_runtime = true;
         }
+        tyir::set_availability(*expr, if_availability);
         return expr;
     }
 
@@ -1954,18 +1965,13 @@ struct ParamReferenceVisitor {
     const tyir::Ty resolved_return_shape =
         annotate_type_semantics(apply_substitution(sig.return_ty, substitution), ctx.env);
     const tyir::Ty resolved_return_ty = call_result_type(resolved_return_shape, deferred->args);
-    const bool deferred_call_ct_available =
-        value_is_ct_available(all_exprs_ct_available(deferred->args), resolved_return_ty);
-    const auto deferred_runtime_evidence = first_runtime_evidence(
-        first_runtime_evidence(deferred->args),
-        type_has_runtime_dependency(resolved_return_shape)
-            ? runtime_evidence_at(expr->span, "runtime-result call")
-            : std::nullopt);
+    tyir::Availability deferred_call_availability = availability_from_reached_call(
+        deferred->args, expr->span, type_has_runtime_dependency(resolved_return_shape));
     if (!fully_resolved) {
         return tyir::make_ty_expr(
             expr->span,
             tyir::TyDeferredGenericCall{deferred->fn_name, std::move(generic_args), deferred->args},
-            resolved_return_ty, deferred_call_ct_available, deferred_runtime_evidence);
+            resolved_return_ty, deferred_call_availability);
     }
 
     std::vector<tyir::Ty> concrete_generic_args;
@@ -1998,18 +2004,13 @@ struct ParamReferenceVisitor {
     }
 
     const tyir::Ty lifted_return_ty = lift_call_result_type(resolved_return_ty, resolved_args);
-    const bool call_ct_available =
-        value_is_ct_available(all_exprs_ct_available(resolved_args), lifted_return_ty);
-    const auto call_runtime_evidence = first_runtime_evidence(
-        first_runtime_evidence(resolved_args),
-        type_has_runtime_dependency(resolved_return_shape)
-            ? runtime_evidence_at(expr->span, "runtime-result call")
-            : std::nullopt);
+    tyir::Availability call_availability = availability_from_reached_call(
+        resolved_args, expr->span, type_has_runtime_dependency(resolved_return_shape));
 
     return tyir::make_ty_expr(
         expr->span,
         tyir::TyCall{deferred->fn_name, std::move(concrete_generic_args), std::move(resolved_args)},
-        lifted_return_ty, call_ct_available, call_runtime_evidence);
+        lifted_return_ty, call_availability);
 }
 
 [[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
@@ -2078,8 +2079,7 @@ struct ParamReferenceVisitor {
         return std::unexpected(std::move(constraint_fn.error()));
 
     return tyir::make_ty_expr(
-        expr->span, tyir::TyCall{*constraint_fn, {}, {expr}}, *constraint_ty,
-        expr_value_is_ct_available(expr));
+        expr->span, tyir::TyCall{*constraint_fn, {}, {expr}}, *constraint_ty, expr->availability);
 }
 
 [[nodiscard]] static std::expected<std::vector<tyir::TyGenericConstraint>, LowerError>
@@ -2114,7 +2114,8 @@ struct ParamReferenceVisitor {
         }
 
         for (const tyir::TyParam& param : *params) {
-            if (!ctx.scope.insert(param.name, param.ty, std::nullopt, param.requires_ct())) {
+            const tyir::Availability param_availability = parameter_declaration_availability(param);
+            if (!ctx.scope.insert(param.name, param.ty, std::nullopt, param_availability)) {
                 ctx.scope.pop();
                 return make_error(
                     param.span, "duplicate parameter '" + std::string(param.name.as_str()) + "'");
@@ -2292,7 +2293,6 @@ struct ParamReferenceVisitor {
 
                 // Resolve binding type (explicit annotation or infer from init)
                 tyir::Ty binding_ty;
-                bool binding_ct_available = true;
                 if (s.type_annotation.has_value()) {
                     auto ann = lower_type(*s.type_annotation, ctx.env, s.span, ctx.generic_params);
                     if (!ann)
@@ -2301,11 +2301,10 @@ struct ParamReferenceVisitor {
                     if (!resolved_init)
                         return std::unexpected(std::move(resolved_init.error()));
                     init->expr = std::move(*resolved_init);
-                    if (!compatible(init->expr->ty, *ann)
+                    if (!call_argument_compatible(init->expr->ty, *ann)
                         && !should_defer_generic_probe_failure(
                             init->expr->ty, *ann, ctx, init->deferred_generic_probe_validation)) {
-                        if (s.type_annotation->requires_ct
-                            && call_argument_compatible(init->expr->ty, *ann)) {
+                        if (s.type_annotation->requires_ct) {
                             auto ct_check = require_ct_annotation_value(
                                 true, init->expr, *ann, s.span, "let binding");
                             if (!ct_check)
@@ -2320,7 +2319,6 @@ struct ParamReferenceVisitor {
                     if (!ct_check)
                         return std::unexpected(std::move(ct_check.error()));
                     binding_ty = *ann;
-                    binding_ct_available = expr_value_is_ct_available(init->expr);
                 } else {
                     if (auto unresolved = find_unresolved_deferred_generic_call(
                             init->expr, ctx.env, ctx.generic_params);
@@ -2330,7 +2328,6 @@ struct ParamReferenceVisitor {
                                         + std::string(unresolved->as_str()) + "'");
                     }
                     binding_ty = init->expr->ty;
-                    binding_ct_available = expr_value_is_ct_available(init->expr);
                 }
 
                 // Register binding in scope (unless discard pattern)
@@ -2348,8 +2345,7 @@ struct ParamReferenceVisitor {
                 }
                 if (!s.discard && s.name.is_valid()
                     && !ctx.scope.insert(
-                        s.name, binding_ty, borrowed_local, binding_ct_available,
-                        init->expr->runtime_evidence))
+                        s.name, binding_ty, borrowed_local, init->expr->availability))
                     return make_error(
                         s.span, "duplicate local binding '" + std::string(s.name.as_str()) + "'");
 
@@ -2462,27 +2458,23 @@ struct ParamReferenceVisitor {
 
 static void recompute_block_summary(tyir::TyBlock& block) {
     bool reachable = true;
-    bool ct_available = true;
-    block.runtime_evidence = std::nullopt;
+    tyir::Availability availability = tyir::availability_ct();
 
     for (const tyir::TyStmt& stmt : block.stmts) {
         if (!reachable)
             break;
 
-        ct_available = ct_available && stmt_value_is_ct_available(stmt);
-        block.runtime_evidence =
-            first_runtime_evidence(block.runtime_evidence, stmt_runtime_evidence(stmt));
+        availability = tyir::availability_join(availability, stmt_availability(stmt));
         reachable = stmt_can_fallthrough(stmt);
     }
 
     if (reachable && block.tail.has_value()) {
-        ct_available = ct_available && expr_value_is_ct_available(*block.tail);
-        block.runtime_evidence =
-            first_runtime_evidence(block.runtime_evidence, (*block.tail)->runtime_evidence);
+        availability = tyir::availability_join(availability, (*block.tail)->availability);
     }
 
-    block.ct_available = value_is_ct_available(ct_available, block.ty);
-    apply_block_runtime_evidence(block);
+    if (availability.evidence.has_value() && !block.ty.is_never())
+        block.ty.is_runtime = true;
+    tyir::set_availability(block, availability);
 }
 
 // ─── Block lowering ──────────────────────────────────────────────────────────
@@ -2555,7 +2547,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
             continue;
         if (!target[i].break_ty.has_value()) {
             target[i].break_ty = source[i].break_ty;
-            target[i].break_ct_available = source[i].break_ct_available;
+            target[i].break_availability = source[i].break_availability;
             continue;
         }
 
@@ -2565,9 +2557,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
         if (!joined)
             return std::unexpected(std::move(joined.error()));
         target[i].break_ty = *joined;
-        if (source[i].break_ct_available.has_value()) {
-            target[i].break_ct_available =
-                target[i].break_ct_available.value_or(true) && *source[i].break_ct_available;
+        if (source[i].break_availability.has_value()) {
+            target[i].break_availability = tyir::availability_join(
+                target[i].break_availability.value_or(tyir::availability_ct()),
+                *source[i].break_availability);
         }
     }
     return {};
@@ -2602,7 +2595,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 return LoweredPlace{
                     tyir::make_ty_expr(
                         expr->span, tyir::LocalRef{node.head, tyir::ValueUseKind::Borrow}, local.ty,
-                        local.ct_available, local.runtime_evidence),
+                        local.availability),
                     local_index,
                 };
             } else if constexpr (std::is_same_v<N, ast::FieldAccessExpr>) {
@@ -2615,11 +2608,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         expr->span,
                         "field access on non-struct type '" + base->expr->ty.display() + "'");
 
-                auto field_ty = ctx.env.field_ty(base->expr->ty.name, node.field);
-                if (!field_ty)
+                const tyir::TyFieldDecl* field_decl =
+                    ctx.env.field_decl(base->expr->ty.name, node.field);
+                if (field_decl == nullptr)
                     return make_error(
                         expr->span, "no field '" + std::string(node.field.as_str())
                                         + "' in struct '" + base->expr->ty.display() + "'");
+                auto field_ty = field_decl->ty;
                 if (!base->expr->ty.generic_args.empty()) {
                     const auto generic_params_it =
                         ctx.env.type_generic_params.find(base->expr->ty.name);
@@ -2630,19 +2625,26 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (!subst)
                         return std::unexpected(std::move(subst.error()));
                     field_ty =
-                        annotate_type_semantics(apply_substitution(*field_ty, *subst), ctx.env);
+                        annotate_type_semantics(apply_substitution(field_ty, *subst), ctx.env);
                 }
                 tyir::Ty lowered_field_ty =
-                    propagate_runtime_tag(*field_ty, base->expr->ty.is_runtime);
-                const bool field_ct_available = expr_value_is_ct_available(base->expr);
-                const auto field_runtime_evidence = base->expr->runtime_evidence;
+                    propagate_runtime_tag(field_ty, base->expr->ty.is_runtime);
+                tyir::Availability field_type_availability =
+                    tyir::availability_from_type(lowered_field_ty);
+                if (tyir::ty_contains_runtime_tag(field_ty)) {
+                    field_type_availability = runtime_availability_at(
+                        field_decl->span,
+                        "runtime field '" + std::string(node.field.as_str()) + "'");
+                }
+                const tyir::Availability field_availability =
+                    tyir::availability_join(base->expr->availability, field_type_availability);
 
                 return LoweredPlace{
                     tyir::make_ty_expr(
                         expr->span,
                         tyir::TyFieldAccess{
                             std::move(base->expr), node.field, tyir::ValueUseKind::Borrow},
-                        lowered_field_ty, field_ct_available, field_runtime_evidence),
+                        lowered_field_ty, field_availability),
                     base->owner_local,
                 };
             } else {
@@ -2742,7 +2744,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     return LoweredExpr{
                         tyir::make_ty_expr(
                             expr->span, tyir::LocalRef{node.head, use_kind}, local.ty,
-                            local.ct_available, local.runtime_evidence),
+                            local.availability),
                         {},
                         local.ty.is_ref() ? local.borrowed_local : std::nullopt,
                     };
@@ -2803,9 +2805,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     cstc::symbol::Symbol, cstc::span::SourceSpan, cstc::symbol::SymbolHash>
                     seen_fields;
                 seen_fields.reserve(node.fields.size());
-                bool fields_ct_available = true;
-                std::optional<tyir::TyRuntimeEvidence> fields_runtime_evidence;
+                tyir::Availability fields_availability = tyir::availability_ct();
                 bool fields_have_runtime_dependency = false;
+                bool fields_reachable = true;
 
                 for (const ast::StructInitField& field : node.fields) {
                     auto expected_ty = ctx.env.field_ty(type_name, field.name);
@@ -2839,12 +2841,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                             + "', found '" + val->expr->ty.display() + "'");
 
                     append_temp_borrows(temp_borrows, std::move(val->temp_borrows));
-                    fields_ct_available =
-                        fields_ct_available && expr_value_is_ct_available(val->expr);
-                    fields_have_runtime_dependency = fields_have_runtime_dependency
-                                                  || type_has_runtime_dependency(val->expr->ty);
-                    fields_runtime_evidence = first_runtime_evidence(
-                        fields_runtime_evidence, val->expr->runtime_evidence);
+                    if (fields_reachable) {
+                        fields_availability =
+                            tyir::availability_join(fields_availability, val->expr->availability);
+                        fields_have_runtime_dependency |=
+                            type_has_runtime_dependency(val->expr->ty);
+                        fields_reachable = expr_can_fallthrough(*val->expr);
+                    }
 
                     lowered_fields.push_back(
                         tyir::TyStructInitField{field.name, std::move(val->expr), field.span});
@@ -2871,7 +2874,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         expr->span,
                         tyir::TyStructInit{
                             type_name, std::move(lowered_generic_args), std::move(lowered_fields)},
-                        result_ty, fields_ct_available, fields_runtime_evidence),
+                        result_ty, fields_availability),
                     {},
                     std::nullopt,
                 };
@@ -2895,13 +2898,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             temp_borrows.push_back(*place->owner_local);
                         }
                         const tyir::Ty ref_ty = tyir::ty::ref(place->expr->ty);
-                        const bool borrow_ct_available = expr_value_is_ct_available(place->expr);
-                        const auto borrow_runtime_evidence = place->expr->runtime_evidence;
+                        const tyir::Availability borrow_availability = place->expr->availability;
 
                         return LoweredExpr{
                             tyir::make_ty_expr(
                                 expr->span, tyir::TyBorrow{std::move(place->expr)}, ref_ty,
-                                borrow_ct_available, borrow_runtime_evidence),
+                                borrow_availability),
                             std::move(temp_borrows),
                             place->owner_local,
                         };
@@ -2912,24 +2914,22 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(rhs.error()));
 
                     if (rhs->expr->ty.is_never()) {
-                        const bool borrow_ct_available = expr_value_is_ct_available(rhs->expr);
-                        const auto borrow_runtime_evidence = rhs->expr->runtime_evidence;
+                        const tyir::Availability borrow_availability = rhs->expr->availability;
                         return LoweredExpr{
                             tyir::make_ty_expr(
                                 expr->span, tyir::TyBorrow{std::move(rhs->expr)}, tyir::ty::never(),
-                                borrow_ct_available, borrow_runtime_evidence),
+                                borrow_availability),
                             std::move(rhs->temp_borrows),
                             std::nullopt,
                         };
                     }
                     const tyir::Ty ref_ty = tyir::ty::ref(rhs->expr->ty);
-                    const bool borrow_ct_available = expr_value_is_ct_available(rhs->expr);
-                    const auto borrow_runtime_evidence = rhs->expr->runtime_evidence;
+                    const tyir::Availability borrow_availability = rhs->expr->availability;
 
                     return LoweredExpr{
                         tyir::make_ty_expr(
                             expr->span, tyir::TyBorrow{std::move(rhs->expr)}, ref_ty,
-                            borrow_ct_available, borrow_runtime_evidence),
+                            borrow_availability),
                         std::move(rhs->temp_borrows),
                         std::nullopt,
                     };
@@ -2959,12 +2959,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         result_ty = unary_result_type(rhs->expr->ty, tyir::ty::bool_());
                     }
 
-                    const bool unary_ct_available = expr_value_is_ct_available(rhs->expr);
-                    const auto unary_runtime_evidence = rhs->expr->runtime_evidence;
+                    const tyir::Availability unary_availability = rhs->expr->availability;
                     auto lowered = LoweredExpr{
                         tyir::make_ty_expr(
                             expr->span, tyir::TyUnary{node.op, std::move(rhs->expr)}, result_ty,
-                            unary_ct_available, unary_runtime_evidence),
+                            unary_availability),
                         {},
                         std::nullopt,
                     };
@@ -3052,15 +3051,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     result_ty = binary_result_type(lhs->expr->ty, rhs->expr->ty, tyir::ty::bool_());
                     break;
                 }
-                const bool binary_ct_available =
-                    expr_value_is_ct_available(lhs->expr) && expr_value_is_ct_available(rhs->expr);
-                const auto binary_runtime_evidence = first_runtime_evidence(
-                    lhs->expr->runtime_evidence, rhs->expr->runtime_evidence);
+                const tyir::Availability binary_availability =
+                    availability_from_reached_binary(lhs->expr, rhs->expr);
                 auto lowered = LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span,
                         tyir::TyBinary{node.op, std::move(lhs->expr), std::move(rhs->expr)},
-                        std::move(result_ty), binary_ct_available, binary_runtime_evidence),
+                        std::move(result_ty), binary_availability),
                     {},
                     std::nullopt,
                 };
@@ -3084,12 +3081,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 const auto* access = std::get_if<tyir::TyFieldAccess>(&place->expr->node);
                 assert(access != nullptr);
-                const bool field_ct_available = expr_value_is_ct_available(place->expr);
                 return LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span,
                         tyir::TyFieldAccess{access->base, access->field, tyir::ValueUseKind::Copy},
-                        place->expr->ty, field_ct_available, place->expr->runtime_evidence),
+                        place->expr->ty, place->expr->availability),
                     {},
                     place->expr->ty.is_ref() ? place->owner_local : std::nullopt,
                 };
@@ -3147,15 +3143,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 std::vector<tyir::TyExprPtr> lowered_args;
                 lowered_args.reserve(node.args.size());
                 std::vector<std::size_t> temp_borrows;
-                std::optional<tyir::TyRuntimeEvidence> args_runtime_evidence;
 
                 for (const ast::ExprPtr& arg_expr : node.args) {
                     auto arg = lower_expr(arg_expr, ctx);
                     if (!arg)
                         return std::unexpected(std::move(arg.error()));
                     append_temp_borrows(temp_borrows, std::move(arg->temp_borrows));
-                    args_runtime_evidence =
-                        first_runtime_evidence(args_runtime_evidence, arg->expr->runtime_evidence);
                     lowered_args.push_back(std::move(arg->expr));
                 }
 
@@ -3249,32 +3242,26 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                     const tyir::Ty lifted_return_ty =
                         lift_call_result_type(resolved_return_ty, lowered_args);
-                    const bool call_ct_available = all_exprs_ct_available(lowered_args);
-                    const auto call_runtime_evidence = first_runtime_evidence(
-                        args_runtime_evidence,
-                        type_has_runtime_dependency(resolved_return_shape)
-                            ? runtime_evidence_at(expr->span, "runtime-result call")
-                            : std::nullopt);
+                    tyir::Availability call_availability = availability_from_reached_call(
+                        lowered_args, expr->span,
+                        type_has_runtime_dependency(resolved_return_shape));
 
                     lowered_expr = tyir::make_ty_expr(
                         expr->span,
                         tyir::TyCall{
                             fn_name, std::move(concrete_generic_args), std::move(lowered_args)},
-                        lifted_return_ty, call_ct_available, call_runtime_evidence);
+                        lifted_return_ty, call_availability);
                 } else {
                     const tyir::Ty lifted_return_ty =
                         lift_call_result_type(resolved_return_ty, lowered_args);
-                    const bool call_ct_available = all_exprs_ct_available(lowered_args);
-                    const auto call_runtime_evidence = first_runtime_evidence(
-                        args_runtime_evidence,
-                        type_has_runtime_dependency(resolved_return_shape)
-                            ? runtime_evidence_at(expr->span, "runtime-result call")
-                            : std::nullopt);
+                    tyir::Availability call_availability = availability_from_reached_call(
+                        lowered_args, expr->span,
+                        type_has_runtime_dependency(resolved_return_shape));
                     lowered_expr = tyir::make_ty_expr(
                         expr->span,
                         tyir::TyDeferredGenericCall{
                             fn_name, std::move(resolved_generic_args), std::move(lowered_args)},
-                        lifted_return_ty, call_ct_available, call_runtime_evidence);
+                        lifted_return_ty, call_availability);
                 }
 
                 auto lowered = LoweredExpr{
@@ -3305,8 +3292,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
                 return LoweredExpr{
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyRuntimeBlock{std::move(block_ptr)}, result_ty, false,
-                        runtime_evidence_at(expr->span, "runtime block")),
+                        expr->span, tyir::TyRuntimeBlock{std::move(block_ptr)}, result_ty,
+                        runtime_availability_at(expr->span, "runtime block")),
                     {},
                     std::nullopt,
                 };
@@ -3319,12 +3306,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     return std::unexpected(std::move(block.error()));
                 tyir::Ty block_ty = block->ty;
                 auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
-                const bool block_ct_available = block_ptr->ct_available;
-                const auto block_runtime_evidence = block_ptr->runtime_evidence;
+                const tyir::Availability block_availability = block_ptr->availability;
                 return LoweredExpr{
                     tyir::make_ty_expr(
-                        expr->span, std::move(block_ptr), block_ty, block_ct_available,
-                        block_runtime_evidence),
+                        expr->span, std::move(block_ptr), block_ty, block_availability),
                     {},
                     std::nullopt,
                 };
@@ -3351,10 +3336,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 const bool then_reaches_join = block_can_fallthrough(*then_ptr);
 
                 tyir::Ty result_ty = then_ptr->ty;
-                const bool condition_ct_available = expr_value_is_ct_available(cond->expr);
-                bool if_ct_available = condition_ct_available && then_ptr->ct_available;
-                std::optional<tyir::TyRuntimeEvidence> if_runtime_evidence = first_runtime_evidence(
-                    cond->expr->runtime_evidence, then_ptr->runtime_evidence);
+                const bool condition_reaches_branches = expr_can_fallthrough(*cond->expr);
+                tyir::Availability if_availability = cond->expr->availability;
+                if (condition_reaches_branches)
+                    if_availability =
+                        tyir::availability_join(if_availability, then_ptr->availability);
 
                 std::optional<tyir::TyExprPtr> else_branch;
                 if (node.else_branch.has_value()) {
@@ -3388,9 +3374,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (expr_can_fallthrough(*else_val->expr))
                         ctx.scope.merge_from(else_ctx.scope);
 
-                    if_ct_available = if_ct_available && expr_value_is_ct_available(else_val->expr);
-                    if_runtime_evidence = first_runtime_evidence(
-                        if_runtime_evidence, else_val->expr->runtime_evidence);
+                    if (condition_reaches_branches)
+                        if_availability =
+                            tyir::availability_join(if_availability, else_val->expr->availability);
                     else_branch = std::move(else_val->expr);
                 } else {
                     // No else branch: result type is Unit
@@ -3406,8 +3392,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 if (result_ty.is_ref())
                     return make_error(expr->span, "'if' expressions cannot yield references yet");
-                if (if_runtime_evidence.has_value()) {
-                    if_ct_available = false;
+                if (if_availability.evidence.has_value()) {
                     if (!result_ty.is_never())
                         result_ty.is_runtime = true;
                 }
@@ -3417,7 +3402,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         expr->span,
                         tyir::TyIf{
                             std::move(cond->expr), std::move(then_ptr), std::move(else_branch)},
-                        result_ty, if_ct_available, if_runtime_evidence),
+                        result_ty, if_availability),
                     {},
                     std::nullopt,
                 };
@@ -3436,26 +3421,25 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 //   - bare break     → Unit
                 //   - break expr     → expr type
                 const tyir::Ty loop_ty = ctx.current_loop().break_ty.value_or(tyir::ty::never());
-                const bool loop_ct_available = ctx.current_loop().break_ct_available.value_or(true);
+                const tyir::Availability break_availability =
+                    ctx.current_loop().break_availability.value_or(tyir::availability_ct());
                 if (loop_ty.is_ref()) {
                     ctx.pop_loop();
                     return make_error(expr->span, "loop expressions cannot yield references yet");
                 }
                 ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
-                std::optional<tyir::TyRuntimeEvidence> loop_runtime_evidence =
-                    body_ptr->runtime_evidence;
+                tyir::Availability loop_availability =
+                    tyir::availability_join(break_availability, body_ptr->availability);
                 tyir::Ty lowered_loop_ty = loop_ty;
-                bool lowered_loop_ct_available = loop_ct_available;
-                if (loop_runtime_evidence.has_value()) {
-                    lowered_loop_ct_available = false;
+                if (loop_availability.evidence.has_value()) {
                     if (!lowered_loop_ty.is_never())
                         lowered_loop_ty.is_runtime = true;
                 }
                 return LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span, tyir::TyLoop{std::move(body_ptr)}, lowered_loop_ty,
-                        lowered_loop_ct_available, loop_runtime_evidence),
+                        loop_availability),
                     {},
                     std::nullopt,
                 };
@@ -3475,7 +3459,6 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                                   + cond->expr->ty.display() + "'");
                 }
                 release_temp_borrows(ctx, cond->temp_borrows);
-                const bool condition_ct_available = expr_value_is_ct_available(cond->expr);
 
                 ctx.push_loop(LoopKind::While);
                 auto body = lower_block(*node.body, ctx);
@@ -3485,20 +3468,18 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 }
                 ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
-                std::optional<tyir::TyRuntimeEvidence> while_runtime_evidence =
-                    first_runtime_evidence(
-                        cond->expr->runtime_evidence, body_ptr->runtime_evidence);
-                bool while_ct_available = condition_ct_available && body_ptr->ct_available;
+                tyir::Availability while_availability = cond->expr->availability;
+                if (expr_can_fallthrough(*cond->expr))
+                    while_availability =
+                        tyir::availability_join(while_availability, body_ptr->availability);
                 tyir::Ty while_ty = tyir::ty::unit();
-                if (while_runtime_evidence.has_value()) {
-                    while_ct_available = false;
+                if (while_availability.evidence.has_value())
                     while_ty.is_runtime = true;
-                }
 
                 return LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span, tyir::TyWhile{std::move(cond->expr), std::move(body_ptr)},
-                        while_ty, while_ct_available, while_runtime_evidence),
+                        while_ty, while_availability),
                     {},
                     std::nullopt,
                 };
@@ -3510,8 +3491,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 ctx.scope.push();
 
                 std::optional<tyir::TyForInit> lowered_init;
-                bool for_ct_available = true;
-                std::optional<tyir::TyRuntimeEvidence> for_runtime_evidence;
+                tyir::Availability for_availability = tyir::availability_ct();
+                bool for_segment_reachable = true;
 
                 if (node.init.has_value()) {
                     const auto& init_var = *node.init;
@@ -3522,7 +3503,6 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             return std::unexpected(std::move(init_expr.error()));
                         }
                         tyir::Ty init_ty;
-                        bool init_ct_available = true;
                         if (init_let->type_annotation.has_value()) {
                             auto ann = lower_type(
                                 *init_let->type_annotation, ctx.env, init_let->span,
@@ -3538,11 +3518,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 return std::unexpected(std::move(resolved_init.error()));
                             }
                             init_expr->expr = std::move(*resolved_init);
-                            if (!compatible(init_expr->expr->ty, *ann)
+                            if (!call_argument_compatible(init_expr->expr->ty, *ann)
                                 && !should_defer_generic_probe_failure(
                                     init_expr->expr->ty, *ann, ctx)) {
-                                if (init_let->type_annotation->requires_ct
-                                    && call_argument_compatible(init_expr->expr->ty, *ann)) {
+                                if (init_let->type_annotation->requires_ct) {
                                     auto ct_check = require_ct_annotation_value(
                                         true, init_expr->expr, *ann, init_let->span,
                                         "for-init binding");
@@ -3565,10 +3544,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 return std::unexpected(std::move(ct_check.error()));
                             }
                             init_ty = *ann;
-                            init_ct_available = expr_value_is_ct_available(init_expr->expr);
                         } else {
                             init_ty = init_expr->expr->ty;
-                            init_ct_available = expr_value_is_ct_available(init_expr->expr);
                         }
 
                         std::optional<std::size_t> borrowed_local;
@@ -3578,17 +3555,19 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         }
                         if (!init_let->discard && init_let->name.is_valid()
                             && !ctx.scope.insert(
-                                init_let->name, init_ty, borrowed_local, init_ct_available,
-                                init_expr->expr->runtime_evidence)) {
+                                init_let->name, init_ty, borrowed_local,
+                                init_expr->expr->availability)) {
                             ctx.scope.pop();
                             return make_error(
                                 init_let->span, "duplicate local binding '"
                                                     + std::string(init_let->name.as_str()) + "'");
                         }
                         release_temp_borrows(ctx, init_expr->temp_borrows);
-                        for_ct_available = for_ct_available && init_ct_available;
-                        for_runtime_evidence = first_runtime_evidence(
-                            for_runtime_evidence, init_expr->expr->runtime_evidence);
+                        if (for_segment_reachable) {
+                            for_availability = tyir::availability_join(
+                                for_availability, init_expr->expr->availability);
+                            for_segment_reachable = expr_can_fallthrough(*init_expr->expr);
+                        }
                         lowered_init = tyir::TyForInit{
                             init_let->discard, init_let->name, init_ty, std::move(init_expr->expr),
                             init_let->span};
@@ -3601,10 +3580,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             return std::unexpected(std::move(init_expr.error()));
                         }
                         release_temp_borrows(ctx, init_expr->temp_borrows);
-                        for_ct_available =
-                            for_ct_available && expr_value_is_ct_available(init_expr->expr);
-                        for_runtime_evidence = first_runtime_evidence(
-                            for_runtime_evidence, init_expr->expr->runtime_evidence);
+                        if (for_segment_reachable) {
+                            for_availability = tyir::availability_join(
+                                for_availability, init_expr->expr->availability);
+                            for_segment_reachable = expr_can_fallthrough(*init_expr->expr);
+                        }
                         // Treat as a discard init — wrap in TyForInit with discard=true
                         lowered_init = tyir::TyForInit{
                             true, cstc::symbol::kInvalidSymbol, init_expr->expr->ty,
@@ -3629,9 +3609,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                 + cond->expr->ty.display() + "'");
                     }
                     release_temp_borrows(ctx, cond->temp_borrows);
-                    for_ct_available = for_ct_available && expr_value_is_ct_available(cond->expr);
-                    for_runtime_evidence =
-                        first_runtime_evidence(for_runtime_evidence, cond->expr->runtime_evidence);
+                    if (for_segment_reachable) {
+                        for_availability =
+                            tyir::availability_join(for_availability, cond->expr->availability);
+                        for_segment_reachable = expr_can_fallthrough(*cond->expr);
+                    }
                     lowered_cond = std::move(cond->expr);
                 }
 
@@ -3646,9 +3628,10 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 }
                 loop_ctx.pop_loop();
                 auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
-                for_ct_available = for_ct_available && body_ptr->ct_available;
-                for_runtime_evidence =
-                    first_runtime_evidence(for_runtime_evidence, body_ptr->runtime_evidence);
+                const bool for_body_reachable = for_segment_reachable;
+                if (for_body_reachable)
+                    for_availability =
+                        tyir::availability_join(for_availability, body_ptr->availability);
 
                 std::optional<tyir::TyExprPtr> lowered_step;
                 if (node.step.has_value()) {
@@ -3658,19 +3641,17 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         return std::unexpected(std::move(step.error()));
                     }
                     release_temp_borrows(loop_ctx, step->temp_borrows);
-                    for_ct_available = for_ct_available && expr_value_is_ct_available(step->expr);
-                    for_runtime_evidence =
-                        first_runtime_evidence(for_runtime_evidence, step->expr->runtime_evidence);
+                    if (for_body_reachable && block_can_fallthrough(*body_ptr))
+                        for_availability =
+                            tyir::availability_join(for_availability, step->expr->availability);
                     lowered_step = std::move(step->expr);
                 }
 
                 ctx.scope.pop();
 
                 tyir::Ty for_ty = tyir::ty::unit();
-                if (for_runtime_evidence.has_value()) {
-                    for_ct_available = false;
+                if (for_availability.evidence.has_value())
                     for_ty.is_runtime = true;
-                }
 
                 return LoweredExpr{
                     tyir::make_ty_expr(
@@ -3678,7 +3659,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         tyir::TyFor{
                             std::move(lowered_init), std::move(lowered_cond),
                             std::move(lowered_step), std::move(body_ptr)},
-                        for_ty, for_ct_available, for_runtime_evidence),
+                        for_ty, for_availability),
                     {},
                     std::nullopt,
                 };
@@ -3711,26 +3692,26 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     // Re-acquire the reference after recursion.
                     auto& loop_ctx = ctx.current_loop();
                     const tyir::Ty& val_ty = val->expr->ty;
-                    const bool break_ct_available = expr_value_is_ct_available(val->expr);
+                    const tyir::Availability break_availability = val->expr->availability;
                     if (!loop_ctx.break_ty.has_value()) {
                         loop_ctx.break_ty = val_ty;
-                        loop_ctx.break_ct_available = break_ct_available;
+                        loop_ctx.break_availability = break_availability;
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
                         auto joined = join_loop_break_types(prev, val_ty, expr->span, ctx);
                         if (!joined)
                             return std::unexpected(std::move(joined.error()));
                         loop_ctx.break_ty = *joined;
-                        loop_ctx.break_ct_available =
-                            loop_ctx.break_ct_available.value_or(true) && break_ct_available;
+                        loop_ctx.break_availability = tyir::availability_join(
+                            loop_ctx.break_availability.value_or(tyir::availability_ct()),
+                            break_availability);
                     }
 
                     release_temp_borrows(ctx, val->temp_borrows);
-                    const auto break_runtime_evidence = val->expr->runtime_evidence;
                     return LoweredExpr{
                         tyir::make_ty_expr(
                             expr->span, tyir::TyBreak{std::move(val->expr)}, tyir::ty::never(),
-                            true, break_runtime_evidence),
+                            break_availability),
                         {},
                         std::nullopt,
                     };
@@ -3742,7 +3723,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     // Bare break in `loop` contributes Unit
                     if (!loop_ctx.break_ty.has_value()) {
                         loop_ctx.break_ty = tyir::ty::unit();
-                        loop_ctx.break_ct_available = true;
+                        loop_ctx.break_availability = tyir::availability_ct();
                     } else {
                         const tyir::Ty& prev = *loop_ctx.break_ty;
                         auto joined =
@@ -3750,7 +3731,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         if (!joined)
                             return std::unexpected(std::move(joined.error()));
                         loop_ctx.break_ty = *joined;
-                        loop_ctx.break_ct_available = loop_ctx.break_ct_available.value_or(true);
+                        loop_ctx.break_availability = tyir::availability_join(
+                            loop_ctx.break_availability.value_or(tyir::availability_ct()),
+                            tyir::availability_ct());
                     }
                 }
                 // Bare break in while/for: no type tracking needed
@@ -3785,7 +3768,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
                     if (!resolved_val)
                         return std::unexpected(std::move(resolved_val.error()));
                     val->expr = std::move(*resolved_val);
-                    if (!compatible(val->expr->ty, ctx.current_return_ty)
+                    if (!call_argument_compatible(val->expr->ty, ctx.current_return_ty)
                         && !should_defer_generic_probe_failure(
                             val->expr->ty, ctx.current_return_ty, ctx,
                             val->deferred_generic_probe_validation))
@@ -3802,12 +3785,13 @@ static std::expected<void, LowerError> merge_loop_break_types(
                             expr->span, "bare 'return' in function returning '"
                                             + ctx.current_return_ty.display() + "'");
                 }
-                const auto return_runtime_evidence =
-                    lowered_val.has_value() ? (*lowered_val)->runtime_evidence : std::nullopt;
+                const tyir::Availability return_availability = lowered_val.has_value()
+                                                                 ? (*lowered_val)->availability
+                                                                 : tyir::availability_ct();
                 return LoweredExpr{
                     tyir::make_ty_expr(
-                        expr->span, tyir::TyReturn{std::move(lowered_val)}, tyir::ty::never(), true,
-                        return_runtime_evidence),
+                        expr->span, tyir::TyReturn{std::move(lowered_val)}, tyir::ty::never(),
+                        return_availability),
                     {},
                     std::nullopt,
                 };
@@ -3818,10 +3802,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
         },
         expr->node);
     if (lowered.has_value()) {
-        lowered->expr->ct_available =
-            value_is_ct_available(lowered->expr->ct_available, lowered->expr->ty);
-        if (lowered->expr->runtime_evidence.has_value())
-            lowered->expr->ct_available = false;
+        tyir::set_availability(*lowered->expr, lowered->expr->availability);
         lowered->deferred_generic_probe_validation = ctx.defer_generic_probe_validation;
     }
     return lowered;
@@ -3848,7 +3829,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
     };
     ctx.scope.push();
     for (const tyir::TyParam& p : ty_params) {
-        if (!ctx.scope.insert(p.name, p.ty, std::nullopt, p.requires_ct()))
+        const tyir::Availability param_availability = parameter_declaration_availability(p);
+        if (!ctx.scope.insert(p.name, p.ty, std::nullopt, param_availability))
             return make_error(p.span, "duplicate parameter '" + std::string(p.name.as_str()) + "'");
     }
 
@@ -3867,17 +3849,18 @@ static std::expected<void, LowerError> merge_loop_break_types(
     }
 
     const bool implicit_unit_result = !sig.has_explicit_return_type && sig.return_ty.is_unit();
-    if (body->runtime_evidence.has_value() && !sig.return_ty.is_runtime && !fn.is_runtime
+    if (body->availability.evidence.has_value() && !sig.return_ty.is_runtime && !fn.is_runtime
         && !implicit_unit_result) {
         return make_error(
-            body->runtime_evidence->span,
+            body->availability.evidence->span,
             "function '" + display_decl_name(fn)
                 + "' body has runtime dependence not reflected in its return type: "
-                + body->runtime_evidence->reason);
+                + body->availability.evidence->reason);
     }
 
     // Check that body type matches declared return type (when a tail is present)
-    if (body->tail.has_value() && !compatible(body->ty, sig.return_ty) && !implicit_unit_result
+    if (body->tail.has_value() && !call_argument_compatible(body->ty, sig.return_ty)
+        && !implicit_unit_result
         && !should_defer_generic_probe_failure(body->ty, sig.return_ty, ctx))
         return make_error(
             fn.body->span, "function '" + display_decl_name(fn) + "' body type mismatch: expected '"
@@ -3893,8 +3876,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                + sig.return_ty.display() + "'");
 
     if (fn.is_runtime) {
-        body->ty.is_runtime = true;
-        recompute_block_summary(*body);
+        tyir::set_availability(
+            *body, tyir::availability_join(tyir::availability_rt(), body->availability));
     }
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));

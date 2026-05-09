@@ -70,6 +70,90 @@ static void test_runtime_ty() {
     assert(borrowed_runtime_handle != ty::ref(ty::named(handle)));
 }
 
+static void test_availability_from_type_detects_nested_runtime_tags() {
+    const Symbol box = Symbol::intern("Box");
+    const Ty plain_box = ty::named(box, kInvalidSymbol, ValueSemantics::Move, false, {ty::num()});
+    const Ty borrowed_runtime_box =
+        ty::ref(ty::named(box, kInvalidSymbol, ValueSemantics::Move, false, {ty::num(true)}));
+
+    assert(!ty_contains_runtime_tag(plain_box));
+    assert(ty_contains_runtime_tag(borrowed_runtime_box));
+
+    const Availability availability = availability_from_type(borrowed_runtime_box);
+    assert(availability.kind == AvailabilityKind::Rt);
+    assert(!availability.evidence.has_value());
+
+    const Availability runtime_num = availability_from_type(ty::num(true));
+    assert(runtime_num.kind == AvailabilityKind::Rt);
+    assert(runtime_num.evidence == std::nullopt);
+}
+
+static void test_availability_join_preserves_first_evidence() {
+    const Availability ct = availability_ct();
+    const Availability runtime_from_type = availability_from_type(ty::num(true));
+    assert(is_ct_available(ct));
+    assert(!is_ct_available(runtime_from_type));
+    assert(!runtime_from_type.evidence.has_value());
+
+    const TyRuntimeEvidence first{
+        {1, 2},
+        "first"
+    };
+    const TyRuntimeEvidence second{
+        {3, 4},
+        "second"
+    };
+    const Availability joined = availability_join(availability_rt(first), availability_rt(second));
+    assert(!is_ct_available(joined));
+    assert(joined.evidence.has_value());
+    assert(joined.evidence->span.start == 1);
+    assert(joined.evidence->reason == "first");
+
+    const Availability joined_fallback =
+        availability_join(runtime_from_type, availability_rt(second));
+    assert(joined_fallback.evidence.has_value());
+    assert(joined_fallback.evidence->span.start == 3);
+    assert(joined_fallback.evidence->reason == "second");
+}
+
+static void test_runtime_allowed_param_availability_is_symbolic_ct() {
+    const Availability param = availability_runtime_allowed_param();
+    assert(is_ct_available(param));
+    assert(!is_ct_required_available(param));
+    assert(param.depends_on_runtime_allowed_param);
+
+    const Availability joined = availability_join(availability_ct(), param);
+    assert(is_ct_available(joined));
+    assert(!is_ct_required_available(joined));
+    assert(joined.depends_on_runtime_allowed_param);
+}
+
+static void test_availability_projection() {
+    assert(with_availability_projection(ty::num(), availability_ct()) == ty::num());
+    assert(with_availability_projection(ty::num(), availability_rt()) == ty::num(true));
+    assert(with_availability_projection(ty::never(), availability_rt()) == ty::never());
+}
+
+static void test_set_availability_projects_type() {
+    const TyExprPtr expr = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("1"), false}, ty::num(),
+        availability_rt());
+    assert(expr->ty == ty::num(true));
+    assert(expr->availability.kind == AvailabilityKind::Rt);
+    set_availability(*expr, availability_ct());
+    assert(expr->ty == ty::num());
+    assert(expr->availability.kind == AvailabilityKind::Ct);
+
+    TyBlock block;
+    block.ty = ty::unit();
+    set_availability(block, availability_rt());
+    assert(block.ty == ty::unit(true));
+    assert(block.availability.kind == AvailabilityKind::Rt);
+    set_availability(block, availability_ct());
+    assert(block.ty == ty::unit());
+    assert(block.availability.kind == AvailabilityKind::Ct);
+}
+
 static void test_named_shape_distinguishes_nominal_types() {
     const Symbol point = Symbol::intern("Point");
     const Symbol color = Symbol::intern("Color");
@@ -93,6 +177,16 @@ static void test_make_literal() {
     assert(expr->ty == ty::num());
     assert(std::holds_alternative<TyLiteral>(expr->node));
     assert(std::get<TyLiteral>(expr->node).kind == TyLiteral::Kind::Num);
+    assert(is_ct_available(*expr));
+}
+
+static void test_make_runtime_expr_derives_availability() {
+    const TyExprPtr expr = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Num, Symbol::intern("1"), false}, ty::num(true));
+    assert(expr != nullptr);
+    assert(!is_ct_available(*expr));
+    assert(expr->availability.kind == AvailabilityKind::Rt);
+    assert(!expr->availability.evidence.has_value());
 }
 
 static void test_make_local_ref() {
@@ -164,9 +258,15 @@ int main() {
     test_ty_named();
     test_ty_named_with_generic_args();
     test_runtime_ty();
+    test_availability_from_type_detects_nested_runtime_tags();
+    test_availability_join_preserves_first_evidence();
+    test_runtime_allowed_param_availability_is_symbolic_ct();
+    test_availability_projection();
+    test_set_availability_projects_type();
     test_named_shape_distinguishes_nominal_types();
     test_ty_equality_distinguishes_value_semantics();
     test_make_literal();
+    test_make_runtime_expr_derives_availability();
     test_make_local_ref();
     test_make_binary();
     test_empty_program();

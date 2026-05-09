@@ -425,6 +425,12 @@ is runtime dependence introduced inside the body itself. An explicit plain retur
 annotation rejects such hidden runtime work; use `runtime fn`, `-> runtime T`, or
 an explicit runtime boundary when the runtime behavior is intentional.
 
+Inside a declaration body, an ordinary plain parameter keeps its plain type shape
+but carries symbolic runtime-allowed dependence. This lets the helper body type as
+plain for the all-static instantiation while still preventing that parameter from
+satisfying a `!runtime`/`const` requirement unless the requirement is explicit on
+the parameter or local being forwarded.
+
 ## 7. Valid Syntax Examples
 
 ```text

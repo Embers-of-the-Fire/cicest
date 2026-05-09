@@ -176,6 +176,13 @@ static void test_arithmetic() {
 
 static void test_arithmetic_type_error() { must_fail("fn f(x: bool) -> num { x + 1 }"); }
 
+static void test_binary_unreachable_rhs_does_not_taint_plain_result() {
+    const auto prog = must_lower("fn f() -> num { (return 1) + runtime { 2 } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
 // ─── Comparison operators ─────────────────────────────────────────────────────
 
 static void test_comparisons() {
@@ -249,6 +256,28 @@ static void test_plain_call_lifted_result_still_prevents_return_demotion() {
         "runtime dependence not reflected in its return type");
 }
 
+static void test_call_unreachable_arg_does_not_taint_plain_result() {
+    const auto prog = must_lower(
+        "runtime fn source(left: num, right: num) -> num { right }"
+        "fn f() -> num { source((return 1), runtime { 2 }) }");
+    const auto& body = *second_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
+static void test_plain_call_with_diverging_argument_becomes_never_in_if_branch() {
+    const auto prog = must_lower(
+        "fn sink(value: num) -> num { value }"
+        "fn f(cond: bool) -> num { if cond { sink((return 1)) } else { true }; 0 }");
+    const auto& stmt = std::get<TyExprStmt>(second_fn(prog).body->stmts[0]);
+    assert(stmt.expr->ty == ty::bool_());
+    const auto& if_expr = std::get<TyIf>(stmt.expr->node);
+    assert(if_expr.then_block->tail.has_value());
+    const auto& call = std::get<TyCall>((*if_expr.then_block->tail)->node);
+    assert((*if_expr.then_block->tail)->ty == ty::never());
+    assert(call.args[0]->ty == ty::never());
+}
+
 static void test_unused_runtime_let_taints_plain_result_function() {
     must_fail_with_message(
         "runtime fn source() -> num { 1 }"
@@ -272,17 +301,30 @@ static void test_runtime_block_statement_taints_plain_result_function() {
 static void test_runtime_statement_marks_unit_block_not_ct_available() {
     const auto prog = must_lower("fn value(x: runtime num) { x; }");
     const auto& fn = first_fn(prog);
-    assert(fn.body->ty == ty::unit());
-    assert(!fn.body->ct_available);
-    assert(!fn.body->runtime_evidence.has_value());
+    assert(fn.body->ty == ty::unit(true));
+    assert(!is_ct_available(*fn.body));
+    assert(fn.body->availability.kind == AvailabilityKind::Rt);
+    assert(fn.body->availability.evidence.has_value());
 }
 
 static void test_unreachable_runtime_statement_does_not_taint_block() {
     const auto prog = must_lower("fn value() -> num { return 1; runtime { 0 }; }");
     const auto& fn = first_fn(prog);
     assert(fn.body->ty == ty::never());
-    assert(fn.body->ct_available);
-    assert(!fn.body->runtime_evidence.has_value());
+    assert(is_ct_available(*fn.body));
+    assert(fn.body->availability.kind == AvailabilityKind::Ct);
+}
+
+static void test_resolved_block_tail_can_clear_runtime_projection() {
+    const auto prog = must_lower(
+        "fn make_default<T>() -> T { loop {} }"
+        "fn value() -> num { let result: num = { make_default() }; result }");
+    const auto& fn = second_fn(prog);
+    const auto& stmt = std::get<TyLetStmt>(fn.body->stmts[0]);
+    const auto& block = *std::get<TyBlockPtr>(stmt.init->node);
+    assert(block.ty == ty::num());
+    assert(is_ct_available(block));
+    assert(block.availability.kind == AvailabilityKind::Ct);
 }
 
 static void test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call() {
@@ -300,7 +342,8 @@ static void test_whole_term_runtime_work_accepts_runtime_result_contract() {
         "fn value() -> runtime num { source(); 1 }");
     const auto& fn = second_fn(prog);
     assert(fn.body->ty == ty::num(true));
-    assert(!fn.body->ct_available);
+    assert(!is_ct_available(*fn.body));
+    assert(fn.body->availability.kind == AvailabilityKind::Rt);
 }
 
 static void test_runtime_function_accepts_whole_term_runtime_work() {
@@ -310,10 +353,10 @@ static void test_runtime_function_accepts_whole_term_runtime_work() {
     const auto& source = first_fn(prog);
     const auto& fn = second_fn(prog);
     assert(source.body->ty == ty::num(true));
-    assert(!source.body->ct_available);
+    assert(!is_ct_available(*source.body));
     assert(fn.return_ty == ty::num(true));
     assert(fn.body->ty == ty::num(true));
-    assert(!fn.body->ct_available);
+    assert(!is_ct_available(*fn.body));
 }
 
 static void test_ordinarily_polymorphic_helper_still_accepts_runtime_arguments() {
@@ -336,6 +379,7 @@ static void test_plain_call_lifts_runtime_arguments() {
     const auto& call = std::get<TyCall>(stmt.init->node);
     assert(stmt.ty == ty::num(true));
     assert(stmt.init->ty == ty::num(true));
+    assert(stmt.init->availability.kind == AvailabilityKind::Rt);
     assert(call.args[0]->ty == ty::num(true));
     assert(call.args[1]->ty == ty::num(true));
 }
@@ -380,8 +424,8 @@ static void test_runtime_result_forwarded_param_does_not_count_as_hidden_work() 
         "fn f(value: runtime num) -> runtime num { id(value) }");
     const auto& fn = second_fn(prog);
     assert(fn.body->ty == ty::num(true));
-    assert(!fn.body->ct_available);
-    assert(!fn.body->runtime_evidence.has_value());
+    assert(!is_ct_available(*fn.body));
+    assert(fn.body->availability.evidence.has_value());
 }
 
 static void test_generic_runtime_result_forwarded_param_does_not_count_as_hidden_work() {
@@ -390,8 +434,8 @@ static void test_generic_runtime_result_forwarded_param_does_not_count_as_hidden
         "fn f(value: runtime num) -> runtime num { id(value) }");
     const auto& fn = second_fn(prog);
     assert(fn.body->ty == ty::num(true));
-    assert(!fn.body->ct_available);
-    assert(!fn.body->runtime_evidence.has_value());
+    assert(!is_ct_available(*fn.body));
+    assert(fn.body->availability.evidence.has_value());
 }
 
 static void test_plain_extern_call_accepts_runtime_argument_and_lifts_result() {
@@ -542,7 +586,10 @@ static void test_if_condition_must_be_bool() { must_fail("fn f(x: num) { if x { 
 static void test_runtime_if_condition_accepted() {
     const auto prog = must_lower(
         "fn f() -> runtime num { if flag() { 1 } else { 2 } } runtime fn flag() -> bool { true }");
-    assert((*first_fn(prog).body->tail)->ty == ty::num(true));
+    const auto& tail = *first_fn(prog).body->tail;
+    assert(tail->ty == ty::num(true));
+    assert(tail->availability.kind == AvailabilityKind::Rt);
+    assert(tail->availability.evidence.has_value());
 }
 
 static void test_if_else_runtime_join_produces_runtime_type() {
@@ -566,6 +613,21 @@ static void test_if_else_runtime_join_prevents_demotion() {
         "fn choose(flag: bool) -> num { if flag { 1 } else { source() } }"
         "runtime fn source() -> num { 2 }",
         "runtime dependence not reflected in its return type");
+}
+
+static void test_if_diverging_condition_skips_branch_availability() {
+    const auto prog = must_lower("fn f() -> num { if (return 1) { runtime { 2 } } else { 3 } }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
+static void test_expected_type_if_diverging_condition_skips_branch_availability() {
+    const auto prog = must_lower(
+        "fn f() -> num { let value: num = if (return 1) { runtime { 2 } } else { 3 }; value }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
 }
 
 // ─── Control flow ─────────────────────────────────────────────────────────────
@@ -595,6 +657,15 @@ static void test_runtime_while_condition_accepted() {
     const auto& while_expr = *first_fn(prog).body->tail;
     assert(std::holds_alternative<TyWhile>(while_expr->node));
     assert(while_expr->ty == ty::unit(true));
+    assert(while_expr->availability.kind == AvailabilityKind::Rt);
+    assert(while_expr->availability.evidence.has_value());
+}
+
+static void test_while_diverging_condition_skips_body_availability() {
+    const auto prog = must_lower("fn f() -> num { while (return 1) { runtime { 2 }; }; 0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
 }
 
 static void test_for_loop() {
@@ -635,6 +706,34 @@ static void test_runtime_for_condition_accepted() {
     const auto& for_expr = *first_fn(prog).body->tail;
     assert(std::holds_alternative<TyFor>(for_expr->node));
     assert(for_expr->ty == ty::unit(true));
+    assert(for_expr->availability.kind == AvailabilityKind::Rt);
+    assert(for_expr->availability.evidence.has_value());
+}
+
+static void test_for_unreachable_step_does_not_taint_plain_result() {
+    const auto prog = must_lower("fn f() -> num { for (;; runtime { 1 }) { break; }; 0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.availability.kind == AvailabilityKind::Ct);
+    assert(body.availability.evidence == std::nullopt);
+    assert(body.tail.has_value());
+    assert((*body.tail)->ty == ty::num());
+}
+
+static void test_for_diverging_init_skips_later_runtime_segments() {
+    const auto prog = must_lower(
+        "fn f() -> num { for (return 1; runtime { true }; runtime { 2 }) { runtime { 3 }; }; "
+        "0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
+static void test_for_diverging_condition_skips_body_and_step_availability() {
+    const auto prog =
+        must_lower("fn f() -> num { for (; return 1; runtime { 2 }) { runtime { 3 }; }; 0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
 }
 
 static void test_break_and_continue_are_never() {
@@ -660,7 +759,7 @@ static void test_runtime_return_payload_marks_body_not_ct_available() {
     const auto prog = must_lower("fn f(x: runtime num) -> runtime num { return x; }");
     const auto& body = *first_fn(prog).body;
     assert(body.ty == ty::never());
-    assert(!body.ct_available);
+    assert(!is_ct_available(body));
 }
 
 static void test_runtime_break_payload_marks_loop_body_not_ct_available() {
@@ -668,8 +767,8 @@ static void test_runtime_break_payload_marks_loop_body_not_ct_available() {
     const auto& body = *first_fn(prog).body;
     const auto& loop = std::get<TyLoop>((*body.tail)->node);
     assert((*body.tail)->ty == ty::num(true));
-    assert(!body.ct_available);
-    assert(!loop.body->ct_available);
+    assert(!is_ct_available(body));
+    assert(!is_ct_available(*loop.body));
 }
 
 // ─── Loop/break type inference ────────────────────────────────────────────────
@@ -1121,6 +1220,19 @@ static void test_return_type_resolves_deferred_call_through_if_branches() {
     assert(call.generic_args[0] == ty::num());
 }
 
+static void test_deferred_generic_call_with_diverging_argument_becomes_never_in_if_branch() {
+    const auto prog = must_lower(
+        "fn make_default<T>(flag: bool) -> T { loop {} }"
+        "fn f(cond: bool) -> num { if cond { make_default((return 1)) } else { true }; 0 }");
+    const auto& stmt = std::get<TyExprStmt>(second_fn(prog).body->stmts[0]);
+    assert(stmt.expr->ty == ty::bool_());
+    const auto& if_expr = std::get<TyIf>(stmt.expr->node);
+    assert(if_expr.then_block->tail.has_value());
+    const auto& call = std::get<TyDeferredGenericCall>((*if_expr.then_block->tail)->node);
+    assert((*if_expr.then_block->tail)->ty == ty::never());
+    assert(call.args[0]->ty == ty::never());
+}
+
 static void test_if_branch_join_keeps_runtime_on_deferred_generic_call() {
     must_fail_with_message(
         "runtime fn make_default<T>(flag: bool) -> T { loop {} }"
@@ -1349,6 +1461,15 @@ static void test_struct_init_lifts_runtime_field() {
     assert(init.fields[1].value->ty == ty::num());
 }
 
+static void test_struct_init_unreachable_field_does_not_taint_plain_result() {
+    const auto prog = must_lower(
+        "struct Pair { left: num, right: num }"
+        "fn f() -> num { Pair { left: return 1, right: runtime { 2 } }; 0 }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+}
+
 static void test_generic_struct_init() {
     const auto prog = must_lower(
         "struct Box<T> { value: T }"
@@ -1456,6 +1577,21 @@ static void test_runtime_field_access_preserves_runtime_tag() {
     assert(fa.base->ty.is_runtime);
 }
 
+static void test_runtime_field_decl_rejects_ct_required_use() {
+    must_fail_with_message(
+        "struct Box { value: runtime num }"
+        "fn reserve(value: !runtime num) -> num { value }"
+        "fn f(box: Box) -> num { reserve(box.value) }",
+        "argument `value` must be compile-time available");
+}
+
+static void test_runtime_field_decl_prevents_return_demotion() {
+    must_fail_with_message(
+        "struct Box { value: runtime num }"
+        "fn f() -> num { let box: Box = Box { value: 1 }; box.value }",
+        "runtime dependence not reflected in its return type: runtime field 'value'");
+}
+
 static void test_field_access_unknown_field_error() {
     must_fail(
         "struct Point { x: num }"
@@ -1553,6 +1689,7 @@ int main() {
     test_undefined_variable_error();
     test_arithmetic();
     test_arithmetic_type_error();
+    test_binary_unreachable_rhs_does_not_taint_plain_result();
     test_comparisons();
     test_equality();
     test_equality_type_mismatch_error();
@@ -1560,11 +1697,14 @@ int main() {
     test_runtime_argument_promotion();
     test_plain_call_accepts_runtime_argument_and_lifts_result();
     test_plain_call_lifted_result_still_prevents_return_demotion();
+    test_call_unreachable_arg_does_not_taint_plain_result();
+    test_plain_call_with_diverging_argument_becomes_never_in_if_branch();
     test_unused_runtime_let_taints_plain_result_function();
     test_runtime_expression_statement_taints_plain_result_function();
     test_runtime_block_statement_taints_plain_result_function();
     test_runtime_statement_marks_unit_block_not_ct_available();
     test_unreachable_runtime_statement_does_not_taint_block();
+    test_resolved_block_tail_can_clear_runtime_projection();
     test_plain_helper_rejects_hidden_runtime_work_for_ct_required_call();
     test_whole_term_runtime_work_accepts_runtime_result_contract();
     test_runtime_result_forwarded_param_does_not_count_as_hidden_work();
@@ -1600,11 +1740,17 @@ int main() {
     test_if_else_runtime_join_produces_runtime_type();
     test_if_else_rejects_distinct_nominal_types();
     test_if_else_runtime_join_prevents_demotion();
+    test_if_diverging_condition_skips_branch_availability();
+    test_expected_type_if_diverging_condition_skips_branch_availability();
     test_loop_is_unit();
     test_while();
     test_runtime_while_condition_accepted();
+    test_while_diverging_condition_skips_body_availability();
     test_for_loop();
     test_runtime_for_condition_accepted();
+    test_for_unreachable_step_does_not_taint_plain_result();
+    test_for_diverging_init_skips_later_runtime_segments();
+    test_for_diverging_condition_skips_body_and_step_availability();
     test_break_and_continue_are_never();
     test_return_is_never();
     test_runtime_return_payload_marks_body_not_ct_available();
@@ -1675,6 +1821,7 @@ int main() {
     test_let_annotation_resolves_deferred_call_in_block_tail();
     test_let_annotation_resolves_direct_deferred_call();
     test_return_type_resolves_deferred_call_through_if_branches();
+    test_deferred_generic_call_with_diverging_argument_becomes_never_in_if_branch();
     test_if_branch_join_keeps_runtime_on_deferred_generic_call();
     test_expected_type_resolves_nested_deferred_generic_argument();
     test_deferred_resolution_uses_specialized_parameter_type();
@@ -1684,6 +1831,7 @@ int main() {
     test_unknown_variant_error();
     test_struct_init();
     test_struct_init_lifts_runtime_field();
+    test_struct_init_unreachable_field_does_not_taint_plain_result();
     test_generic_struct_init();
     test_generic_struct_specialization_tracks_move_semantics();
     test_generic_struct_specialization_keeps_copy_semantics();
@@ -1695,6 +1843,8 @@ int main() {
     test_struct_init_missing_field_error();
     test_field_access();
     test_runtime_field_access_preserves_runtime_tag();
+    test_runtime_field_decl_rejects_ct_required_use();
+    test_runtime_field_decl_prevents_return_demotion();
     test_field_access_unknown_field_error();
     test_borrow_local_binding();
     test_borrow_runtime_field_binding();

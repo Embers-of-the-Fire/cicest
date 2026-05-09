@@ -53,22 +53,31 @@ compatibility:
 - call arguments are matched by their non-`runtime` structure
 - passing `runtime T` to a plain parameter `T` is allowed for calls only
 - the resulting `TyCall` / `TyDeferredGenericCall` type is lifted to
-  `runtime U` when the callee or any argument is runtime-qualified
+  `runtime U` when the callee or any argument is runtime-available
 - this does not introduce a general `runtime T -> T` conversion for lets,
   returns, or other non-call sites
 
-TyIR keeps the tag on `Ty` itself. Surface sugar such as `runtime fn` is
-normalized during lowering into a runtime-tagged return type, and TyIR also
-preserves the original declaration-level runtime marker on function items for
-later passes such as const-eval.
+TyIR stores expression and block availability in a canonical `Availability`
+summary. `AvailabilityKind::Ct` means the value is available to compile-time
+evaluation. `AvailabilityKind::Rt` means it depends on a runtime-qualified source,
+a runtime-result declaration, a runtime block, or a whole-term runtime
+contribution. Runtime-qualified display and lowering behavior are projections of
+that summary.
 
-TyIR also records body-internal runtime evidence separately from ordinary
-parameter availability. This evidence is joined across reachable lowered
+TyIR also records body-internal runtime evidence in `Availability::evidence` when
+a concrete origin exists. This evidence is joined across reachable lowered
 statements, control-flow headers, branch bodies, loop bodies, and the tail
 expression. If a function has an explicit plain result contract, that evidence
 must be reflected by `runtime fn` or a runtime-qualified return type; ordinary
 parameter dependence is still accepted because call-site lifting accounts for the
 actual arguments.
+
+Plain runtime-allowed parameters are represented inside a declaration body as
+compile-time-shaped values with symbolic parameter dependence. They do not make
+the body runtime-qualified by themselves, but they also cannot satisfy a
+CT-required position such as a `!runtime` parameter or `const` local annotation.
+At a call site, the argument availability instantiates that symbolic dependence
+and lifts the call result when an allowed argument is runtime-dependent.
 
 ## Generics and constraints
 
@@ -97,8 +106,8 @@ backend must be concrete and all constraints must already have passed.
 
 ## Expression nodes
 
-Every expression in TyIR carries a resolved `Ty`.  The concrete expression
-variants are:
+Every expression in TyIR carries a resolved `Ty` and a canonical `Availability`.
+The concrete expression variants are:
 
 ```
 TyLiteral        — num/str/bool/()/Unit literal
@@ -130,11 +139,8 @@ A `TyBlock` has type:
 - The tail expression's type when a tail is present.
 - `Unit` when there is no tail expression.
 
-Its `ct_available` flag is whole-term: it joins reachable statement
-contributions and the tail expression rather than considering only the yielded
-value. `runtime_evidence` stores the first reachable body-internal runtime
-contributor so diagnostics can point at the non-tail statement or control-flow
-component that tainted the block.
+Its `availability` is whole-term: it joins reachable statement contributions and
+the tail expression rather than considering only the yielded value.
 
 ## Runtime block type rules
 
@@ -173,6 +179,10 @@ fn distance(p: Point, q: Point) -> num {
     dx * dx + dy * dy
 }
 ```
+
+Expression and block lines include `[availability: const]` or
+`[availability: runtime]` in the default inspector output. The compact example
+below omits availability annotations to focus on tree shape and type annotations.
 
 ```
 TyProgram

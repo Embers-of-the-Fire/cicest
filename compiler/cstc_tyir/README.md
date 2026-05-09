@@ -22,6 +22,7 @@ which performs name resolution and type checking during the lowering pass.
 | Name resolution | Raw `PathExpr` symbols | `LocalRef`, `EnumVariantRef`, `fn_name` in `TyCall` |
 | Type checking | None | Verified during lowering |
 | Operator validity | Syntactic | Operand types validated |
+| Availability | Implicit in syntax | Canonical `Availability` summary on expressions and blocks |
 
 ## Key types
 
@@ -54,12 +55,30 @@ wrapper-shaped type such as `Runtime<T>`: it keeps the same underlying type
 shape as `T`, but its tag participates in exact type identity and in the
 directional promotion rule `T -> runtime T`.
 
+### `Availability` — compile-time/runtime summary
+
+```cpp
+enum class AvailabilityKind { Ct, Rt };
+
+struct Availability {
+    AvailabilityKind kind;
+    std::optional<TyRuntimeEvidence> evidence;
+};
+```
+
+Every expression and block carries this canonical availability summary directly.
+`Ct` means the value can be used during compile-time evaluation. `Rt` means the
+value depends on a runtime-qualified source, a runtime-result declaration, a
+runtime block, or a whole-term runtime contribution. `evidence` records the first
+concrete runtime origin when one is available for diagnostics.
+
 ### `TyExpr` — type-annotated expression
 
 Every expression node carries:
 - `node` — one of the concrete expression variants
 - `ty`   — the resolved `Ty`
 - `span` — source location
+- `availability` — canonical compile-time/runtime availability summary
 
 Concrete expression variants:
 
@@ -91,16 +110,13 @@ struct TyBlock {
     std::optional<TyExprPtr> tail;
     Ty ty;   // = tail->ty when tail exists; else Unit or Never (by fallthrough)
     SourceSpan span;
-    bool ct_available;
-    std::optional<TyRuntimeEvidence> runtime_evidence;
+    Availability availability;
 };
 ```
 
-`ct_available` is computed from the whole reachable block term, not just the tail
+`availability` is computed from the whole reachable block term, not just the tail
 value. Reachable statement initializers, expression statements, control-flow
-headers, loop bodies, and the tail all contribute. `runtime_evidence` records the
-first reachable body-internal runtime contributor that must be exposed by an
-explicit runtime result contract.
+headers, loop bodies, and the tail all contribute.
 
 ### Item declarations
 
@@ -134,11 +150,11 @@ TyProgram
     x: num
     y: num
   TyFnDecl add(x: num, y: num) -> num
-    TyBlock: num
+    TyBlock: num [availability: const]
       Tail
-        TyBinary(+): num
-          TyLocal(x): num
-          TyLocal(y): num
+        TyBinary(+): num [availability: const]
+          TyLocal(x): num [availability: const]
+          TyLocal(y): num [availability: const]
 ```
 
 ## Dependencies

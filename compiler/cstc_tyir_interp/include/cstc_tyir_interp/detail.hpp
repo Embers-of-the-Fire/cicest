@@ -77,6 +77,7 @@ struct EvalContext {
     std::size_t remaining_call_depth = kDefaultEvalCallDepth;
     std::unordered_set<Symbol, SymbolHash> generic_params;
     std::shared_ptr<struct ConstraintEvalState> constraint_state;
+    bool enforce_runtime_barriers = true;
 };
 
 struct ConstraintEvalState {

@@ -318,10 +318,11 @@ static void test_fn_with_params_and_return() {
     assert(fn.params[1].name == Symbol::intern("y"));
     assert(fn.params[1].ty == ty::num());
 
-    // Body should have a tail of type num
+    // Body remains compile-time-shaped while retaining symbolic parameter dependence.
     assert(fn.body->ty == ty::num());
     assert(fn.body->tail.has_value());
     assert((*fn.body->tail)->ty == ty::num());
+    assert(fn.body->availability.depends_on_runtime_allowed_param);
 }
 
 static void test_fn_bool_return() {
@@ -362,6 +363,31 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
     assert(!fn.params[0].ty.is_runtime);
     assert(fn.return_ty.is_runtime);
     assert(fn.body->ty.is_runtime);
+}
+
+static void test_runtime_allowed_param_marks_symbolic_body_dependence() {
+    const auto prog = must_lower("fn echo(value: num) -> runtime num { value }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.body->ty == ty::num());
+    assert(fn.body->availability.kind == AvailabilityKind::Ct);
+    assert(fn.body->availability.depends_on_runtime_allowed_param);
+    assert(!fn.body->availability.evidence.has_value());
+    assert(fn.body->tail.has_value());
+    assert((*fn.body->tail)->availability.kind == AvailabilityKind::Ct);
+    assert((*fn.body->tail)->availability.depends_on_runtime_allowed_param);
+    assert(!(*fn.body->tail)->availability.evidence.has_value());
+}
+
+static void test_runtime_typed_param_records_runtime_parameter_evidence() {
+    const auto prog = must_lower("struct Job; fn echo(job: runtime Job) -> runtime Job { job }");
+    assert(prog.items.size() == 2);
+    const auto& fn = std::get<TyFnDecl>(prog.items[1]);
+    assert(fn.body->availability.kind == AvailabilityKind::Rt);
+    assert(fn.body->availability.evidence.has_value());
+    assert(fn.body->availability.evidence->reason == "runtime parameter");
+    assert(fn.body->tail.has_value());
+    assert((*fn.body->tail)->availability.evidence.has_value());
+    assert((*fn.body->tail)->availability.evidence->reason == "runtime parameter");
 }
 
 static void test_ct_required_param_requirement_is_preserved() {
@@ -423,6 +449,21 @@ static void test_ct_required_param_rejects_forwarded_runtime_allowed_local() {
         "fn reserve(count: !runtime num) -> num { count }"
         "fn wrap(count: num) -> num { let forwarded = count; reserve(forwarded) }",
         "argument `count` must be compile-time available");
+}
+
+static void test_ct_required_param_forwards_ct_required_runtime_projection() {
+    const auto prog = must_lower(
+        "struct Box<T> { value: T }"
+        "fn inner(box: !runtime Box<runtime num>) -> num { box.value }"
+        "fn outer(box: !runtime Box<runtime num>) -> num { inner(box) }");
+    const auto& outer = std::get<TyFnDecl>(prog.items[2]);
+    const auto& call = std::get<TyCall>((*outer.body->tail)->node);
+    assert(call.args.size() == 1);
+    assert(call.args[0]->availability.kind == AvailabilityKind::Ct);
+    assert(
+        call.args[0]->ty
+        == ty::named(
+            Symbol::intern("Box"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()}));
 }
 
 static void test_ct_required_let_annotation_rejects_runtime_allowed_param() {
@@ -814,7 +855,7 @@ static void test_runtime_return_annotation_accepts_plain_value() {
 static void test_runtime_return_type_mismatch_rejected() {
     must_fail_with_message(
         "struct Job; fn unwrap(job: runtime Job) -> Job { job }",
-        "body type mismatch: expected 'Job', found 'runtime Job'");
+        "body has runtime dependence not reflected in its return type");
 }
 
 static void test_runtime_main_return_allowed() {
@@ -980,6 +1021,8 @@ int main() {
     test_fn_ref_return_rejected();
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
+    test_runtime_allowed_param_marks_symbolic_body_dependence();
+    test_runtime_typed_param_records_runtime_parameter_evidence();
     test_ct_required_param_requirement_is_preserved();
     test_ct_required_param_rejects_runtime_argument();
     test_ct_required_param_rejects_runtime_block_argument();
@@ -987,6 +1030,7 @@ int main() {
     test_ct_required_param_rejects_forwarded_runtime_allowed_param();
     test_ct_required_param_rejects_invalid_name_with_argument_number();
     test_ct_required_param_rejects_forwarded_runtime_allowed_local();
+    test_ct_required_param_forwards_ct_required_runtime_projection();
     test_ct_required_let_annotation_rejects_runtime_allowed_param();
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();
