@@ -573,7 +573,7 @@ struct Availability {
     case AvailabilityExprKind::Param:
         if (expr.param_index < args.size())
             return args[expr.param_index];
-        return availability_ct();
+        return availability_rt();
     case AvailabilityExprKind::Join:
         return availability_join(
             expr.lhs != nullptr ? availability_expr_substitute(*expr.lhs, args) : availability_ct(),

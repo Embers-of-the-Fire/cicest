@@ -147,6 +147,9 @@ static void test_symbolic_availability_exprs() {
     assert(substituted.kind == AvailabilityKind::Rt);
     assert(substituted.depends_on_runtime_allowed_param);
 
+    const Availability missing_arg = availability_expr_substitute(param1, {availability_ct()});
+    assert(missing_arg.kind == AvailabilityKind::Rt);
+
     const AvailabilityExpr forced = availability_expr_join(joined, availability_expr_rt());
     assert(availability_expr_forces_rt(forced));
     assert(availability_expr_display(forced) == "RT");
