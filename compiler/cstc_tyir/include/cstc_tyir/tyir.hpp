@@ -496,9 +496,12 @@ struct Availability {
 
 [[nodiscard]] inline AvailabilityExpr
     availability_expr_from_availability(const Availability& availability) {
+    AvailabilityExpr expr = availability_expr_ct();
     if (availability.kind == AvailabilityKind::Rt)
-        return availability_expr_rt();
-    return availability_expr_ct();
+        expr = availability_expr_rt();
+    for (const std::size_t index : availability.runtime_allowed_param_indices)
+        expr = availability_expr_join(expr, availability_expr_param(index));
+    return expr;
 }
 
 /// Compile-time-available summary.
