@@ -195,6 +195,9 @@ static TyFnDecl make_generic_identity_fn(Symbol fn_name, Symbol generic_name, Sy
         .is_runtime = false,
         .where_clause = {},
         .lowered_where_clause = {},
+        .param_availability = {},
+        .result_availability = {},
+        .internal_runtime_evidence = std::nullopt,
     };
 }
 
@@ -305,6 +308,9 @@ static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
             .is_runtime = false,
             .where_clause = {},
             .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
         });
 
     const auto folded = cstc::tyir_interp::fold_program(program);
@@ -349,6 +355,9 @@ static void test_rt_available_call_with_foldable_argument_remains_in_tyir() {
             .is_runtime = false,
             .where_clause = {},
             .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
         });
 
     const auto folded = cstc::tyir_interp::fold_program(program);
@@ -476,6 +485,9 @@ static void test_runtime_block_with_null_body_is_preserved() {
             .is_runtime = false,
             .where_clause = {},
             .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
         });
 
     const auto folded = cstc::tyir_interp::fold_program(program);
@@ -3085,6 +3097,9 @@ static void test_decl_generic_runtime_result_call_fails_after_substitution() {
             .return_ty = constraint_ty,
             .span = {},
             .is_runtime = false,
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
         });
     program.items.push_back(make_generic_identity_fn(id_name, generic_name, value_name));
 
@@ -3112,6 +3127,9 @@ static void test_decl_generic_runtime_result_call_fails_after_substitution() {
             .is_runtime = false,
             .where_clause = {},
             .lowered_where_clause = {TyGenericConstraint{constraint_expr, {}}},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
         });
 
     TyBlock main_body;
@@ -3128,6 +3146,9 @@ static void test_decl_generic_runtime_result_call_fails_after_substitution() {
             .is_runtime = false,
             .where_clause = {},
             .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
         });
 
     const auto folded = cstc::tyir_interp::fold_program(program);

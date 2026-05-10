@@ -1,0 +1,8 @@
+# source: test/e2e/pass/runtime/plain_call_lifting.cst
+# out-type: tyir
+# rule: symbolic_function_availability_signatures
+TyFnDecl source() -> runtime num [availability-signature: params=[], result=RT, internal-rt=runtime-result declaration]
+TyFnDecl increment(value: num) -> num [availability-signature: params=[param0], result=param0]
+TyFnDecl add(a: num, b: num) -> num [availability-signature: params=[param0, param1], result=(param0 | param1)]
+TyCall(add): runtime num [availability: runtime]
+TyCall(increment): runtime num [availability: runtime]

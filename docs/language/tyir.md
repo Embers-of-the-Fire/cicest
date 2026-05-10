@@ -79,6 +79,13 @@ CT-required position such as a `!runtime` parameter or `const` local annotation.
 At a call site, the argument availability instantiates that symbolic dependence
 and lifts the call result when an allowed argument is runtime-dependent.
 
+Function and extern declarations expose this contract in TyIR output as an
+`availability-signature`. Runtime-allowed parameters are printed as `paramN`,
+CT-required parameters as `CT`, runtime-result declarations as `RT`, and ordinary
+result dependencies as joins such as `(param0 | param1)`. This is intentionally a
+compiler-internal signature summary; there is no source syntax for user-defined
+availability parameters yet.
+
 ## Generics and constraints
 
 TyIR is the last IR that may still contain generic declarations.

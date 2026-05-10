@@ -88,6 +88,22 @@ inline void indent(std::ostringstream& out, std::size_t level) {
     return param.ty.display();
 }
 
+[[nodiscard]] inline std::string fn_availability_signature(
+    const std::vector<AvailabilityExpr>& params, const AvailabilityExpr& result,
+    const std::optional<TyRuntimeEvidence>& internal_runtime_evidence) {
+    std::string rendered = " [availability-signature: params=[";
+    for (std::size_t i = 0; i < params.size(); ++i) {
+        if (i > 0)
+            rendered += ", ";
+        rendered += availability_expr_display(params[i]);
+    }
+    rendered += "], result=" + availability_expr_display(result);
+    if (internal_runtime_evidence.has_value())
+        rendered += ", internal-rt=" + internal_runtime_evidence->reason;
+    rendered += "]";
+    return rendered;
+}
+
 [[nodiscard]] inline std::string_view binary_name(cstc::ast::BinaryOp op) {
     switch (op) {
     case cstc::ast::BinaryOp::Add: return "+";
@@ -385,7 +401,11 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                         out << ", ";
                     out << node.params[i].name.as_str() << ": " << param_type_name(node.params[i]);
                 }
-                out << ") -> " << node.return_ty.display() << "\n";
+                out << ") -> " << node.return_ty.display()
+                    << fn_availability_signature(
+                           node.param_availability, node.result_availability,
+                           node.internal_runtime_evidence)
+                    << "\n";
                 cstc::ast::detail::print_where_clause(out, node.where_clause, level + 1);
                 print_ty_block(out, node.body, level + 1);
             } else if constexpr (std::is_same_v<T, TyExternFnDecl>) {
@@ -397,7 +417,11 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                         out << ", ";
                     out << node.params[i].name.as_str() << ": " << param_type_name(node.params[i]);
                 }
-                out << ") -> " << node.return_ty.display() << "\n";
+                out << ") -> " << node.return_ty.display()
+                    << fn_availability_signature(
+                           node.param_availability, node.result_availability,
+                           node.internal_runtime_evidence)
+                    << "\n";
             } else if constexpr (std::is_same_v<T, TyExternStructDecl>) {
                 indent(out, level);
                 out << "TyExternStructDecl \"" << node.abi.as_str() << "\" " << node.name.as_str()

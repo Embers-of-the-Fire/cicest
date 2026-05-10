@@ -122,10 +122,54 @@ static void test_runtime_allowed_param_availability_is_symbolic_ct() {
     assert(!is_ct_required_available(param));
     assert(param.depends_on_runtime_allowed_param);
 
-    const Availability joined = availability_join(availability_ct(), param);
+    const Availability indexed_param = availability_runtime_allowed_param(1);
+    assert(indexed_param.runtime_allowed_param_indices.size() == 1);
+    assert(indexed_param.runtime_allowed_param_indices.contains(1));
+
+    const Availability joined = availability_join(availability_ct(), indexed_param);
     assert(is_ct_available(joined));
     assert(!is_ct_required_available(joined));
     assert(joined.depends_on_runtime_allowed_param);
+    assert(joined.runtime_allowed_param_indices.size() == 1);
+    assert(joined.runtime_allowed_param_indices.contains(1));
+}
+
+static void test_symbolic_availability_exprs() {
+    const AvailabilityExpr param0 = availability_expr_param(0);
+    const AvailabilityExpr param1 = availability_expr_param(1);
+    const AvailabilityExpr joined = availability_expr_join(param0, param1);
+    assert(!availability_expr_always_ct(joined));
+    assert(!availability_expr_forces_rt(joined));
+    assert(availability_expr_display(joined) == "(param0 | param1)");
+
+    const Availability substituted = availability_expr_substitute(
+        joined, {availability_runtime_allowed_param(), availability_rt()});
+    assert(substituted.kind == AvailabilityKind::Rt);
+    assert(substituted.depends_on_runtime_allowed_param);
+
+    const Availability missing_arg = availability_expr_substitute(param1, {availability_ct()});
+    assert(missing_arg.kind == AvailabilityKind::Rt);
+
+    const AvailabilityExpr forced = availability_expr_join(joined, availability_expr_rt());
+    assert(availability_expr_forces_rt(forced));
+    assert(availability_expr_display(forced) == "RT");
+}
+
+static void test_availability_expr_from_availability_preserves_param_provenance() {
+    const Availability indexed_param = availability_runtime_allowed_param(1);
+    const AvailabilityExpr param_expr = availability_expr_from_availability(indexed_param);
+    assert(param_expr.kind == AvailabilityExprKind::Param);
+    assert(param_expr.param_index == 1);
+    assert(availability_expr_display(param_expr) == "param1");
+
+    const Availability two_params = availability_join(
+        availability_runtime_allowed_param(0), availability_runtime_allowed_param(2));
+    const AvailabilityExpr joined_expr = availability_expr_from_availability(two_params);
+    assert(availability_expr_display(joined_expr) == "(param0 | param2)");
+
+    const AvailabilityExpr runtime_joined_expr =
+        availability_expr_from_availability(availability_join(availability_rt(), indexed_param));
+    assert(availability_expr_display(runtime_joined_expr) == "RT");
 }
 
 static void test_availability_projection() {
@@ -261,6 +305,8 @@ int main() {
     test_availability_from_type_detects_nested_runtime_tags();
     test_availability_join_preserves_first_evidence();
     test_runtime_allowed_param_availability_is_symbolic_ct();
+    test_symbolic_availability_exprs();
+    test_availability_expr_from_availability_preserves_param_provenance();
     test_availability_projection();
     test_set_availability_projects_type();
     test_named_shape_distinguishes_nominal_types();
