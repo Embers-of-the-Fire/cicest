@@ -870,6 +870,7 @@ static void test_runtime_return_annotation_accepts_plain_value() {
     const auto& fn = std::get<TyFnDecl>(prog.items[0]);
     assert(fn.return_ty == ty::num(true));
     assert(fn.body->ty == ty::num());
+    assert(fn.result_availability.kind == AvailabilityExprKind::Rt);
 }
 
 static void test_runtime_return_type_mismatch_rejected() {
