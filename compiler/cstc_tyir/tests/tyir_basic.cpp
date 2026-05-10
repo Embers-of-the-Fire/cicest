@@ -122,10 +122,16 @@ static void test_runtime_allowed_param_availability_is_symbolic_ct() {
     assert(!is_ct_required_available(param));
     assert(param.depends_on_runtime_allowed_param);
 
-    const Availability joined = availability_join(availability_ct(), param);
+    const Availability indexed_param = availability_runtime_allowed_param(1);
+    assert(indexed_param.runtime_allowed_param_indices.size() == 1);
+    assert(indexed_param.runtime_allowed_param_indices.contains(1));
+
+    const Availability joined = availability_join(availability_ct(), indexed_param);
     assert(is_ct_available(joined));
     assert(!is_ct_required_available(joined));
     assert(joined.depends_on_runtime_allowed_param);
+    assert(joined.runtime_allowed_param_indices.size() == 1);
+    assert(joined.runtime_allowed_param_indices.contains(1));
 }
 
 static void test_symbolic_availability_exprs() {

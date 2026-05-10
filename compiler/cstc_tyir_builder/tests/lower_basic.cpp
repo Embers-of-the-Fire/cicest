@@ -378,6 +378,26 @@ static void test_runtime_allowed_param_marks_symbolic_body_dependence() {
     assert(!(*fn.body->tail)->availability.evidence.has_value());
 }
 
+static void test_runtime_allowed_body_signature_tracks_used_param_only() {
+    const auto prog = must_lower("fn first(a: num, b: num) -> num { a }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+
+    assert(fn.result_availability.kind == AvailabilityExprKind::Param);
+    assert(fn.result_availability.param_index == 0);
+    assert(fn.body->availability.runtime_allowed_param_indices.size() == 1);
+    assert(fn.body->availability.runtime_allowed_param_indices.contains(0));
+}
+
+static void test_runtime_allowed_body_signature_tracks_joined_params() {
+    const auto prog = must_lower("fn add(a: num, b: num) -> num { a + b }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+
+    assert(availability_expr_display(fn.result_availability) == "(param0 | param1)");
+    assert(fn.body->availability.runtime_allowed_param_indices.size() == 2);
+    assert(fn.body->availability.runtime_allowed_param_indices.contains(0));
+    assert(fn.body->availability.runtime_allowed_param_indices.contains(1));
+}
+
 static void test_runtime_typed_param_records_runtime_parameter_evidence() {
     const auto prog = must_lower("struct Job; fn echo(job: runtime Job) -> runtime Job { job }");
     assert(prog.items.size() == 2);
@@ -1022,6 +1042,8 @@ int main() {
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
     test_runtime_allowed_param_marks_symbolic_body_dependence();
+    test_runtime_allowed_body_signature_tracks_used_param_only();
+    test_runtime_allowed_body_signature_tracks_joined_params();
     test_runtime_typed_param_records_runtime_parameter_evidence();
     test_ct_required_param_requirement_is_preserved();
     test_ct_required_param_rejects_runtime_argument();

@@ -27,6 +27,7 @@
 
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 #include <variant>
@@ -488,6 +489,9 @@ struct Availability {
     /// True when a CT-looking expression may depend on a runtime-allowed
     /// declaration parameter under a non-CT call-site instantiation.
     bool depends_on_runtime_allowed_param = false;
+    /// Specific runtime-allowed declaration parameters contributing to this
+    /// summary. Empty preserves the legacy unknown-parameter case.
+    std::set<std::size_t> runtime_allowed_param_indices;
 };
 
 [[nodiscard]] inline AvailabilityExpr
@@ -503,12 +507,17 @@ struct Availability {
 /// Runtime-dependent summary, optionally carrying first-origin evidence.
 [[nodiscard]] inline Availability
     availability_rt(std::optional<TyRuntimeEvidence> evidence = std::nullopt) {
-    return Availability{AvailabilityKind::Rt, std::move(evidence), false};
+    return Availability{AvailabilityKind::Rt, std::move(evidence), false, {}};
 }
 
 /// Symbolic availability for an ordinary plain parameter inside a declaration.
 [[nodiscard]] inline Availability availability_runtime_allowed_param() {
-    return Availability{AvailabilityKind::Ct, std::nullopt, true};
+    return Availability{AvailabilityKind::Ct, std::nullopt, true, {}};
+}
+
+/// Symbolic availability for a specific ordinary plain declaration parameter.
+[[nodiscard]] inline Availability availability_runtime_allowed_param(std::size_t index) {
+    return Availability{AvailabilityKind::Ct, std::nullopt, true, {index}};
 }
 
 /// Joins two availability summaries; runtime wins and the first concrete
@@ -516,25 +525,41 @@ struct Availability {
 [[nodiscard]] inline Availability
     availability_join(const Availability& lhs, const Availability& rhs) {
     if (lhs.kind == AvailabilityKind::Ct && rhs.kind == AvailabilityKind::Ct) {
-        return Availability{
-            AvailabilityKind::Ct, std::nullopt,
-            lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param};
+        Availability joined{
+            AvailabilityKind::Ct,
+            std::nullopt,
+            lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param,
+            {}};
+        joined.runtime_allowed_param_indices = lhs.runtime_allowed_param_indices;
+        joined.runtime_allowed_param_indices.insert(
+            rhs.runtime_allowed_param_indices.begin(), rhs.runtime_allowed_param_indices.end());
+        return joined;
     }
     if (lhs.kind == AvailabilityKind::Ct) {
         Availability joined = rhs;
         joined.depends_on_runtime_allowed_param =
             lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param;
+        joined.runtime_allowed_param_indices.insert(
+            lhs.runtime_allowed_param_indices.begin(), lhs.runtime_allowed_param_indices.end());
         return joined;
     }
     if (rhs.kind == AvailabilityKind::Ct) {
         Availability joined = lhs;
         joined.depends_on_runtime_allowed_param =
             lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param;
+        joined.runtime_allowed_param_indices.insert(
+            rhs.runtime_allowed_param_indices.begin(), rhs.runtime_allowed_param_indices.end());
         return joined;
     }
-    return Availability{
-        AvailabilityKind::Rt, lhs.evidence.has_value() ? lhs.evidence : rhs.evidence,
-        lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param};
+    Availability joined{
+        AvailabilityKind::Rt,
+        lhs.evidence.has_value() ? lhs.evidence : rhs.evidence,
+        lhs.depends_on_runtime_allowed_param || rhs.depends_on_runtime_allowed_param,
+        {}};
+    joined.runtime_allowed_param_indices = lhs.runtime_allowed_param_indices;
+    joined.runtime_allowed_param_indices.insert(
+        rhs.runtime_allowed_param_indices.begin(), rhs.runtime_allowed_param_indices.end());
+    return joined;
 }
 
 [[nodiscard]] inline Availability availability_expr_substitute(

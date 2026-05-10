@@ -1410,12 +1410,12 @@ struct LoweredExpr {
 }
 
 [[nodiscard]] static tyir::Availability
-    parameter_declaration_availability(const tyir::TyParam& param) {
+    parameter_declaration_availability(const tyir::TyParam& param, std::size_t index) {
     if (param.requires_ct())
         return tyir::availability_ct();
     if (type_has_runtime_dependency(param.ty))
         return runtime_availability_at(param.span, "runtime parameter");
-    return tyir::availability_runtime_allowed_param();
+    return tyir::availability_runtime_allowed_param(index);
 }
 
 [[nodiscard]] static tyir::AvailabilityExpr parameter_signature_availability(
@@ -1434,6 +1434,12 @@ struct LoweredExpr {
                                     : tyir::availability_expr_ct();
     if (!body_availability.depends_on_runtime_allowed_param)
         return expr;
+
+    if (!body_availability.runtime_allowed_param_indices.empty()) {
+        for (const std::size_t index : body_availability.runtime_allowed_param_indices)
+            expr = tyir::availability_expr_join(expr, tyir::availability_expr_param(index));
+        return expr;
+    }
 
     for (std::size_t index = 0; index < params.size(); ++index) {
         if (!params[index].requires_ct() && !type_has_runtime_dependency(params[index].ty))
@@ -2159,8 +2165,10 @@ struct ParamReferenceVisitor {
             }
         }
 
-        for (const tyir::TyParam& param : *params) {
-            const tyir::Availability param_availability = parameter_declaration_availability(param);
+        for (std::size_t index = 0; index < params->size(); ++index) {
+            const tyir::TyParam& param = (*params)[index];
+            const tyir::Availability param_availability =
+                parameter_declaration_availability(param, index);
             if (!ctx.scope.insert(param.name, param.ty, std::nullopt, param_availability)) {
                 ctx.scope.pop();
                 return make_error(
@@ -3872,8 +3880,9 @@ static std::expected<void, LowerError> merge_loop_break_types(
         env, {}, make_generic_param_set(fn.generic_params), false, sig.return_ty, {},
     };
     ctx.scope.push();
-    for (const tyir::TyParam& p : ty_params) {
-        const tyir::Availability param_availability = parameter_declaration_availability(p);
+    for (std::size_t index = 0; index < ty_params.size(); ++index) {
+        const tyir::TyParam& p = ty_params[index];
+        const tyir::Availability param_availability = parameter_declaration_availability(p, index);
         if (!ctx.scope.insert(p.name, p.ty, std::nullopt, param_availability))
             return make_error(p.span, "duplicate parameter '" + std::string(p.name.as_str()) + "'");
     }
