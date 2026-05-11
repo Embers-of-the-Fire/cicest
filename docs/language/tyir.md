@@ -72,6 +72,11 @@ must be reflected by `runtime fn` or a runtime-qualified return type; ordinary
 parameter dependence is still accepted because call-site lifting accounts for the
 actual arguments.
 
+For a source `runtime fn`, the declaration-level runtime bit represents the
+surface sugar for a runtime-qualified return type plus an implicit whole-body
+runtime boundary. TyIR may preserve that bit directly instead of printing a
+synthetic `TyRuntimeBlock` around the body.
+
 Plain runtime-allowed parameters are represented inside a declaration body as
 compile-time-shaped values with symbolic parameter dependence. They do not make
 the body runtime-qualified by themselves, but they also cannot satisfy a

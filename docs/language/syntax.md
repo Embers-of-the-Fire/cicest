@@ -19,8 +19,8 @@ Supported top-level items:
 - `import` declarations.
 - `struct` declarations.
 - `enum` declarations (scoped variants, similar in spirit to C++ `enum class`).
-- `fn` declarations, including `runtime fn`, which sugar-coats a runtime-qualified
-  return type.
+- `fn` declarations, including `runtime fn`, which sugar-coats a
+  runtime-qualified return type and a runtime block around the body.
 - Generic parameter declarations on `fn`, `struct`, and `enum` items.
 - Declaration-level `where` clauses with const-evaluable constraint expressions.
 - `extern` declarations (external function and opaque struct declarations),
@@ -159,10 +159,14 @@ Notes:
 - Enums are fieldless (C++ enum-class-like), i.e., no payload variants.
 - `extern` declarations use a string literal for the ABI (e.g., `"lang"`, `"c"`).
 - `extern` functions have no body; `extern` structs are opaque (no fields).
-- `runtime fn` and `runtime extern ... fn` are syntax sugar for wrapping the
-  return type in `runtime`. For example, `runtime fn f() -> num` is equivalent
-  to `fn f() -> runtime num`, and TyIR also preserves the declaration-level
-  runtime bit for const-eval.
+- `runtime fn` is syntax sugar for wrapping the return type in `runtime` and
+  wrapping the body in a runtime block. For example,
+  `runtime fn f() -> num { 1 }` is equivalent to
+  `fn f() -> runtime num { runtime { 1 } }`. TyIR also preserves the
+  declaration-level runtime bit for const-eval rather than necessarily printing a
+  synthetic whole-body `runtime` block.
+- `runtime extern ... fn` has no source body, so it only wraps the extern return
+  type in `runtime` and marks the binding as runtime-qualified.
 - `pub` marks a top-level item or import as exportable from its module.
 - `import *` is intentionally unavailable in source code. The compiler uses an
   internal equivalent only for the std prelude.
