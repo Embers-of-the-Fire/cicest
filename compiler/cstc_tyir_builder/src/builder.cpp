@@ -3940,8 +3940,8 @@ static std::expected<void, LowerError> merge_loop_break_types(
         updated_sig.result_availability =
             tyir::availability_expr_join(updated_sig.result_availability, body_result_availability);
     updated_sig.internal_runtime_evidence = body->availability.evidence.has_value()
-                                               ? body->availability.evidence
-                                               : sig.internal_runtime_evidence;
+                                              ? body->availability.evidence
+                                              : sig.internal_runtime_evidence;
 
     auto body_ptr = std::make_shared<tyir::TyBlock>(std::move(*body));
     auto lowered_constraints =
