@@ -4,5 +4,7 @@
 TyFnDecl source() -> runtime num [availability-signature: params=[], result=RT, internal-rt=runtime-result declaration]
 TyFnDecl increment(value: num) -> num [availability-signature: params=[param0], result=param0]
 TyFnDecl add(a: num, b: num) -> num [availability-signature: params=[param0, param1], result=(param0 | param1)]
+TyFnDecl first(a: num, b: num) -> num [availability-signature: params=[param0, param1], result=(param0 | param1)]
 TyCall(add): runtime num [availability: runtime]
 TyCall(increment): runtime num [availability: runtime]
+TyCall(first): runtime num [availability: runtime]
