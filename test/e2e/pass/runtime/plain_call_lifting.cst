@@ -6,12 +6,18 @@ fn add(a: num, b: num) -> num {
     a + b
 }
 
+fn first(a: num, b: num) -> num {
+    a
+}
+
 fn main() {
     let x: num = add(1, 2);
     let y: runtime num = add(runtime { 1 }, runtime { 2 });
     let lifted: runtime num = increment(source());
+    let ignored_lifted: runtime num = first(1, source());
 
     assert_eq(x, 3);
     let _ = y;
     let _ = lifted;
+    let _ = ignored_lifted;
 }

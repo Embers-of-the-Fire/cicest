@@ -248,6 +248,28 @@ static void test_plain_call_accepts_runtime_argument_and_lifts_result() {
     assert(call.args[0]->ty == ty::num(true));
 }
 
+static void test_ignored_runtime_argument_lifts_direct_call_result() {
+    const auto prog = must_lower(
+        "runtime fn source() -> num { 1 }"
+        "fn first(a: num, b: num) -> num { a }"
+        "fn main() { let value: runtime num = first(1, source()); }");
+    const auto& stmt = std::get<TyLetStmt>(nth_fn(prog, 2).body->stmts[0]);
+    assert(stmt.ty == ty::num(true));
+    assert(stmt.init->ty == ty::num(true));
+    const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(call.args.size() == 2);
+    assert(call.args[0]->ty == ty::num());
+    assert(call.args[1]->ty == ty::num(true));
+}
+
+static void test_ignored_runtime_argument_prevents_direct_call_result_demotion() {
+    must_fail_with_message(
+        "runtime fn source() -> num { 1 }"
+        "fn first(a: num, b: num) -> num { a }"
+        "fn main() -> num { first(1, source()) }",
+        "runtime dependence not reflected in its return type");
+}
+
 static void test_plain_call_lifted_result_still_prevents_return_demotion() {
     must_fail_with_message(
         "runtime fn source() -> num { 1 }"
@@ -416,6 +438,30 @@ static void test_plain_generic_call_accepts_runtime_argument_and_lifts_result() 
     assert(call.generic_args.size() == 1);
     assert(call.generic_args[0] == ty::num());
     assert(call.args[0]->ty == ty::num(true));
+}
+
+static void test_ignored_runtime_argument_lifts_generic_call_result() {
+    const auto prog = must_lower(
+        "runtime fn source() -> num { 1 }"
+        "fn first<T>(a: T, b: T) -> T { a }"
+        "fn main() { let value: runtime num = first(1, source()); }");
+    const auto& stmt = std::get<TyLetStmt>(nth_fn(prog, 2).body->stmts[0]);
+    assert(stmt.ty == ty::num(true));
+    assert(stmt.init->ty == ty::num(true));
+    const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+    assert(call.args.size() == 2);
+    assert(call.args[0]->ty == ty::num());
+    assert(call.args[1]->ty == ty::num(true));
+}
+
+static void test_ignored_runtime_argument_prevents_generic_call_result_demotion() {
+    must_fail_with_message(
+        "runtime fn source() -> num { 1 }"
+        "fn first<T>(a: T, b: T) -> T { a }"
+        "fn main() -> num { first(1, source()) }",
+        "runtime dependence not reflected in its return type");
 }
 
 static void test_runtime_result_forwarded_param_does_not_count_as_hidden_work() {
@@ -1696,6 +1742,8 @@ int main() {
     test_logical();
     test_runtime_argument_promotion();
     test_plain_call_accepts_runtime_argument_and_lifts_result();
+    test_ignored_runtime_argument_lifts_direct_call_result();
+    test_ignored_runtime_argument_prevents_direct_call_result_demotion();
     test_plain_call_lifted_result_still_prevents_return_demotion();
     test_call_unreachable_arg_does_not_taint_plain_result();
     test_plain_call_with_diverging_argument_becomes_never_in_if_branch();
@@ -1712,6 +1760,8 @@ int main() {
     test_ordinarily_polymorphic_helper_still_accepts_runtime_arguments();
     test_plain_call_lifts_runtime_arguments();
     test_plain_generic_call_accepts_runtime_argument_and_lifts_result();
+    test_ignored_runtime_argument_lifts_generic_call_result();
+    test_ignored_runtime_argument_prevents_generic_call_result_demotion();
     test_generic_runtime_result_forwarded_param_does_not_count_as_hidden_work();
     test_generic_call_lifts_runtime_arguments();
     test_plain_extern_call_accepts_runtime_argument_and_lifts_result();
