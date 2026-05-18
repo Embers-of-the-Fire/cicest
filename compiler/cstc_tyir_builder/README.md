@@ -86,8 +86,10 @@ Lowering publishes the same contract in `TyFnDecl` / `TyExternFnDecl` as symboli
 availability signatures. Runtime-allowed parameters become `paramN`, CT-required
 parameters become `CT`, runtime-qualified parameters and runtime-result
 declarations become `RT`, and result summaries use simple joins. The current
-implementation intentionally keeps joins minimally simplified for stable TyIR
-output and does not introduce source-visible availability parameters.
+implementation prints the conservative source contract rather than a precise
+body-use summary, so ignored runtime-allowed parameters still appear in the
+public result join. It intentionally keeps joins minimally simplified for stable
+TyIR output and does not introduce source-visible availability parameters.
 
 ### Main function constraints
 

@@ -85,11 +85,16 @@ At a call site, the argument availability instantiates that symbolic dependence
 and lifts the call result when an allowed argument is runtime-dependent.
 
 Function and extern declarations expose this contract in TyIR output as an
-`availability-signature`. Runtime-allowed parameters are printed as `paramN`,
-CT-required parameters as `CT`, runtime-result declarations as `RT`, and ordinary
-result dependencies as joins such as `(param0 | param1)`. This is intentionally a
-compiler-internal signature summary; there is no source syntax for user-defined
-availability parameters yet.
+`availability-signature`. The printed result is the conservative source-level
+call contract: after CT-required checks, every accepted actual argument may lift
+the call result. Runtime-allowed parameters are printed as `paramN`, CT-required
+parameters as `CT`, runtime-result declarations as `RT`, and ordinary result
+dependencies as joins such as `(param0 | param1)`. Thus `fn first(a: num, b: num)
+-> num { a }` still prints `result=(param0 | param1)`, and `first(1, source())`
+has a runtime-qualified call result even though the body ignores `b`. Body-use
+metadata may exist inside the builder for diagnostics or future optimization, but
+it is not the public `availability-signature` result. There is no source syntax
+for user-defined availability parameters yet.
 
 ## Generics and constraints
 

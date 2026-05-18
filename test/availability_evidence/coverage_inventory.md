@@ -8,6 +8,7 @@ tests that continue to run through the `e2e` CTest target.
 | Rule shape | Evidence | Notes |
 | --- | --- | --- |
 | Call-site lifting | `availability_evidence/tyir/availability_validation.patterns`; `test/e2e/pass/runtime/plain_call_lifting.cst`; `test/e2e/pass/runtime/plain_generic_call_lifting.cst` | Checks folded static calls and runtime-qualified residual calls. |
+| Ignored runtime arguments | `availability_evidence/tyir/symbolic_function_availability.patterns`; `test/e2e/pass/runtime/plain_call_lifting.cst` | Checks `first(a,b){a}` keeps `result=(param0 | param1)` and `first(1, source())` is runtime-qualified. |
 | CT-required acceptance | `availability_evidence/tyir/ct_required_parameters.patterns`; `availability_evidence/tyir/availability_window_config.patterns` | Checks `!runtime` parameter display and folded CT calls. |
 | CT-required rejection | `availability_evidence/diagnostics/ct_required_runtime_result.patterns`; `test/e2e/fail_compile/generics/ct_required_generic_runtime_argument.cst` | Checks parameter-specific diagnostics with expected/found availability shapes. |
 | CT-required surface scope | `availability_evidence/diagnostics/ct_required_return_unsupported.patterns`; `availability_evidence/diagnostics/ct_required_struct_field_unsupported.patterns` | Checks unsupported return and field CT requirements are rejected instead of erased. |

@@ -75,9 +75,11 @@ concrete runtime origin when one is available for diagnostics.
 Function declarations also carry a symbolic availability signature. The
 signature records parameter expressions such as `param0`, `CT`, or `RT`, a
 symbolic result expression such as `(param0 | param1)`, and optional internal
-runtime evidence. Calls instantiate the symbolic result expression with actual
-argument availability rather than deriving result runtime-ness solely from the
-argument types after the fact.
+runtime evidence. The public result expression is conservative over every
+accepted argument, not narrowed to the parameters used by the body. Calls
+instantiate that symbolic result expression with actual argument availability
+rather than deriving result runtime-ness solely from the argument types after the
+fact.
 
 ### `TyExpr` — type-annotated expression
 

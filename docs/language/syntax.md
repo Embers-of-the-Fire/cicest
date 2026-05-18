@@ -199,7 +199,9 @@ TypeArgList        = "<" , Type , { "," , Type } , [ "," ] , ">" ;
 > `T` may still receive a `runtime T` argument. That does not demote the
 > argument. Instead, the call result is lifted to `runtime U`, where `U` is the
 > declared return type, whenever the callee is runtime-qualified or any argument
-> is runtime-qualified.
+> is runtime-qualified. This rule is conservative over all accepted arguments: in
+> `fn first(a: num, b: num) -> num { a }`, the call `first(1, source())` has type
+> `runtime num` even though the function body ignores `b`.
 
 > **Note:** `decl(expr)` is not an ordinary function call. It is a dedicated
 > compiler-recognized form that always has type `Constraint`, even when the
