@@ -1,8 +1,8 @@
 # source: test/e2e/pass/runtime/ct_required_parameters.cst
 # out-type: tyir
 # rule: ct_required
-TyFnDecl reserve(count: !runtime num, extra: !runtime num) -> num [availability-signature: params=[CT, CT], result=CT]
-TyFnDecl static_id<T>(value: !runtime T) -> T [availability-signature: params=[CT], result=CT]
+TyFnDecl reserve(count: !runtime num, extra: !runtime num) -> num [runtime-authority: none] [availability-signature: params=[CT, CT], result=CT]
+TyFnDecl static_id<T>(value: !runtime T) -> T [runtime-authority: none] [availability-signature: params=[CT], result=CT]
 Let reserved: num =
 TyLiteral(22): num
 Let generic_reserved: num =
