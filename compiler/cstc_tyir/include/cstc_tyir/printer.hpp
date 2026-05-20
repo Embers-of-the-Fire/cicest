@@ -74,6 +74,19 @@ inline void indent(std::ostringstream& out, std::size_t level) {
     return " [availability: " + std::string(availability_name(availability.kind)) + "]";
 }
 
+[[nodiscard]] inline std::string_view runtime_authority_name(RuntimeAuthority authority) {
+    switch (authority) {
+    case RuntimeAuthority::None: return "none";
+    case RuntimeAuthority::SourceBoundary: return "source-boundary";
+    case RuntimeAuthority::TrustedExtern: return "trusted-extern";
+    }
+    return "?";
+}
+
+[[nodiscard]] inline std::string runtime_authority_suffix(RuntimeAuthority authority) {
+    return " [runtime-authority: " + std::string(runtime_authority_name(authority)) + "]";
+}
+
 [[nodiscard]] inline std::string expr_type_summary(const TyExprPtr& expr) {
     return expr->ty.display() + availability_suffix(expr->availability);
 }
@@ -402,6 +415,7 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                     out << node.params[i].name.as_str() << ": " << param_type_name(node.params[i]);
                 }
                 out << ") -> " << node.return_ty.display()
+                    << runtime_authority_suffix(node.runtime_authority)
                     << fn_availability_signature(
                            node.param_availability, node.result_availability,
                            node.internal_runtime_evidence)
@@ -418,6 +432,7 @@ inline void print_ty_item(std::ostringstream& out, const TyItem& item, std::size
                     out << node.params[i].name.as_str() << ": " << param_type_name(node.params[i]);
                 }
                 out << ") -> " << node.return_ty.display()
+                    << runtime_authority_suffix(node.runtime_authority)
                     << fn_availability_signature(
                            node.param_availability, node.result_availability,
                            node.internal_runtime_evidence)
