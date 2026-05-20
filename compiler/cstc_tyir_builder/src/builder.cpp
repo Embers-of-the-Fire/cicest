@@ -35,6 +35,7 @@ struct FnSignature {
     tyir::Ty return_ty;
     tyir::AvailabilityExpr result_availability;
     std::optional<tyir::TyRuntimeEvidence> internal_runtime_evidence;
+    tyir::RuntimeAuthority runtime_authority = tyir::RuntimeAuthority::None;
     cstc::span::SourceSpan span;
     std::vector<cstc::ast::GenericParam> generic_params;
     bool has_explicit_return_type = false;
@@ -953,8 +954,10 @@ struct LowerCtx {
         }
     }
     if (type_has_runtime_dependency(resolved_return_shape)) {
-        result = tyir::availability_join(
-            result, runtime_availability_at(call_span, "runtime-result call"));
+        const char* reason = "runtime-result call";
+        if (sig.runtime_authority == tyir::RuntimeAuthority::TrustedExtern)
+            reason = "trusted runtime extern";
+        result = tyir::availability_join(result, runtime_availability_at(call_span, reason));
     } else if (result.kind == tyir::AvailabilityKind::Rt && !result.evidence.has_value()) {
         result =
             tyir::availability_join(result, tyir::availability_rt(sig.internal_runtime_evidence));
@@ -1520,11 +1523,13 @@ static void recompute_block_summary(tyir::TyBlock& block);
 [[nodiscard]] static std::expected<FnSignature, LowerError> resolve_fn_signature(
     const std::vector<ast::Param>& params, const std::optional<ast::TypeRef>& return_type,
     cstc::span::SourceSpan span, const TypeEnv& env, bool is_runtime,
+    tyir::RuntimeAuthority runtime_authority,
     const std::vector<ast::GenericParam>& generic_params = {}) {
     FnSignature sig;
     sig.span = span;
     sig.generic_params = generic_params;
     sig.has_explicit_return_type = return_type.has_value();
+    sig.runtime_authority = runtime_authority;
     const GenericParamSet generic_param_set = make_generic_param_set(generic_params);
     if (return_type.has_value()) {
         auto t = lower_type(*return_type, env, span, generic_param_set);
@@ -3929,8 +3934,11 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                + sig.return_ty.display() + "'");
 
     if (fn.is_runtime) {
-        tyir::set_availability(
-            *body, tyir::availability_join(tyir::availability_rt(), body->availability));
+        const tyir::Availability boundary_availability =
+            runtime_availability_at(fn.span, "runtime function boundary");
+        const tyir::Availability body_availability =
+            tyir::availability_join(boundary_availability, body->availability);
+        tyir::set_availability(*body, body_availability);
     }
 
     FnSignature updated_sig = sig;
@@ -3957,6 +3965,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
     lowered_fn.body = std::move(body_ptr);
     lowered_fn.span = fn.span;
     lowered_fn.is_runtime = fn.is_runtime;
+    lowered_fn.runtime_authority = sig.runtime_authority;
     lowered_fn.where_clause = fn.where_clause;
     lowered_fn.lowered_where_clause = std::move(*lowered_constraints);
     lowered_fn.param_availability = updated_sig.param_availability;
@@ -4108,7 +4117,10 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
     for (const ast::Item& item : program.items) {
         if (const auto* fn = std::get_if<ast::FnDecl>(&item)) {
             auto sig = detail::resolve_fn_signature(
-                fn->params, fn->return_type, fn->span, env, fn->is_runtime, fn->generic_params);
+                fn->params, fn->return_type, fn->span, env, fn->is_runtime,
+                fn->is_runtime ? tyir::RuntimeAuthority::SourceBoundary
+                               : tyir::RuntimeAuthority::None,
+                fn->generic_params);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
@@ -4124,7 +4136,9 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
                 return std::unexpected(std::move(link_name.error()));
             // Build a signature from the extern fn declaration.
             auto sig = detail::resolve_fn_signature(
-                ext_fn->params, ext_fn->return_type, ext_fn->span, env, ext_fn->is_runtime);
+                ext_fn->params, ext_fn->return_type, ext_fn->span, env, ext_fn->is_runtime,
+                ext_fn->is_runtime ? tyir::RuntimeAuthority::TrustedExtern
+                                   : tyir::RuntimeAuthority::None);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(ext_fn->name, std::move(*sig));
@@ -4216,6 +4230,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             ty_decl.return_ty = sig.return_ty;
             ty_decl.span = ext_fn->span;
             ty_decl.is_runtime = ext_fn->is_runtime;
+            ty_decl.runtime_authority = sig.runtime_authority;
             ty_decl.param_availability = sig.param_availability;
             ty_decl.result_availability = sig.result_availability;
             ty_decl.internal_runtime_evidence = sig.internal_runtime_evidence;
