@@ -69,6 +69,20 @@ static void test_common_type_promotes_named_generic_args_recursively() {
     assert(joined->generic_args[0] == ty::num(true));
 }
 
+static void test_common_type_promotes_ref_pointees_recursively() {
+    const auto joined = common_type(ty::ref(ty::num()), ty::ref(ty::num(true)));
+    assert(joined.has_value());
+    assert(!joined->is_runtime);
+    assert(joined->pointee != nullptr);
+    assert(*joined->pointee == ty::num(true));
+}
+
+static void test_runtime_reference_shapes_are_runtime_dependent() {
+    assert(type_has_runtime_dependency(ty::ref(ty::num(), true)));
+    assert(type_has_runtime_dependency(ty::ref(ty::num(true))));
+    assert(!type_has_runtime_dependency(ty::ref(ty::num())));
+}
+
 int main() {
     SymbolSession session;
 
@@ -79,6 +93,8 @@ int main() {
     test_common_type_promotes_runtime_and_display_name();
     test_common_type_handles_never_and_mismatch();
     test_common_type_promotes_named_generic_args_recursively();
+    test_common_type_promotes_ref_pointees_recursively();
+    test_runtime_reference_shapes_are_runtime_dependent();
 
     return 0;
 }
