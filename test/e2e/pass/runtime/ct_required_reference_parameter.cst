@@ -1,0 +1,11 @@
+fn reserve(value: const &num) -> num {
+    let _ = value;
+    1
+}
+
+fn main() {
+    let count = 20;
+    let reserved = reserve(&count);
+
+    assert_eq(reserved, 1);
+}

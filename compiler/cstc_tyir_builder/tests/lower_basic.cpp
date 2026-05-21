@@ -496,6 +496,24 @@ static void test_ct_required_param_forwards_ct_required_runtime_projection() {
             Symbol::intern("Box"), kInvalidSymbol, ValueSemantics::Copy, false, {ty::num()}));
 }
 
+static void test_ct_required_ref_param_accepts_ct_reference() {
+    const auto prog = must_lower(
+        "fn reserve(value: const &num) -> num { 1 }"
+        "fn main() -> num { let value = 1; reserve(&value) }");
+    const auto& reserve = std::get<TyFnDecl>(prog.items[0]);
+    assert(reserve.params.size() == 1);
+    assert(reserve.params[0].requires_ct());
+    assert(reserve.params[0].ty == ty::ref(ty::num()));
+}
+
+static void test_ct_required_ref_param_rejects_runtime_reference() {
+    must_fail_with_message(
+        "struct Point { x: num }"
+        "fn reserve(value: const &num) -> num { 1 }"
+        "fn main(point: runtime Point) -> num { reserve(&point.x) }",
+        "argument `value` must be compile-time available");
+}
+
 static void test_ct_required_let_annotation_rejects_runtime_allowed_param() {
     must_fail_with_message(
         "fn wrap(count: num) -> num { let forwarded: const num = count; forwarded }",
@@ -1065,6 +1083,8 @@ int main() {
     test_ct_required_param_rejects_invalid_name_with_argument_number();
     test_ct_required_param_rejects_forwarded_runtime_allowed_local();
     test_ct_required_param_forwards_ct_required_runtime_projection();
+    test_ct_required_ref_param_accepts_ct_reference();
+    test_ct_required_ref_param_rejects_runtime_reference();
     test_ct_required_let_annotation_rejects_runtime_allowed_param();
     test_fn_preserves_generic_metadata();
     test_fn_where_clause_rejects_parameter_references();

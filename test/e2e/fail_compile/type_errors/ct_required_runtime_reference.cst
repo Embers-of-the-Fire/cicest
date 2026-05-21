@@ -1,0 +1,15 @@
+struct Point { x: num }
+
+fn reserve(value: const &num) -> num {
+    let _ = value;
+    1
+}
+
+runtime fn source() -> Point {
+    Point { x: 1 }
+}
+
+fn main() -> num {
+    let point: runtime Point = source();
+    reserve(&point.x)
+}

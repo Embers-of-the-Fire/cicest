@@ -1,0 +1,15 @@
+struct Point { x: num }
+
+fn view<T>(value: &T) -> runtime num {
+    let _ = value;
+    1
+}
+
+runtime fn source() -> Point {
+    Point { x: 1 }
+}
+
+fn main() -> runtime num {
+    let point: runtime Point = source();
+    view(&point.x)
+}
