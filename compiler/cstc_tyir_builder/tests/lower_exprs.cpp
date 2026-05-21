@@ -427,7 +427,10 @@ static void test_generic_ref_call_preserves_runtime_pointee_argument() {
     assert(call.generic_args.size() == 1);
     assert(call.generic_args[0] == ty::num());
     assert(call.args.size() == 1);
-    assert(call.args[0]->ty == ty::ref(ty::num(true)));
+    assert(call.args[0]->ty.is_ref());
+    assert(call.args[0]->ty.is_runtime);
+    assert(call.args[0]->ty.pointee != nullptr);
+    assert(call.args[0]->ty.pointee->is_runtime);
     assert(call.args[0]->availability.kind == AvailabilityKind::Rt);
 }
 

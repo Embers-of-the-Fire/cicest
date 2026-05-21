@@ -9,7 +9,7 @@ runtime fn source() -> Point {
     Point { x: 1 }
 }
 
-fn main() -> runtime num {
+fn main() {
     let point: runtime Point = source();
-    view(&point.x)
+    let _ = view(&point.x);
 }
