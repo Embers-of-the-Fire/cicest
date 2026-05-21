@@ -1630,8 +1630,8 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     rewritten.generic_args.push_back(apply_substitution(generic_arg, subst));
                 for (tyir::TyExprPtr& arg : rewritten.args)
                     arg = apply_substitution(arg, subst, program);
-                return make_classified_call_expr(
-                    expr->span, std::move(rewritten), rewritten_ty, expr->availability);
+                return make_materialized_call_expr(
+                    expr->span, std::move(rewritten), rewritten_ty, expr->availability, program);
             } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
                 tyir::TyDeclProbe rewritten = node;
                 if (rewritten.expr.has_value())
