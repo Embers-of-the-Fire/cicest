@@ -298,7 +298,7 @@ static void test_fn_decl() {
     TyProgram prog;
     prog.items.push_back(std::move(fn));
 
-    const std::string otring out = format_program(prog);
+    const std::string out = format_program(prog);
     assert(out.find("TyProgram") != std::string::npos);
     assert(out.find("TyFnDecl add") != std::string::npos);
     assert(out.find("-> num") != std::string::npos);
