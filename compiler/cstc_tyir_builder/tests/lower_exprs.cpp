@@ -418,6 +418,22 @@ static void test_generic_call_lifts_runtime_arguments() {
     assert(call.args[0]->ty == ty::num(true));
 }
 
+static void test_generic_ref_call_preserves_runtime_pointee_argument() {
+    const auto prog = must_lower(
+        "struct Point { x: num }"
+        "fn view<T>(value: &T) -> runtime num { 1 }"
+        "fn main(point: runtime Point) -> runtime num { view(&point.x) }");
+    const auto& call = std::get<TyCall>((*nth_fn(prog, 1).body->tail)->node);
+    assert(call.generic_args.size() == 1);
+    assert(call.generic_args[0] == ty::num());
+    assert(call.args.size() == 1);
+    assert(call.args[0]->ty.is_ref());
+    assert(call.args[0]->ty.is_runtime);
+    assert(call.args[0]->ty.pointee != nullptr);
+    assert(call.args[0]->ty.pointee->is_runtime);
+    assert(call.args[0]->availability.kind == AvailabilityKind::Rt);
+}
+
 static void test_runtime_argument_demotion_error() {
     must_fail_with_message(
         "runtime fn source() -> num { 1 }"
@@ -1764,6 +1780,7 @@ int main() {
     test_ignored_runtime_argument_prevents_generic_call_result_demotion();
     test_generic_runtime_result_forwarded_param_does_not_count_as_hidden_work();
     test_generic_call_lifts_runtime_arguments();
+    test_generic_ref_call_preserves_runtime_pointee_argument();
     test_plain_extern_call_accepts_runtime_argument_and_lifts_result();
     test_runtime_argument_demotion_error();
     test_nominal_argument_mismatch_error();

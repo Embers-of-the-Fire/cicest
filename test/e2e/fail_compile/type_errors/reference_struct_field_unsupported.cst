@@ -1,0 +1,5 @@
+struct View {
+    value: &num,
+}
+
+fn main() {}

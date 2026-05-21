@@ -202,6 +202,11 @@ TypeArgList        = "<" , Type , { "," , Type } , [ "," ] , ">" ;
 > is runtime-qualified. This rule is conservative over all accepted arguments: in
 > `fn first(a: num, b: num) -> num { a }`, the call `first(1, source())` has type
 > `runtime num` even though the function body ignores `b`.
+>
+> Runtime qualification is structural for memory-bearing types. `runtime &T` is a
+> runtime-qualified reference value, and `&runtime T` is runtime-dependent through
+> the referenced pointee. Generic substitution and availability projection must
+> preserve runtime tags nested inside references and generic arguments.
 
 > **Note:** `decl(expr)` is not an ordinary function call. It is a dedicated
 > compiler-recognized form that always has type `Constraint`, even when the
@@ -212,8 +217,18 @@ Ownership notes:
 - `str` is an owned, move-only string value.
 - String literals have type `&str`.
 - `&T` is an immutable shared reference type.
+- Shared immutable reference parameters are allowed.
+- A reference expression has the availability of the expression that creates it:
+  borrowing runtime data is runtime-available, while borrowing compile-time data
+  can remain compile-time-available when the existing lifetime checks accept it.
 - Reference types are currently restricted to local bindings and function
-  parameters; they are not yet valid in struct fields or return positions.
+  parameters; they are not valid in struct fields or return positions.
+- `const` and `!runtime` mark CT-required function parameters and explicit local
+  annotations only. CT-required function return types, CT-required struct fields,
+  and nested CT-required positions such as `&!runtime T` or `Box<const T>` are
+  unsupported.
+- Mutable references, heap allocation, and alias-sensitive availability are not
+  part of the current language boundary.
 
 ### 3.3 Blocks and statements
 

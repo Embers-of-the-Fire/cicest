@@ -1,0 +1,5 @@
+fn view(value: &num) -> &num {
+    value
+}
+
+fn main() {}
