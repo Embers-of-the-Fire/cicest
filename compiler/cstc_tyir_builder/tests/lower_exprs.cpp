@@ -314,6 +314,8 @@ static void test_call_unreachable_arg_does_not_taint_plain_result() {
     const auto& body = *second_fn(prog).body;
     assert(body.ty == ty::never());
     assert(body.availability.kind == AvailabilityKind::Ct);
+    const TyCall& call = std::get<TyCall>((*body.tail)->node);
+    assert(call.residue == CallResidue::CtEligible);
 }
 
 static void test_plain_call_with_diverging_argument_becomes_never_in_if_branch() {

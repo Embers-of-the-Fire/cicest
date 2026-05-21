@@ -968,6 +968,8 @@ struct LowerCtx {
 [[nodiscard]] static tyir::CallResidue direct_call_residue(
     const FnSignature& sig, const std::vector<tyir::TyExprPtr>& args,
     const tyir::Ty& resolved_return_shape, const tyir::Availability& call_availability) {
+    if (!exprs_can_fallthrough(args))
+        return tyir::call_residue_from_availability(call_availability);
     if (sig.runtime_authority == tyir::RuntimeAuthority::TrustedExtern)
         return tyir::CallResidue::RuntimeBarrier;
     if (type_has_runtime_dependency(resolved_return_shape))
