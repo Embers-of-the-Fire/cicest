@@ -622,6 +622,24 @@ struct Availability {
         && !availability.depends_on_runtime_allowed_param;
 }
 
+/// Direct-call residualization outcome for accepted calls.
+///
+/// Rejected calls are represented by lowering errors and therefore never appear
+/// as `TyCall` nodes.
+enum class CallResidue {
+    /// The call may be attempted by const eval.
+    CtEligible,
+    /// The call must remain as a runtime residualization barrier.
+    RuntimeBarrier,
+};
+
+/// Derives accepted direct-call residualization from final value availability.
+[[nodiscard]] inline CallResidue call_residue_from_availability(const Availability& availability) {
+    if (is_ct_available(availability))
+        return CallResidue::CtEligible;
+    return CallResidue::RuntimeBarrier;
+}
+
 /// Single named-field initializer inside a struct construction expression.
 struct TyStructInitField {
     /// Field name.
@@ -694,6 +712,8 @@ struct TyCall {
     std::vector<Ty> generic_args;
     /// Type-annotated argument list (count and types match the function signature).
     std::vector<TyExprPtr> args;
+    /// Direct-call residualization classification after lowering.
+    CallResidue residue = CallResidue::CtEligible;
 };
 
 /// Typed generic function call that still needs more type information.
@@ -840,6 +860,16 @@ inline void set_availability(TyExpr& expr, const Availability& availability) {
     expr.span = span;
     set_availability(expr, availability_join(availability_from_type(expr.ty), availability));
     return std::make_shared<TyExpr>(std::move(expr));
+}
+
+/// Returns the effective residualization classification for a typed call.
+///
+/// The stored call metadata is authoritative for builder-produced TyIR. The
+/// availability fallback keeps hand-built or legacy test nodes conservative.
+[[nodiscard]] inline CallResidue call_residue_for_expr(const TyExpr& expr, const TyCall& call) {
+    if (call.residue == CallResidue::RuntimeBarrier)
+        return CallResidue::RuntimeBarrier;
+    return call_residue_from_availability(expr.availability);
 }
 
 // ─── Statements ──────────────────────────────────────────────────────────────

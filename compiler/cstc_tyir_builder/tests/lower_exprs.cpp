@@ -244,8 +244,18 @@ static void test_plain_call_accepts_runtime_argument_and_lifts_result() {
     assert(stmt.ty == ty::num(true));
     assert(stmt.init->ty == ty::num(true));
     const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(call.residue == CallResidue::RuntimeBarrier);
     assert(call.args.size() == 1);
     assert(call.args[0]->ty == ty::num(true));
+}
+
+static void test_static_call_is_ct_eligible() {
+    const auto prog = must_lower(
+        "fn add(a: num, b: num) -> num { a + b }"
+        "fn main() -> num { add(1, 2) }");
+    const auto& call = std::get<TyCall>((*second_fn(prog).body->tail)->node);
+    assert(call.residue == CallResidue::CtEligible);
+    assert((*second_fn(prog).body->tail)->availability.kind == AvailabilityKind::Ct);
 }
 
 static void test_ignored_runtime_argument_lifts_direct_call_result() {
@@ -257,9 +267,28 @@ static void test_ignored_runtime_argument_lifts_direct_call_result() {
     assert(stmt.ty == ty::num(true));
     assert(stmt.init->ty == ty::num(true));
     const auto& call = std::get<TyCall>(stmt.init->node);
+    assert(call.residue == CallResidue::RuntimeBarrier);
     assert(call.args.size() == 2);
     assert(call.args[0]->ty == ty::num());
     assert(call.args[1]->ty == ty::num(true));
+}
+
+static void test_runtime_result_call_with_ct_args_is_runtime_barrier() {
+    const auto prog = must_lower(
+        "fn one() -> runtime num { 1 }"
+        "fn main() -> runtime num { one() }");
+    const auto& call = std::get<TyCall>((*second_fn(prog).body->tail)->node);
+    assert(call.residue == CallResidue::RuntimeBarrier);
+    assert((*second_fn(prog).body->tail)->availability.kind == AvailabilityKind::Rt);
+}
+
+static void test_runtime_extern_call_is_runtime_barrier() {
+    const auto prog = must_lower(
+        "runtime extern \"lang\" fn poll() -> num;"
+        "fn main() -> runtime num { poll() }");
+    const auto& call = std::get<TyCall>((*first_fn(prog).body->tail)->node);
+    assert(call.residue == CallResidue::RuntimeBarrier);
+    assert(call.fn_name == Symbol::intern("poll"));
 }
 
 static void test_ignored_runtime_argument_prevents_direct_call_result_demotion() {
@@ -1758,7 +1787,10 @@ int main() {
     test_logical();
     test_runtime_argument_promotion();
     test_plain_call_accepts_runtime_argument_and_lifts_result();
+    test_static_call_is_ct_eligible();
     test_ignored_runtime_argument_lifts_direct_call_result();
+    test_runtime_result_call_with_ct_args_is_runtime_barrier();
+    test_runtime_extern_call_is_runtime_barrier();
     test_ignored_runtime_argument_prevents_direct_call_result_demotion();
     test_plain_call_lifted_result_still_prevents_return_demotion();
     test_call_unreachable_arg_does_not_taint_plain_result();
