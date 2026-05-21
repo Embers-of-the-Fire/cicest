@@ -3225,6 +3225,88 @@ static void test_decl_generic_runtime_result_call_fails_after_substitution() {
     assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
 }
 
+static void test_decl_generic_trusted_extern_call_preserves_barrier_after_substitution() {
+    SymbolSession session;
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const Symbol trusted_fn = Symbol::intern("trusted_constraint");
+    const Symbol wrapper_name = Symbol::intern("wrapper");
+    const Symbol generic_name = Symbol::intern("T");
+    const Ty constraint_ty = ty::named(constraint_name, constraint_name, ValueSemantics::Copy);
+
+    TyProgram program;
+    TyEnumDecl constraint_enum;
+    constraint_enum.name = constraint_name;
+    constraint_enum.lang_name = Symbol::intern("cstc_constraint");
+    constraint_enum.variants.push_back(TyEnumVariant{Symbol::intern("Valid"), std::nullopt, {}});
+    constraint_enum.variants.push_back(TyEnumVariant{Symbol::intern("Invalid"), std::nullopt, {}});
+    program.items.push_back(std::move(constraint_enum));
+    program.items.push_back(
+        TyExternFnDecl{
+            .abi = Symbol::intern("lang"),
+            .name = trusted_fn,
+            .link_name = Symbol::intern("cstc_std_constraint"),
+            .params = {TyParam{
+                Symbol::intern("value"), ty::bool_(), {}, ParamRequirement::RuntimeAllowed}},
+            .return_ty = constraint_ty,
+            .span = {},
+            .is_runtime = false,
+            .runtime_authority = RuntimeAuthority::TrustedExtern,
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
+        });
+
+    auto true_arg = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Bool, kInvalidSymbol, true}, ty::bool_(), availability_ct());
+    TyCall trusted_call{trusted_fn, {}, {std::move(true_arg)}};
+    trusted_call.residue = CallResidue::RuntimeBarrier;
+    const Availability availability = availability_ct();
+    auto constraint_expr = make_ty_expr({}, std::move(trusted_call), constraint_ty, availability);
+
+    TyBlock wrapper_body;
+    wrapper_body.ty = ty::num();
+    wrapper_body.tail = make_num_expr("1");
+    program.items.push_back(
+        TyFnDecl{
+            .name = wrapper_name,
+            .generic_params = {{generic_name, {}}},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(wrapper_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {TyGenericConstraint{constraint_expr, {}}},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
+        });
+
+    TyBlock main_body;
+    main_body.ty = ty::num();
+    main_body.tail = make_ty_expr({}, TyCall{wrapper_name, {ty::num()}, {}}, ty::num());
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("runtime-only behavior") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
 static void test_generic_where_runtime_loop_reports_runtime_only() {
     SymbolSession session;
     const auto error = must_fail_to_lower_with_constraint_prelude(R"(
@@ -3508,6 +3590,7 @@ int main() {
     test_generic_where_parameter_references_are_rejected_while_lowering();
     test_generic_where_runtime_call_reports_runtime_only();
     test_decl_generic_runtime_result_call_fails_after_substitution();
+    test_decl_generic_trusted_extern_call_preserves_barrier_after_substitution();
     test_generic_where_runtime_loop_reports_runtime_only();
     test_generic_where_runtime_while_reports_runtime_only();
     test_unused_generic_where_is_deferred_until_instantiation();

@@ -623,10 +623,7 @@ static void recompute_block_availability(tyir::TyBlock& block) {
 [[nodiscard]] static tyir::TyExprPtr make_classified_call_expr(
     SourceSpan span, tyir::TyCall call, const tyir::Ty& ty,
     const tyir::Availability& availability) {
-    auto expr = tyir::make_ty_expr(span, std::move(call), ty, availability);
-    auto& stored_call = std::get<tyir::TyCall>(expr->node);
-    stored_call.residue = tyir::call_residue_from_availability(expr->availability);
-    return expr;
+    return tyir::make_ty_expr(span, std::move(call), ty, availability);
 }
 
 [[nodiscard]] static ConstraintEvalResult generic_substitution_dependency_result() {
