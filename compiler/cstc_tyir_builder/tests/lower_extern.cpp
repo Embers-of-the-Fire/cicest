@@ -74,6 +74,7 @@ static void test_runtime_extern_fn_preserves_runtime_markers() {
     assert(decl.params[0].ty.pointee != nullptr);
     assert(decl.params[0].ty.pointee->is_runtime);
     assert(decl.return_ty == ty::unit(true));
+    assert(decl.runtime_authority == RuntimeAuthority::TrustedExtern);
 }
 
 static void test_runtime_extern_fn_return_uses_runtime_sugar() {
@@ -82,6 +83,25 @@ static void test_runtime_extern_fn_return_uses_runtime_sugar() {
     assert(prog.items.size() == 1);
     const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
     assert(decl.return_ty == ty::num(true));
+    assert(decl.runtime_authority == RuntimeAuthority::TrustedExtern);
+}
+
+static void test_runtime_extern_c_abi_is_trusted() {
+    SymbolSession session;
+    const auto prog = must_lower(R"(runtime extern "c" fn now() -> num;)");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
+    assert(decl.abi == Symbol::intern("c"));
+    assert(decl.runtime_authority == RuntimeAuthority::TrustedExtern);
+}
+
+static void test_plain_extern_fn_has_no_runtime_authority() {
+    SymbolSession session;
+    const auto prog = must_lower(R"(extern "lang" fn to_num() -> runtime num;)");
+    assert(prog.items.size() == 1);
+    const auto& decl = std::get<TyExternFnDecl>(prog.items[0]);
+    assert(decl.return_ty == ty::num(true));
+    assert(decl.runtime_authority == RuntimeAuthority::None);
 }
 
 static void test_extern_fn_multiple_params() {
@@ -316,6 +336,8 @@ int main() {
     test_extern_fn_with_return();
     test_runtime_extern_fn_preserves_runtime_markers();
     test_runtime_extern_fn_return_uses_runtime_sugar();
+    test_runtime_extern_c_abi_is_trusted();
+    test_plain_extern_fn_has_no_runtime_authority();
     test_extern_fn_multiple_params();
     test_extern_fn_lang_attribute_overrides_link_name();
     test_extern_fn_callable();

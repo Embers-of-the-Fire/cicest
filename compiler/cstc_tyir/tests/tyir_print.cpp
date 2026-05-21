@@ -211,6 +211,41 @@ static void test_print_runtime_items() {
     assert(contains(out, "TyExternFnDecl \"lang\" poll(value: &runtime str) -> Unit"));
 }
 
+static void test_print_runtime_authority() {
+    TyFnDecl plain;
+    plain.name = Symbol::intern("plain");
+    plain.return_ty = ty::num(true);
+    plain.body = std::make_shared<TyBlock>();
+    plain.body->ty = plain.return_ty;
+
+    TyFnDecl runtime;
+    runtime.name = Symbol::intern("boundary");
+    runtime.return_ty = ty::num(true);
+    runtime.body = std::make_shared<TyBlock>();
+    runtime.body->ty = runtime.return_ty;
+    runtime.runtime_authority = RuntimeAuthority::SourceBoundary;
+
+    TyExternFnDecl trusted;
+    trusted.abi = Symbol::intern("c");
+    trusted.name = Symbol::intern("clock");
+    trusted.return_ty = ty::num(true);
+    trusted.runtime_authority = RuntimeAuthority::TrustedExtern;
+
+    TyProgram prog;
+    prog.items.push_back(std::move(plain));
+    prog.items.push_back(std::move(runtime));
+    prog.items.push_back(std::move(trusted));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyFnDecl plain() -> runtime num [runtime-authority: none]"));
+    const std::string boundary_marker =
+        "TyFnDecl boundary() -> runtime num [runtime-authority: source-boundary]";
+    const std::string trusted_marker =
+        "TyExternFnDecl \"c\" clock() -> runtime num [runtime-authority: trusted-extern]";
+    assert(contains(out, boundary_marker));
+    assert(contains(out, trusted_marker));
+}
+
 static void test_print_ct_required_parameter() {
     TyFnDecl fn;
     fn.name = Symbol::intern("reserve");
@@ -252,7 +287,8 @@ static void test_print_symbolic_fn_availability_signature() {
 
     const std::string out = format_program(prog);
     assert(contains(
-        out, "TyFnDecl add(a: num, b: num) -> num [availability-signature: params=[param0, "
+        out, "TyFnDecl add(a: num, b: num) -> num [runtime-authority: none] "
+             "[availability-signature: params=[param0, "
              "param1], result=(param0 | param1)]"));
 }
 
@@ -799,6 +835,7 @@ int main() {
     test_print_lang_item_enum();
     test_print_enum_with_discriminant();
     test_print_runtime_items();
+    test_print_runtime_authority();
     test_print_ct_required_parameter();
     test_print_symbolic_fn_availability_signature();
     test_print_generic_fn_metadata();

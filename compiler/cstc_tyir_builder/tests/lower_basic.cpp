@@ -353,6 +353,9 @@ static void test_runtime_fn_preserves_runtime_markers() {
     assert(fn.params[0].ty.is_runtime);
     assert(fn.return_ty.is_runtime);
     assert(fn.body->ty.is_runtime);
+    assert(fn.runtime_authority == RuntimeAuthority::SourceBoundary);
+    assert(fn.body->availability.evidence.has_value());
+    assert(fn.body->availability.evidence->reason == "runtime function boundary");
 }
 
 static void test_runtime_fn_return_uses_runtime_sugar() {
@@ -363,6 +366,14 @@ static void test_runtime_fn_return_uses_runtime_sugar() {
     assert(!fn.params[0].ty.is_runtime);
     assert(fn.return_ty.is_runtime);
     assert(fn.body->ty.is_runtime);
+    assert(fn.runtime_authority == RuntimeAuthority::SourceBoundary);
+}
+
+static void test_runtime_result_function_has_no_runtime_authority() {
+    const auto prog = must_lower("fn source() -> runtime num { 1 }");
+    const auto& fn = std::get<TyFnDecl>(prog.items[0]);
+    assert(fn.return_ty == ty::num(true));
+    assert(fn.runtime_authority == RuntimeAuthority::None);
 }
 
 static void test_runtime_allowed_param_marks_symbolic_body_dependence() {
@@ -1041,6 +1052,7 @@ int main() {
     test_fn_ref_return_rejected();
     test_runtime_fn_preserves_runtime_markers();
     test_runtime_fn_return_uses_runtime_sugar();
+    test_runtime_result_function_has_no_runtime_authority();
     test_runtime_allowed_param_marks_symbolic_body_dependence();
     test_runtime_allowed_public_signature_tracks_all_params();
     test_runtime_allowed_body_signature_tracks_joined_params();

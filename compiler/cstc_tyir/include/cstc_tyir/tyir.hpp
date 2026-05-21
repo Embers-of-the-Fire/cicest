@@ -354,6 +354,20 @@ struct TyRuntimeEvidence {
     std::string reason;
 };
 
+/// Declaration-level permission to introduce primitive runtime behavior.
+///
+/// Runtime authority is distinct from runtime availability: an ordinary
+/// `fn f() -> runtime T` exposes a runtime result without authorizing primitive
+/// runtime behavior in its body, while `runtime fn` and `runtime extern` do.
+enum class RuntimeAuthority {
+    /// No declaration-level authority to introduce primitive runtime behavior.
+    None,
+    /// Authority comes from a source-level runtime function boundary.
+    SourceBoundary,
+    /// Authority comes from a runtime extern whose behavior is delegated to runtime.
+    TrustedExtern,
+};
+
 /// Canonical compile-time/runtime availability classification for a TyIR value.
 enum class AvailabilityKind {
     /// The value is known to be available during compile-time evaluation.
@@ -1009,6 +1023,8 @@ struct TyFnDecl {
     cstc::span::SourceSpan span;
     /// True when the function was declared with the `runtime` item modifier.
     bool is_runtime = false;
+    /// Declaration-level runtime authority for this function.
+    RuntimeAuthority runtime_authority = RuntimeAuthority::None;
     /// Optional generic `where` constraints preserved from the AST.
     std::vector<cstc::ast::GenericConstraint> where_clause;
     /// Lowered generic `where` constraints used by later evaluation passes.
@@ -1043,6 +1059,8 @@ struct TyExternFnDecl {
     cstc::span::SourceSpan span;
     /// True when the function was declared with the `runtime` item modifier.
     bool is_runtime = false;
+    /// Declaration-level runtime authority for this extern function.
+    RuntimeAuthority runtime_authority = RuntimeAuthority::None;
     /// Symbolic availability for each declared parameter.
     std::vector<AvailabilityExpr> param_availability;
     /// Symbolic availability summary for the extern result.
