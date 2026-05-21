@@ -3307,6 +3307,87 @@ static void test_decl_generic_trusted_extern_call_preserves_barrier_after_substi
     assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
 }
 
+static void test_deferred_generic_runtime_result_call_reclassifies_after_substitution() {
+    SymbolSession session;
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const Symbol runtime_fn = Symbol::intern("runtime_constraint");
+    const Symbol generic_name = Symbol::intern("T");
+    const Ty generic_ty = generic_copy_ty(generic_name);
+    const Ty constraint_ty = ty::named(constraint_name, constraint_name, ValueSemantics::Copy);
+    Ty runtime_constraint_ty = constraint_ty;
+    runtime_constraint_ty.is_runtime = true;
+
+    TyBlock body;
+    body.ty = constraint_ty;
+    body.tail =
+        make_ty_expr({}, EnumVariantRef{constraint_name, Symbol::intern("Valid")}, constraint_ty);
+
+    TyFnDecl fn{
+        .name = runtime_fn,
+        .generic_params = {{generic_name, {}}},
+        .params = {},
+        .return_ty = generic_ty,
+        .body = std::make_shared<TyBlock>(std::move(body)),
+        .span = {},
+        .is_runtime = false,
+        .where_clause = {},
+        .lowered_where_clause = {},
+        .param_availability = {},
+        .result_availability = {},
+        .internal_runtime_evidence = std::nullopt,
+    };
+
+    TyDeferredGenericCall deferred;
+    deferred.fn_name = runtime_fn;
+    deferred.generic_args.push_back(generic_ty);
+    auto expr = make_ty_expr({}, std::move(deferred), constraint_ty);
+
+    cstc::tyir_interp::detail::ProgramView view;
+    view.fns.emplace(runtime_fn, &fn);
+    view.constraint_enum_name = constraint_name;
+
+    cstc::tyir_interp::detail::TypeSubstitution substitution;
+    substitution.emplace(generic_name, runtime_constraint_ty);
+    const auto result = cstc::tyir_interp::detail::evaluate_constraint(expr, substitution, view);
+    assert(result.kind == cstc::tyir_interp::ConstraintEvalKind::RuntimeOnly);
+}
+
+static void test_deferred_generic_trusted_extern_call_reclassifies_after_substitution() {
+    SymbolSession session;
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const Symbol trusted_fn = Symbol::intern("trusted_constraint");
+    const Ty constraint_ty = ty::named(constraint_name, constraint_name, ValueSemantics::Copy);
+
+    TyExternFnDecl decl{
+        .abi = Symbol::intern("lang"),
+        .name = trusted_fn,
+        .link_name = Symbol::intern("cstc_std_constraint"),
+        .params = {TyParam{
+            Symbol::intern("value"), ty::bool_(), {}, ParamRequirement::RuntimeAllowed}},
+        .return_ty = constraint_ty,
+        .span = {},
+        .is_runtime = false,
+        .runtime_authority = RuntimeAuthority::TrustedExtern,
+        .param_availability = {},
+        .result_availability = {},
+        .internal_runtime_evidence = std::nullopt,
+    };
+
+    TyDeferredGenericCall deferred;
+    deferred.fn_name = trusted_fn;
+    deferred.args.push_back(make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Bool, kInvalidSymbol, true}, ty::bool_(),
+        availability_ct()));
+    auto expr = make_ty_expr({}, std::move(deferred), constraint_ty);
+
+    cstc::tyir_interp::detail::ProgramView view;
+    view.extern_fns.emplace(trusted_fn, &decl);
+    view.constraint_enum_name = constraint_name;
+
+    const auto result = cstc::tyir_interp::detail::evaluate_constraint(expr, {}, view);
+    assert(result.kind == cstc::tyir_interp::ConstraintEvalKind::RuntimeOnly);
+}
+
 static void test_generic_where_runtime_loop_reports_runtime_only() {
     SymbolSession session;
     const auto error = must_fail_to_lower_with_constraint_prelude(R"(
@@ -3591,6 +3672,8 @@ int main() {
     test_generic_where_runtime_call_reports_runtime_only();
     test_decl_generic_runtime_result_call_fails_after_substitution();
     test_decl_generic_trusted_extern_call_preserves_barrier_after_substitution();
+    test_deferred_generic_runtime_result_call_reclassifies_after_substitution();
+    test_deferred_generic_trusted_extern_call_reclassifies_after_substitution();
     test_generic_where_runtime_loop_reports_runtime_only();
     test_generic_where_runtime_while_reports_runtime_only();
     test_unused_generic_where_is_deferred_until_instantiation();
