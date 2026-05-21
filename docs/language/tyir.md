@@ -46,6 +46,10 @@ For runtime-tagged types, TyIR uses a directional compatibility rule:
 - `T` implicitly converts to `runtime T`
 - `runtime T` does not convert to `T`
 - When control-flow joins `T` with `runtime T`, the resulting type is `runtime T`
+- Runtime tags inside reference pointees and generic arguments count as runtime
+  dependence. `runtime &T` and `&runtime T` are both runtime-dependent shapes;
+  the latter remains runtime-dependent through the pointee even when the outer
+  reference handle is not itself tagged.
 
 Function application is intentionally slightly more permissive than ordinary
 compatibility:
@@ -83,6 +87,25 @@ the body runtime-qualified by themselves, but they also cannot satisfy a
 CT-required position such as a `!runtime` parameter or `const` local annotation.
 At a call site, the argument availability instantiates that symbolic dependence
 and lifts the call result when an allowed argument is runtime-dependent.
+
+CT-required reference parameters use the same availability check as other
+CT-required parameters: the actual expression must be compile-time available and
+must not depend on a runtime-allowed parameter. The compiler never demotes a
+runtime reference value, including one whose pointee is runtime-tagged, into a
+CT-required reference value.
+
+The current memory-bearing availability boundary intentionally rejects positions
+whose semantics are not yet designed:
+
+- Function return type `&T`.
+- Struct field type `&T`.
+- CT-required function return type.
+- CT-required struct field type.
+- Nested CT-required type positions such as `&!runtime T` or `Box<const T>`.
+
+These restrictions are language guardrails. Future mutable references,
+allocation, or alias analysis must define their own availability rules instead of
+inheriting the immutable-reference subset by accident.
 
 Function and extern declarations expose this contract in TyIR output as an
 `availability-signature`. The printed result is the conservative source-level
