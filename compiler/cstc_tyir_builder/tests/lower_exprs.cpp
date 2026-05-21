@@ -309,13 +309,35 @@ static void test_plain_call_lifted_result_still_prevents_return_demotion() {
 
 static void test_call_unreachable_arg_does_not_taint_plain_result() {
     const auto prog = must_lower(
-        "runtime fn source(left: num, right: num) -> num { right }"
+        "fn source(left: num, right: num) -> num { right }"
         "fn f() -> num { source((return 1), runtime { 2 }) }");
     const auto& body = *second_fn(prog).body;
     assert(body.ty == ty::never());
     assert(body.availability.kind == AvailabilityKind::Ct);
     const TyCall& call = std::get<TyCall>((*body.tail)->node);
     assert(call.residue == CallResidue::CtEligible);
+}
+
+static void test_runtime_result_call_with_unreachable_arg_stays_runtime_barrier() {
+    const auto prog = must_lower(
+        "fn sink(value: num) -> runtime num { value }"
+        "fn f() -> runtime num { sink((return 1)) }");
+    const auto& body = *second_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+    const TyCall& call = std::get<TyCall>((*body.tail)->node);
+    assert(call.residue == CallResidue::RuntimeBarrier);
+}
+
+static void test_runtime_extern_call_with_unreachable_arg_stays_runtime_barrier() {
+    const auto prog = must_lower(
+        "runtime extern \"lang\" fn sink(value: num);"
+        "fn f() -> num { sink((return 1)) }");
+    const auto& body = *first_fn(prog).body;
+    assert(body.ty == ty::never());
+    assert(body.availability.kind == AvailabilityKind::Ct);
+    const TyCall& call = std::get<TyCall>((*body.tail)->node);
+    assert(call.residue == CallResidue::RuntimeBarrier);
 }
 
 static void test_plain_call_with_diverging_argument_becomes_never_in_if_branch() {
@@ -1796,6 +1818,8 @@ int main() {
     test_ignored_runtime_argument_prevents_direct_call_result_demotion();
     test_plain_call_lifted_result_still_prevents_return_demotion();
     test_call_unreachable_arg_does_not_taint_plain_result();
+    test_runtime_result_call_with_unreachable_arg_stays_runtime_barrier();
+    test_runtime_extern_call_with_unreachable_arg_stays_runtime_barrier();
     test_plain_call_with_diverging_argument_becomes_never_in_if_branch();
     test_unused_runtime_let_taints_plain_result_function();
     test_runtime_expression_statement_taints_plain_result_function();
