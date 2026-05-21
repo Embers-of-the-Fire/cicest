@@ -177,13 +177,14 @@ static void test_availability_projection() {
     assert(with_availability_projection(ty::num(), availability_rt()) == ty::num(true));
     assert(with_availability_projection(ty::never(), availability_rt()) == ty::never());
 
-    const Ty runtime_pointee_ref = with_availability_projection(
-        ty::ref(ty::num(true)), availability_ct());
+    const Ty runtime_pointee_ref =
+        with_availability_projection(ty::ref(ty::num(true)), availability_ct());
     assert(!runtime_pointee_ref.is_runtime);
     assert(runtime_pointee_ref.pointee != nullptr);
     assert(runtime_pointee_ref.pointee->is_runtime);
 
-    const Ty runtime_ref_handle = with_availability_projection(ty::ref(ty::num()), availability_rt());
+    const Ty runtime_ref_handle =
+        with_availability_projection(ty::ref(ty::num()), availability_rt());
     assert(runtime_ref_handle.is_runtime);
     assert(runtime_ref_handle.pointee != nullptr);
     assert(!runtime_ref_handle.pointee->is_runtime);
@@ -297,7 +298,7 @@ static void test_fn_decl() {
     TyProgram prog;
     prog.items.push_back(std::move(fn));
 
-    const std::string out = format_program(prog);
+    const std::string otring out = format_program(prog);
     assert(out.find("TyProgram") != std::string::npos);
     assert(out.find("TyFnDecl add") != std::string::npos);
     assert(out.find("-> num") != std::string::npos);
