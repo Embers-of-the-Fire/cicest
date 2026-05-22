@@ -323,7 +323,7 @@ static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
     TyBlock main_body;
     main_body.ty = ty::num(true);
     main_body.tail = make_ty_expr(
-        {}, TyCall{id_name, {ty::num()}, {make_num_expr("1")}}, ty::num(true),
+        {}, TyCall{id_name, {ty::num(true)}, {make_num_expr("1")}}, ty::num(true),
         runtime_result_call_availability());
     program.items.push_back(
         TyFnDecl{
@@ -371,7 +371,7 @@ static void test_rt_available_call_with_foldable_argument_remains_in_tyir() {
     TyBinary add_arg{cstc::ast::BinaryOp::Add, make_num_expr("1"), make_num_expr("2")};
     auto arg = make_ty_expr({}, add_arg, ty::num());
     main_body.tail = make_ty_expr(
-        {}, TyCall{id_name, {ty::num()}, {std::move(arg)}}, ty::num(true),
+        {}, TyCall{id_name, {ty::num(true)}, {std::move(arg)}}, ty::num(true),
         runtime_result_call_availability());
     program.items.push_back(
         TyFnDecl{
@@ -424,20 +424,47 @@ fn main() -> runtime num {
 
 static void test_null_evidence_rt_call_remains_in_tyir() {
     SymbolSession session;
-    TyProgram program = must_lower_with_constraint_prelude(R"(
-fn one() -> num {
-    1
-}
+    const Symbol one_name = Symbol::intern("one");
 
-fn main() -> runtime num {
-    one()
-}
-)");
+    TyBlock one_body;
+    one_body.ty = ty::num();
+    one_body.tail = make_num_expr("1");
 
-    TyExprPtr& tail = require_tail(find_fn(program, "main"));
-    set_availability(*tail, availability_rt());
-    assert(tail->availability.kind == AvailabilityKind::Rt);
-    assert(!tail->availability.evidence.has_value());
+    TyBlock main_body;
+    main_body.ty = ty::num(true);
+    main_body.tail = make_ty_expr({}, TyCall{one_name, {}, {}}, ty::num(true), availability_rt());
+
+    TyProgram program;
+    program.items.push_back(
+        TyFnDecl{
+            .name = one_name,
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(one_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = availability_expr_rt(),
+            .internal_runtime_evidence = std::nullopt,
+        });
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(true),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
+        });
 
     const auto folded = cstc::tyir_interp::fold_program(program);
     assert(folded.has_value());
@@ -446,7 +473,7 @@ fn main() -> runtime num {
     assert(folded_tail->availability.kind == AvailabilityKind::Rt);
     assert(!folded_tail->availability.evidence.has_value());
     const TyCall& call = require_call(folded_tail);
-    assert(call.fn_name == Symbol::intern("one"));
+    assert(call.fn_name == one_name);
 }
 
 static void test_runtime_block_folds_pure_inner_expression() {
@@ -678,6 +705,31 @@ fn choose_call() -> runtime num {
     assert(call_literal.symbol.as_str() == std::string_view{"1"});
     assert(is_ct_available(*call_tail));
     assert(is_ct_available(*choose_call.body));
+}
+
+static void test_folded_call_recomputes_residue_after_erasing_runtime_argument() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn source() -> runtime num {
+    2
+}
+
+fn inc(value: num) -> num {
+    value + 1
+}
+
+fn main() -> runtime num {
+    inc(if false { source() } else { 1 })
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    const TyExprPtr& tail = require_tail(main_fn);
+    const TyLiteral& literal = require_literal(tail);
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"2"});
+    assert(is_ct_available(*tail));
+    assert(is_ct_available(*main_fn.body));
 }
 
 static void test_folded_for_recomputes_availability_with_reachability() {
@@ -3613,6 +3665,7 @@ int main() {
     test_runtime_block_stmt_with_null_body_still_falls_through();
     test_plain_type_runtime_availability_is_preserved();
     test_folded_if_recomputes_availability_after_erasing_runtime_branch();
+    test_folded_call_recomputes_residue_after_erasing_runtime_argument();
     test_folded_for_recomputes_availability_with_reachability();
     test_control_children_recompute_availability_with_reachability();
     test_folded_operands_recompute_availability_with_reachability();

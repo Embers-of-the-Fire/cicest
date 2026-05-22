@@ -3831,13 +3831,6 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                     args.push_back(*folded_arg);
                 }
                 tyir::TyCall call{node.fn_name, node.generic_args, std::move(args), node.residue};
-                const bool original_call_is_runtime_barrier =
-                    tyir::call_residue_for_expr(*expr, node) == tyir::CallResidue::RuntimeBarrier;
-                if (original_call_is_runtime_barrier) {
-                    call.residue = tyir::CallResidue::RuntimeBarrier;
-                    return tyir::make_ty_expr(
-                        expr->span, std::move(call), expr->ty, expr->availability);
-                }
 
                 if (const auto fn_it = program.fns.find(node.fn_name); fn_it != program.fns.end()) {
                     EvalContext ctx{
