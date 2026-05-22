@@ -1,3 +1,6 @@
+// Exercises all runtime authority boundaries: ordinary runtime-result
+// declarations have none, runtime functions are source boundaries, and trusted
+// externs provide trusted authority.
 fn ordinary_runtime_result() -> runtime num {
     1
 }
