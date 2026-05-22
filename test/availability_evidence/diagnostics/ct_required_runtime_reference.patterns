@@ -1,0 +1,5 @@
+# source: test/e2e/fail_compile/type_errors/ct_required_runtime_reference.cst
+# rule: ct_required_runtime_reference
+argument `value` must be compile-time available
+expected 'const &num', found 'runtime &runtime num'
+reserve(&point.x)

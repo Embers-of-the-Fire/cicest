@@ -1,0 +1,10 @@
+// Verifies a compile-time-known condition eliminates the dead runtime else
+// branch before availability is checked for the resulting value.
+runtime fn source() -> num {
+    9
+}
+
+fn main() {
+    let value: num = if true { 1 } else { source() };
+    assert_eq(value, 1);
+}

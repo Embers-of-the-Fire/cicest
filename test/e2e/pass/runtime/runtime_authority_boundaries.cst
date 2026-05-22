@@ -1,0 +1,20 @@
+// Exercises all runtime authority boundaries: ordinary runtime-result
+// declarations have none, runtime functions are source boundaries, and trusted
+// externs provide trusted authority.
+fn ordinary_runtime_result() -> runtime num {
+    1
+}
+
+runtime fn source_boundary() -> num {
+    2
+}
+
+fn main() {
+    let ordinary: runtime num = ordinary_runtime_result();
+    let boundary: runtime num = source_boundary();
+    let trusted: runtime num = time();
+
+    let _ = ordinary;
+    let _ = boundary;
+    let _ = trusted;
+}
