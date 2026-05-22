@@ -361,6 +361,7 @@ static void test_print_call_and_struct_init_generic_args() {
 
     const std::string out = format_program(prog);
     assert(contains(out, "TyCall(id): num"));
+    assert(contains(out, "[call-residue: ct-eligible]"));
     assert(contains(out, "GenericArgs"));
     assert(contains(out, "Box<num>"));
 }
@@ -717,8 +718,33 @@ static void test_print_call() {
 
     const std::string out = format_program(prog);
     assert(contains(out, "TyCall(foo): bool"));
+    assert(contains(out, "[call-residue: ct-eligible]"));
     assert(contains(out, "Arg"));
     assert(contains(out, "TyLocal(x): num"));
+}
+
+static void test_print_runtime_barrier_call_residue() {
+    const Symbol foo = Symbol::intern("foo");
+    TyCall call_node;
+    call_node.fn_name = foo;
+    call_node.residue = CallResidue::RuntimeBarrier;
+    auto call = make_ty_expr({}, call_node, ty::num(true), availability_rt());
+
+    auto block = std::make_shared<TyBlock>();
+    block->tail = call;
+    block->ty = ty::num(true);
+
+    TyFnDecl fn;
+    fn.name = Symbol::intern("barrier");
+    fn.return_ty = ty::num(true);
+    fn.body = block;
+
+    TyProgram prog;
+    prog.items.push_back(std::move(fn));
+
+    const std::string out = format_program(prog);
+    assert(contains(out, "TyCall(foo): runtime num [availability: runtime] "));
+    assert(contains(out, "[call-residue: runtime-barrier]"));
 }
 
 static void test_print_runtime_block() {
@@ -851,6 +877,7 @@ int main() {
     test_print_while();
     test_print_for();
     test_print_call();
+    test_print_runtime_barrier_call_residue();
     test_print_runtime_block();
     test_print_availability_summary();
     test_print_let_stmt();

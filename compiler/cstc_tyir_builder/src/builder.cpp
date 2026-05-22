@@ -965,6 +965,31 @@ struct LowerCtx {
     return result;
 }
 
+[[nodiscard]] static tyir::CallResidue direct_call_residue(
+    const FnSignature& sig, const std::vector<tyir::TyExprPtr>& args,
+    const tyir::Ty& resolved_return_shape, const tyir::Availability& call_availability) {
+    if (sig.runtime_authority == tyir::RuntimeAuthority::TrustedExtern)
+        return tyir::CallResidue::RuntimeBarrier;
+    if (type_has_runtime_dependency(resolved_return_shape))
+        return tyir::CallResidue::RuntimeBarrier;
+    if (!exprs_can_fallthrough(args))
+        return tyir::call_residue_from_availability(call_availability);
+    for (const tyir::TyExprPtr& arg : args) {
+        if (arg != nullptr && arg->availability.kind == tyir::AvailabilityKind::Rt)
+            return tyir::CallResidue::RuntimeBarrier;
+    }
+    return tyir::call_residue_from_availability(call_availability);
+}
+
+[[nodiscard]] static tyir::TyCall make_direct_call(
+    cstc::symbol::Symbol fn_name, std::vector<tyir::Ty> generic_args,
+    std::vector<tyir::TyExprPtr> args, const FnSignature& sig,
+    const tyir::Ty& resolved_return_shape, const tyir::Availability& call_availability) {
+    tyir::TyCall call{fn_name, std::move(generic_args), std::move(args)};
+    call.residue = direct_call_residue(sig, call.args, resolved_return_shape, call_availability);
+    return call;
+}
+
 [[nodiscard]] static tyir::Ty call_result_type(
     tyir::Ty result_shape, const std::vector<tyir::TyExprPtr>& args, const FnSignature& sig,
     cstc::span::SourceSpan call_span) {
@@ -2064,10 +2089,11 @@ struct ParamReferenceVisitor {
     const tyir::Ty lifted_return_ty =
         tyir::with_availability_projection(resolved_return_ty, call_availability);
 
+    tyir::TyCall resolved_call = make_direct_call(
+        deferred->fn_name, std::move(concrete_generic_args), std::move(resolved_args), sig,
+        resolved_return_shape, call_availability);
     return tyir::make_ty_expr(
-        expr->span,
-        tyir::TyCall{deferred->fn_name, std::move(concrete_generic_args), std::move(resolved_args)},
-        lifted_return_ty, call_availability);
+        expr->span, std::move(resolved_call), lifted_return_ty, call_availability);
 }
 
 [[nodiscard]] static std::expected<cstc::symbol::Symbol, LowerError>
@@ -3303,12 +3329,12 @@ static std::expected<void, LowerError> merge_loop_break_types(
                         sig, lowered_args, resolved_return_shape, expr->span);
                     const tyir::Ty lifted_return_ty =
                         tyir::with_availability_projection(resolved_return_ty, call_availability);
+                    tyir::TyCall resolved_call = make_direct_call(
+                        fn_name, std::move(concrete_generic_args), std::move(lowered_args), sig,
+                        resolved_return_shape, call_availability);
 
                     lowered_expr = tyir::make_ty_expr(
-                        expr->span,
-                        tyir::TyCall{
-                            fn_name, std::move(concrete_generic_args), std::move(lowered_args)},
-                        lifted_return_ty, call_availability);
+                        expr->span, std::move(resolved_call), lifted_return_ty, call_availability);
                 } else {
                     const tyir::Availability call_availability = call_result_availability(
                         sig, lowered_args, resolved_return_shape, expr->span);

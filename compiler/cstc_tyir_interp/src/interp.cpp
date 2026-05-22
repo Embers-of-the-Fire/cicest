@@ -12,6 +12,7 @@ namespace cstc::tyir_interp::detail {
 using tyir::common_type;
 using tyir::compatible;
 using tyir::matches_type_shape;
+using tyir::type_has_runtime_dependency;
 
 ValuePtr make_num(double value) {
     auto out = std::make_shared<Value>();
@@ -259,6 +260,8 @@ using GenericParamSet = std::unordered_set<Symbol, SymbolHash>;
 }
 
 [[nodiscard]] static bool has_runtime_barrier(const tyir::TyExpr& expr) {
+    if (const auto* call = std::get_if<tyir::TyCall>(&expr.node))
+        return tyir::call_residue_for_expr(expr, *call) == tyir::CallResidue::RuntimeBarrier;
     return expr.availability.kind == tyir::AvailabilityKind::Rt;
 }
 
@@ -540,6 +543,130 @@ static void recompute_block_availability(tyir::TyBlock& block) {
             return true;
     }
     return false;
+}
+
+[[nodiscard]] static std::vector<tyir::Availability>
+    call_arg_availabilities(const std::vector<tyir::TyExprPtr>& args) {
+    std::vector<tyir::Availability> availabilities;
+    availabilities.reserve(args.size());
+    for (const tyir::TyExprPtr& arg : args)
+        availabilities.push_back(arg != nullptr ? arg->availability : tyir::availability_ct());
+    return availabilities;
+}
+
+[[nodiscard]] static TypeSubstitution build_substitution(
+    const std::vector<cstc::ast::GenericParam>& generic_params,
+    const std::vector<tyir::Ty>& generic_args);
+
+[[nodiscard]] static tyir::Availability call_result_availability(
+    tyir::RuntimeAuthority runtime_authority, const tyir::AvailabilityExpr& result_availability,
+    const std::optional<tyir::TyRuntimeEvidence>& internal_runtime_evidence,
+    const std::vector<cstc::ast::GenericParam>& generic_params,
+    const std::vector<tyir::TyExprPtr>& args, const tyir::Ty& resolved_return_shape,
+    SourceSpan call_span) {
+    tyir::Availability result =
+        tyir::availability_expr_substitute(result_availability, call_arg_availabilities(args));
+    if (type_depends_on_generic_params(
+            resolved_return_shape, make_generic_param_set(generic_params))) {
+        for (const tyir::TyExprPtr& arg : args) {
+            if (arg != nullptr)
+                result = tyir::availability_join(result, availability_of_expr(arg));
+        }
+    }
+    if (type_has_runtime_dependency(resolved_return_shape)) {
+        const char* reason = "runtime-result call";
+        if (runtime_authority == tyir::RuntimeAuthority::TrustedExtern)
+            reason = "trusted runtime extern";
+        result = tyir::availability_join(
+            result, tyir::availability_rt(tyir::TyRuntimeEvidence{call_span, reason}));
+    } else if (result.kind == tyir::AvailabilityKind::Rt && !result.evidence.has_value()) {
+        result = tyir::availability_join(result, tyir::availability_rt(internal_runtime_evidence));
+    }
+    return result;
+}
+
+[[nodiscard]] static tyir::Availability call_result_availability(
+    const tyir::TyFnDecl& decl, const std::vector<tyir::TyExprPtr>& args,
+    const tyir::Ty& resolved_return_shape, SourceSpan call_span) {
+    return call_result_availability(
+        decl.runtime_authority, decl.result_availability, decl.internal_runtime_evidence,
+        decl.generic_params, args, resolved_return_shape, call_span);
+}
+
+[[nodiscard]] static tyir::Availability call_result_availability(
+    const tyir::TyExternFnDecl& decl, const std::vector<tyir::TyExprPtr>& args,
+    const tyir::Ty& resolved_return_shape, SourceSpan call_span) {
+    return call_result_availability(
+        decl.runtime_authority, decl.result_availability, decl.internal_runtime_evidence, {}, args,
+        resolved_return_shape, call_span);
+}
+
+[[nodiscard]] static tyir::CallResidue direct_call_residue(
+    tyir::RuntimeAuthority runtime_authority, const std::vector<tyir::TyExprPtr>& args,
+    const tyir::Ty& resolved_return_shape, const tyir::Availability& call_availability) {
+    if (runtime_authority == tyir::RuntimeAuthority::TrustedExtern)
+        return tyir::CallResidue::RuntimeBarrier;
+    if (type_has_runtime_dependency(resolved_return_shape))
+        return tyir::CallResidue::RuntimeBarrier;
+    for (const tyir::TyExprPtr& arg : args) {
+        if (arg != nullptr && arg->availability.kind == tyir::AvailabilityKind::Rt)
+            return tyir::CallResidue::RuntimeBarrier;
+    }
+    return tyir::call_residue_from_availability(call_availability);
+}
+
+[[nodiscard]] static tyir::TyCall classify_call(
+    tyir::TyCall call, tyir::RuntimeAuthority runtime_authority,
+    const tyir::Ty& resolved_return_shape, const tyir::Availability& call_availability) {
+    const tyir::Ty& shape = resolved_return_shape;
+    const tyir::Availability& availability = call_availability;
+    call.residue = direct_call_residue(runtime_authority, call.args, shape, availability);
+    return call;
+}
+
+[[nodiscard]] static tyir::TyExprPtr make_classified_call_expr(
+    SourceSpan span, tyir::TyCall call, const tyir::Ty& ty,
+    const tyir::Availability& availability) {
+    return tyir::make_ty_expr(span, std::move(call), ty, availability);
+}
+
+[[nodiscard]] static tyir::TyExprPtr make_materialized_call_expr(
+    SourceSpan span, tyir::TyCall call, const tyir::Ty& ty, const tyir::Availability& availability,
+    const ProgramView* program) {
+    if (program == nullptr)
+        return make_classified_call_expr(span, std::move(call), ty, availability);
+
+    if (const auto fn_it = program->fns.find(call.fn_name); fn_it != program->fns.end()) {
+        const tyir::TyFnDecl& fn = *fn_it->second;
+        tyir::Ty resolved_return_shape = fn.return_ty;
+        if (!call.generic_args.empty()) {
+            const TypeSubstitution substitution =
+                build_substitution(fn.generic_params, call.generic_args);
+            resolved_return_shape = apply_substitution(resolved_return_shape, substitution);
+        }
+        const tyir::Availability call_availability =
+            call_result_availability(fn, call.args, resolved_return_shape, span);
+        call = classify_call(
+            std::move(call), fn.runtime_authority, resolved_return_shape, call_availability);
+        return make_classified_call_expr(
+            span, std::move(call), tyir::with_availability_projection(ty, call_availability),
+            call_availability);
+    }
+
+    if (const auto ext_it = program->extern_fns.find(call.fn_name);
+        ext_it != program->extern_fns.end()) {
+        const tyir::TyExternFnDecl& decl = *ext_it->second;
+        const tyir::Ty resolved_return_shape = decl.return_ty;
+        const tyir::Availability call_availability =
+            call_result_availability(decl, call.args, resolved_return_shape, span);
+        call = classify_call(
+            std::move(call), decl.runtime_authority, resolved_return_shape, call_availability);
+        return make_classified_call_expr(
+            span, std::move(call), tyir::with_availability_projection(ty, call_availability),
+            call_availability);
+    }
+
+    return make_classified_call_expr(span, std::move(call), ty, availability);
 }
 
 [[nodiscard]] static ConstraintEvalResult generic_substitution_dependency_result() {
@@ -1399,22 +1526,24 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
         expr->node);
 }
 
-[[nodiscard]] static tyir::TyExprPtr
-    apply_substitution(const tyir::TyExprPtr& expr, const TypeSubstitution& subst);
+[[nodiscard]] static tyir::TyExprPtr apply_substitution(
+    const tyir::TyExprPtr& expr, const TypeSubstitution& subst,
+    const ProgramView* program = nullptr);
 
-[[nodiscard]] static tyir::TyBlockPtr
-    apply_substitution(const tyir::TyBlockPtr& block, const TypeSubstitution& subst);
+[[nodiscard]] static tyir::TyBlockPtr apply_substitution(
+    const tyir::TyBlockPtr& block, const TypeSubstitution& subst,
+    const ProgramView* program = nullptr);
 
-[[nodiscard]] static tyir::TyForInit
-    apply_substitution(const tyir::TyForInit& init, const TypeSubstitution& subst) {
+[[nodiscard]] static tyir::TyForInit apply_substitution(
+    const tyir::TyForInit& init, const TypeSubstitution& subst, const ProgramView* program) {
     tyir::TyForInit rewritten = init;
     rewritten.ty = apply_substitution(init.ty, subst);
-    rewritten.init = apply_substitution(init.init, subst);
+    rewritten.init = apply_substitution(init.init, subst, program);
     return rewritten;
 }
 
-[[nodiscard]] static tyir::TyBlockPtr
-    apply_substitution(const tyir::TyBlockPtr& block, const TypeSubstitution& subst) {
+[[nodiscard]] static tyir::TyBlockPtr apply_substitution(
+    const tyir::TyBlockPtr& block, const TypeSubstitution& subst, const ProgramView* program) {
     if (block == nullptr)
         return nullptr;
 
@@ -1432,23 +1561,24 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                             node.discard,
                             node.name,
                             apply_substitution(node.ty, subst),
-                            apply_substitution(node.init, subst),
+                            apply_substitution(node.init, subst, program),
                             node.span,
                         };
                     } else {
-                        return tyir::TyExprStmt{apply_substitution(node.expr, subst), node.span};
+                        return tyir::TyExprStmt{
+                            apply_substitution(node.expr, subst, program), node.span};
                     }
                 },
                 stmt));
     }
     if (block->tail.has_value())
-        rewritten->tail = apply_substitution(*block->tail, subst);
+        rewritten->tail = apply_substitution(*block->tail, subst, program);
     recompute_block_availability(*rewritten);
     return rewritten;
 }
 
-[[nodiscard]] static tyir::TyExprPtr
-    apply_substitution(const tyir::TyExprPtr& expr, const TypeSubstitution& subst) {
+[[nodiscard]] static tyir::TyExprPtr apply_substitution(
+    const tyir::TyExprPtr& expr, const TypeSubstitution& subst, const ProgramView* program) {
     if (expr == nullptr)
         return nullptr;
 
@@ -1468,27 +1598,29 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                 for (const tyir::Ty& generic_arg : node.generic_args)
                     rewritten.generic_args.push_back(apply_substitution(generic_arg, subst));
                 for (tyir::TyStructInitField& field : rewritten.fields)
-                    field.value = apply_substitution(field.value, subst);
+                    field.value = apply_substitution(field.value, subst, program);
                 return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyBorrow>) {
                 return tyir::make_ty_expr(
-                    expr->span, tyir::TyBorrow{apply_substitution(node.rhs, subst)}, rewritten_ty);
+                    expr->span, tyir::TyBorrow{apply_substitution(node.rhs, subst, program)},
+                    rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyUnary>) {
                 return tyir::make_ty_expr(
-                    expr->span, tyir::TyUnary{node.op, apply_substitution(node.rhs, subst)},
+                    expr->span,
+                    tyir::TyUnary{node.op, apply_substitution(node.rhs, subst, program)},
                     rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyBinary>) {
                 return tyir::make_ty_expr(
                     expr->span,
                     tyir::TyBinary{
-                        node.op, apply_substitution(node.lhs, subst),
-                        apply_substitution(node.rhs, subst)},
+                        node.op, apply_substitution(node.lhs, subst, program),
+                        apply_substitution(node.rhs, subst, program)},
                     rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyFieldAccess>) {
                 return tyir::make_ty_expr(
                     expr->span,
                     tyir::TyFieldAccess{
-                        apply_substitution(node.base, subst), node.field, node.use_kind},
+                        apply_substitution(node.base, subst, program), node.field, node.use_kind},
                     rewritten_ty, expr->availability);
             } else if constexpr (std::is_same_v<Node, tyir::TyCall>) {
                 tyir::TyCall rewritten = node;
@@ -1497,13 +1629,13 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                 for (const tyir::Ty& generic_arg : node.generic_args)
                     rewritten.generic_args.push_back(apply_substitution(generic_arg, subst));
                 for (tyir::TyExprPtr& arg : rewritten.args)
-                    arg = apply_substitution(arg, subst);
-                return tyir::make_ty_expr(
-                    expr->span, std::move(rewritten), rewritten_ty, expr->availability);
+                    arg = apply_substitution(arg, subst, program);
+                return make_materialized_call_expr(
+                    expr->span, std::move(rewritten), rewritten_ty, expr->availability, program);
             } else if constexpr (std::is_same_v<Node, tyir::TyDeclProbe>) {
                 tyir::TyDeclProbe rewritten = node;
                 if (rewritten.expr.has_value())
-                    rewritten.expr = apply_substitution(*rewritten.expr, subst);
+                    rewritten.expr = apply_substitution(*rewritten.expr, subst, program);
                 return tyir::make_ty_expr(expr->span, std::move(rewritten), rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyDeferredGenericCall>) {
                 tyir::TyDeferredGenericCall rewritten = node;
@@ -1519,7 +1651,7 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     rewritten.generic_args.push_back(apply_substitution(*generic_arg, subst));
                 }
                 for (tyir::TyExprPtr& arg : rewritten.args)
-                    arg = apply_substitution(arg, subst);
+                    arg = apply_substitution(arg, subst, program);
                 if (!fully_resolved)
                     return tyir::make_ty_expr(
                         expr->span, std::move(rewritten), rewritten_ty, expr->availability);
@@ -1530,65 +1662,65 @@ static void seed_probe_external_locals(const tyir::TyExprPtr& expr, ProbeOwnersh
                     assert(generic_arg.has_value());
                     concrete_generic_args.push_back(*generic_arg);
                 }
-                return tyir::make_ty_expr(
-                    expr->span,
-                    tyir::TyCall{
-                        rewritten.fn_name, std::move(concrete_generic_args),
-                        std::move(rewritten.args)},
-                    rewritten_ty, expr->availability);
+                tyir::TyCall call{
+                    rewritten.fn_name, std::move(concrete_generic_args), std::move(rewritten.args)};
+                return make_materialized_call_expr(
+                    expr->span, std::move(call), rewritten_ty, expr->availability, program);
             } else if constexpr (std::is_same_v<Node, tyir::TyRuntimeBlock>) {
                 return tyir::make_ty_expr(
-                    expr->span, tyir::TyRuntimeBlock{apply_substitution(node.body, subst)},
+                    expr->span, tyir::TyRuntimeBlock{apply_substitution(node.body, subst, program)},
                     rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyBlockPtr>) {
                 return tyir::make_ty_expr(
-                    expr->span, apply_substitution(node, subst), rewritten_ty);
+                    expr->span, apply_substitution(node, subst, program), rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyIf>) {
                 std::optional<tyir::TyExprPtr> else_branch;
                 if (node.else_branch.has_value())
-                    else_branch = apply_substitution(*node.else_branch, subst);
+                    else_branch = apply_substitution(*node.else_branch, subst, program);
                 return tyir::make_ty_expr(
                     expr->span,
                     tyir::TyIf{
-                        apply_substitution(node.condition, subst),
-                        apply_substitution(node.then_block, subst), std::move(else_branch)},
+                        apply_substitution(node.condition, subst, program),
+                        apply_substitution(node.then_block, subst, program),
+                        std::move(else_branch)},
                     rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyLoop>) {
                 return tyir::make_ty_expr(
-                    expr->span, tyir::TyLoop{apply_substitution(node.body, subst)}, rewritten_ty);
+                    expr->span, tyir::TyLoop{apply_substitution(node.body, subst, program)},
+                    rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyWhile>) {
                 return tyir::make_ty_expr(
                     expr->span,
                     tyir::TyWhile{
-                        apply_substitution(node.condition, subst),
-                        apply_substitution(node.body, subst)},
+                        apply_substitution(node.condition, subst, program),
+                        apply_substitution(node.body, subst, program)},
                     rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyFor>) {
                 std::optional<tyir::TyForInit> init;
                 if (node.init.has_value())
-                    init = apply_substitution(*node.init, subst);
+                    init = apply_substitution(*node.init, subst, program);
                 std::optional<tyir::TyExprPtr> condition;
                 if (node.condition.has_value())
-                    condition = apply_substitution(*node.condition, subst);
+                    condition = apply_substitution(*node.condition, subst, program);
                 std::optional<tyir::TyExprPtr> step;
                 if (node.step.has_value())
-                    step = apply_substitution(*node.step, subst);
+                    step = apply_substitution(*node.step, subst, program);
                 return tyir::make_ty_expr(
                     expr->span,
                     tyir::TyFor{
                         std::move(init), std::move(condition), std::move(step),
-                        apply_substitution(node.body, subst)},
+                        apply_substitution(node.body, subst, program)},
                     rewritten_ty);
             } else if constexpr (std::is_same_v<Node, tyir::TyBreak>) {
                 std::optional<tyir::TyExprPtr> value;
                 if (node.value.has_value())
-                    value = apply_substitution(*node.value, subst);
+                    value = apply_substitution(*node.value, subst, program);
                 return tyir::make_ty_expr(
                     expr->span, tyir::TyBreak{std::move(value)}, rewritten_ty);
             } else {
                 std::optional<tyir::TyExprPtr> value;
                 if (node.value.has_value())
-                    value = apply_substitution(*node.value, subst);
+                    value = apply_substitution(*node.value, subst, program);
                 return tyir::make_ty_expr(
                     expr->span, tyir::TyReturn{std::move(value)}, rewritten_ty);
             }
@@ -1764,7 +1896,7 @@ ConstraintEvalResult evaluate_constraint(
     const tyir::TyExprPtr& expr, const TypeSubstitution& substitution, const ProgramView& program,
     std::vector<EvalStackFrame> stack,
     const std::shared_ptr<ConstraintEvalState>& constraint_state) {
-    const tyir::TyExprPtr substituted = apply_substitution(expr, substitution);
+    const tyir::TyExprPtr substituted = apply_substitution(expr, substitution, &program);
     ConstEnv env;
     env.push();
     EvalContext ctx{
@@ -2888,6 +3020,10 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
                     const tyir::TyFnDecl& fn = *fn_it->second;
                     if (fn.return_ty.is_runtime || fn.is_runtime)
                         return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
+                    if (tyir::call_residue_for_expr(*expr, node)
+                        == tyir::CallResidue::RuntimeBarrier) {
+                        return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
+                    }
                     if (!generic_args_depend_on_generic_params(
                             node.generic_args, ctx.generic_params)) {
                         const auto constraint_status = enforce_constraints(
@@ -2957,6 +3093,8 @@ std::expected<ValuePtr, EvalError> eval_lang_intrinsic(
 
                 const tyir::TyExternFnDecl& decl = *ext_it->second;
                 if (decl.return_ty.is_runtime || decl.is_runtime)
+                    return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
+                if (tyir::call_residue_for_expr(*expr, node) == tyir::CallResidue::RuntimeBarrier)
                     return EvalState::blocked(EvalState::BlockedReason::RuntimeOnly);
                 if (decl.abi.as_str() != std::string_view{"lang"})
                     return make_error(
@@ -3684,8 +3822,6 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
             }
 
             if constexpr (std::is_same_v<Node, tyir::TyCall>) {
-                if (!tyir::is_ct_available(expr))
-                    return expr;
                 std::vector<tyir::TyExprPtr> args;
                 args.reserve(node.args.size());
                 for (const tyir::TyExprPtr& arg : node.args) {
@@ -3694,10 +3830,85 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
                         return std::unexpected(std::move(folded_arg.error()));
                     args.push_back(*folded_arg);
                 }
+                tyir::TyCall call{node.fn_name, node.generic_args, std::move(args), node.residue};
+
+                if (const auto fn_it = program.fns.find(node.fn_name); fn_it != program.fns.end()) {
+                    EvalContext ctx{
+                        program,
+                        {},
+                        kDefaultEvalStepBudget,
+                        kDefaultEvalCallDepth,
+                        {},
+                        std::make_shared<ConstraintEvalState>(),
+                    };
+                    const std::string_view fn_name = fn_it->second->name.as_str();
+                    const SourceSpan span = expr->span;
+                    const std::size_t expected = fn_it->second->params.size();
+                    const std::size_t actual = call.args.size();
+                    auto arity = require_call_arity(ctx, span, fn_name, expected, actual);
+                    if (!arity)
+                        return std::unexpected(std::move(arity.error()));
+
+                    tyir::Ty resolved_return_shape = fn_it->second->return_ty;
+                    if (!node.generic_args.empty()) {
+                        const TypeSubstitution substitution =
+                            build_substitution(fn_it->second->generic_params, node.generic_args);
+                        resolved_return_shape =
+                            apply_substitution(resolved_return_shape, substitution);
+                    }
+                    const tyir::Availability call_availability = call_result_availability(
+                        *fn_it->second, call.args, resolved_return_shape, expr->span);
+                    call = classify_call(
+                        std::move(call), fn_it->second->runtime_authority, resolved_return_shape,
+                        call_availability);
+                    const tyir::Ty call_ty = tyir::with_availability_projection(
+                        resolved_return_shape, call_availability);
+                    if (call.residue == tyir::CallResidue::RuntimeBarrier) {
+                        return tyir::make_ty_expr(
+                            expr->span, std::move(call), call_ty, call_availability);
+                    }
+                    return maybe_fold_constant(
+                        tyir::make_ty_expr(expr->span, std::move(call), call_ty, call_availability),
+                        program, env, generic_params);
+                }
+
+                if (const auto ext_it = program.extern_fns.find(node.fn_name);
+                    ext_it != program.extern_fns.end()) {
+                    EvalContext ctx{
+                        program,
+                        {},
+                        kDefaultEvalStepBudget,
+                        kDefaultEvalCallDepth,
+                        {},
+                        std::make_shared<ConstraintEvalState>(),
+                    };
+                    const std::string_view fn_name = ext_it->second->name.as_str();
+                    const SourceSpan span = expr->span;
+                    const std::size_t expected = ext_it->second->params.size();
+                    const std::size_t actual = call.args.size();
+                    auto arity = require_call_arity(ctx, span, fn_name, expected, actual);
+                    if (!arity)
+                        return std::unexpected(std::move(arity.error()));
+
+                    const tyir::Ty resolved_return_shape = ext_it->second->return_ty;
+                    const tyir::Availability call_availability = call_result_availability(
+                        *ext_it->second, call.args, resolved_return_shape, expr->span);
+                    call = classify_call(
+                        std::move(call), ext_it->second->runtime_authority, resolved_return_shape,
+                        call_availability);
+                    const tyir::Ty call_ty = tyir::with_availability_projection(
+                        resolved_return_shape, call_availability);
+                    if (call.residue == tyir::CallResidue::RuntimeBarrier) {
+                        return tyir::make_ty_expr(
+                            expr->span, std::move(call), call_ty, call_availability);
+                    }
+                    return maybe_fold_constant(
+                        tyir::make_ty_expr(expr->span, std::move(call), call_ty, call_availability),
+                        program, env, generic_params);
+                }
+
                 return maybe_fold_constant(
-                    tyir::make_ty_expr(
-                        expr->span, tyir::TyCall{node.fn_name, node.generic_args, std::move(args)},
-                        expr->ty, expr->availability),
+                    tyir::make_ty_expr(expr->span, std::move(call), expr->ty, expr->availability),
                     program, env, generic_params);
             }
 

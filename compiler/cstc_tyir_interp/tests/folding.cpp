@@ -279,8 +279,36 @@ fn main() -> runtime num {
     assert(tail->ty == ty::num(true));
     const TyCall& call = require_call(tail);
     assert(call.fn_name == Symbol::intern("inc"));
+    assert(call.residue == CallResidue::RuntimeBarrier);
     assert(call.args.size() == 1);
     assert(call.args[0]->ty == ty::num(true));
+}
+
+static void test_ignored_runtime_argument_keeps_same_callee_barrier() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+runtime fn source() -> num {
+    41
+}
+
+fn first(a: num, b: num) -> num {
+    a
+}
+
+fn main() -> runtime num {
+    first(1 + 2, source())
+}
+)");
+
+    const TyExprPtr& tail = require_tail(find_fn(program, "main"));
+    assert(tail->ty == ty::num(true));
+    const TyCall& call = require_call(tail);
+    assert(call.fn_name == Symbol::intern("first"));
+    assert(call.residue == CallResidue::RuntimeBarrier);
+    assert(call.args.size() == 2);
+    const TyLiteral& folded_arg = require_literal(call.args[0]);
+    assert(folded_arg.symbol.as_str() == std::string_view{"3"});
+    assert(call.args[1]->ty == ty::num(true));
 }
 
 static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
@@ -295,7 +323,7 @@ static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
     TyBlock main_body;
     main_body.ty = ty::num(true);
     main_body.tail = make_ty_expr(
-        {}, TyCall{id_name, {ty::num()}, {make_num_expr("1")}}, ty::num(true),
+        {}, TyCall{id_name, {ty::num(true)}, {make_num_expr("1")}}, ty::num(true),
         runtime_result_call_availability());
     program.items.push_back(
         TyFnDecl{
@@ -322,6 +350,7 @@ static void test_runtime_result_call_with_ct_argument_remains_in_tyir() {
     assert(tail->availability.evidence.has_value());
     assert(tail->availability.evidence->reason == "runtime-result call");
     const TyCall& call = require_call(tail);
+    assert(call.residue == CallResidue::RuntimeBarrier);
     assert(call.fn_name == Symbol::intern("id"));
     assert(call.generic_args.size() == 1);
     assert(call.args.size() == 1);
@@ -342,7 +371,7 @@ static void test_rt_available_call_with_foldable_argument_remains_in_tyir() {
     TyBinary add_arg{cstc::ast::BinaryOp::Add, make_num_expr("1"), make_num_expr("2")};
     auto arg = make_ty_expr({}, add_arg, ty::num());
     main_body.tail = make_ty_expr(
-        {}, TyCall{id_name, {ty::num()}, {std::move(arg)}}, ty::num(true),
+        {}, TyCall{id_name, {ty::num(true)}, {std::move(arg)}}, ty::num(true),
         runtime_result_call_availability());
     program.items.push_back(
         TyFnDecl{
@@ -368,27 +397,74 @@ static void test_rt_available_call_with_foldable_argument_remains_in_tyir() {
     assert(tail->availability.evidence.has_value());
     assert(tail->availability.evidence->reason == "runtime-result call");
     const TyCall& call = require_call(tail);
+    assert(call.residue == CallResidue::RuntimeBarrier);
     assert(call.fn_name == id_name);
     assert(call.args.size() == 1);
-    assert(std::holds_alternative<TyBinary>(call.args.front()->node));
+    const TyLiteral& folded_arg = require_literal(call.args.front());
+    assert(folded_arg.kind == TyLiteral::Kind::Num);
+    assert(folded_arg.symbol.as_str() == std::string_view{"3"});
+}
+
+static void test_runtime_extern_call_remains_runtime_barrier() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+runtime extern "lang" fn poll() -> num;
+
+fn main() -> runtime num {
+    poll()
+}
+)");
+
+    const TyExprPtr& tail = require_tail(find_fn(program, "main"));
+    const TyCall& call = require_call(tail);
+    assert(call.fn_name == Symbol::intern("poll"));
+    assert(call.residue == CallResidue::RuntimeBarrier);
+    assert(tail->availability.kind == AvailabilityKind::Rt);
 }
 
 static void test_null_evidence_rt_call_remains_in_tyir() {
     SymbolSession session;
-    TyProgram program = must_lower_with_constraint_prelude(R"(
-fn one() -> num {
-    1
-}
+    const Symbol one_name = Symbol::intern("one");
 
-fn main() -> runtime num {
-    one()
-}
-)");
+    TyBlock one_body;
+    one_body.ty = ty::num();
+    one_body.tail = make_num_expr("1");
 
-    TyExprPtr& tail = require_tail(find_fn(program, "main"));
-    set_availability(*tail, availability_rt());
-    assert(tail->availability.kind == AvailabilityKind::Rt);
-    assert(!tail->availability.evidence.has_value());
+    TyBlock main_body;
+    main_body.ty = ty::num(true);
+    main_body.tail = make_ty_expr({}, TyCall{one_name, {}, {}}, ty::num(true), availability_rt());
+
+    TyProgram program;
+    program.items.push_back(
+        TyFnDecl{
+            .name = one_name,
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(one_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = availability_expr_rt(),
+            .internal_runtime_evidence = std::nullopt,
+        });
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(true),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
+        });
 
     const auto folded = cstc::tyir_interp::fold_program(program);
     assert(folded.has_value());
@@ -397,7 +473,7 @@ fn main() -> runtime num {
     assert(folded_tail->availability.kind == AvailabilityKind::Rt);
     assert(!folded_tail->availability.evidence.has_value());
     const TyCall& call = require_call(folded_tail);
-    assert(call.fn_name == Symbol::intern("one"));
+    assert(call.fn_name == one_name);
 }
 
 static void test_runtime_block_folds_pure_inner_expression() {
@@ -601,8 +677,16 @@ fn main() {
 static void test_folded_if_recomputes_availability_after_erasing_runtime_branch() {
     SymbolSession session;
     const auto program = must_fold(R"(
+fn source() -> runtime num {
+    2
+}
+
 fn choose(value: num) -> num {
     if true { 1 } else { value }
+}
+
+fn choose_call() -> runtime num {
+    if true { 1 } else { source() }
 }
 )");
 
@@ -613,6 +697,39 @@ fn choose(value: num) -> num {
     assert(literal.symbol.as_str() == std::string_view{"1"});
     assert(is_ct_available(*tail));
     assert(is_ct_available(*choose.body));
+
+    const TyFnDecl& choose_call = find_fn(program, "choose_call");
+    const TyExprPtr& call_tail = require_tail(choose_call);
+    const TyLiteral& call_literal = require_literal(call_tail);
+    assert(call_literal.kind == TyLiteral::Kind::Num);
+    assert(call_literal.symbol.as_str() == std::string_view{"1"});
+    assert(is_ct_available(*call_tail));
+    assert(is_ct_available(*choose_call.body));
+}
+
+static void test_folded_call_recomputes_residue_after_erasing_runtime_argument() {
+    SymbolSession session;
+    const auto program = must_fold(R"(
+fn source() -> runtime num {
+    2
+}
+
+fn inc(value: num) -> num {
+    value + 1
+}
+
+fn main() -> runtime num {
+    inc(if false { source() } else { 1 })
+}
+)");
+
+    const TyFnDecl& main_fn = find_fn(program, "main");
+    const TyExprPtr& tail = require_tail(main_fn);
+    const TyLiteral& literal = require_literal(tail);
+    assert(literal.kind == TyLiteral::Kind::Num);
+    assert(literal.symbol.as_str() == std::string_view{"2"});
+    assert(is_ct_available(*tail));
+    assert(is_ct_available(*main_fn.body));
 }
 
 static void test_folded_for_recomputes_availability_with_reachability() {
@@ -910,8 +1027,9 @@ fn main() {
     assert(print_call.args.size() == 1);
     assert(std::holds_alternative<TyBorrow>(print_call.args[0]->node));
     const auto& borrow = std::get<TyBorrow>(print_call.args[0]->node);
-    assert(std::holds_alternative<LocalRef>(borrow.rhs->node));
-    assert(std::get<LocalRef>(borrow.rhs->node).name == Symbol::intern("rendered"));
+    const TyLiteral& folded_rhs = require_literal(borrow.rhs);
+    assert(folded_rhs.kind == TyLiteral::Kind::OwnedStr);
+    assert(folded_rhs.symbol.as_str() == std::string_view{"\"42\""});
 }
 
 static void test_borrow_preserves_folded_rhs_when_ref_cannot_materialize() {
@@ -935,7 +1053,9 @@ fn main() {
     assert(std::holds_alternative<TyBorrow>(sink_call.args[0]->node));
 
     const auto& borrow = std::get<TyBorrow>(sink_call.args[0]->node);
-    assert(std::holds_alternative<TyBinary>(borrow.rhs->node));
+    const TyLiteral& folded_rhs = require_literal(borrow.rhs);
+    assert(folded_rhs.kind == TyLiteral::Kind::Num);
+    assert(folded_rhs.symbol.as_str() == std::string_view{"3"});
 }
 
 static void test_runtime_intrinsic_call_is_preserved() {
@@ -3157,6 +3277,211 @@ static void test_decl_generic_runtime_result_call_fails_after_substitution() {
     assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
 }
 
+static void test_decl_generic_trusted_extern_call_preserves_barrier_after_substitution() {
+    SymbolSession session;
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const Symbol trusted_fn = Symbol::intern("trusted_constraint");
+    const Symbol wrapper_name = Symbol::intern("wrapper");
+    const Symbol generic_name = Symbol::intern("T");
+    const Ty constraint_ty = ty::named(constraint_name, constraint_name, ValueSemantics::Copy);
+
+    TyProgram program;
+    TyEnumDecl constraint_enum;
+    constraint_enum.name = constraint_name;
+    constraint_enum.lang_name = Symbol::intern("cstc_constraint");
+    constraint_enum.variants.push_back(TyEnumVariant{Symbol::intern("Valid"), std::nullopt, {}});
+    constraint_enum.variants.push_back(TyEnumVariant{Symbol::intern("Invalid"), std::nullopt, {}});
+    program.items.push_back(std::move(constraint_enum));
+    program.items.push_back(
+        TyExternFnDecl{
+            .abi = Symbol::intern("lang"),
+            .name = trusted_fn,
+            .link_name = Symbol::intern("cstc_std_constraint"),
+            .params = {TyParam{
+                Symbol::intern("value"), ty::bool_(), {}, ParamRequirement::RuntimeAllowed}},
+            .return_ty = constraint_ty,
+            .span = {},
+            .is_runtime = false,
+            .runtime_authority = RuntimeAuthority::TrustedExtern,
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
+        });
+
+    auto true_arg = make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Bool, kInvalidSymbol, true}, ty::bool_(), availability_ct());
+    TyCall trusted_call{trusted_fn, {}, {std::move(true_arg)}};
+    trusted_call.residue = CallResidue::RuntimeBarrier;
+    const Availability availability = availability_ct();
+    auto constraint_expr = make_ty_expr({}, std::move(trusted_call), constraint_ty, availability);
+
+    TyBlock wrapper_body;
+    wrapper_body.ty = ty::num();
+    wrapper_body.tail = make_num_expr("1");
+    program.items.push_back(
+        TyFnDecl{
+            .name = wrapper_name,
+            .generic_params = {{generic_name, {}}},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(wrapper_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {TyGenericConstraint{constraint_expr, {}}},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
+        });
+
+    TyBlock main_body;
+    main_body.ty = ty::num();
+    main_body.tail = make_ty_expr({}, TyCall{wrapper_name, {ty::num()}, {}}, ty::num());
+    program.items.push_back(
+        TyFnDecl{
+            .name = Symbol::intern("main"),
+            .generic_params = {},
+            .params = {},
+            .return_ty = ty::num(),
+            .body = std::make_shared<TyBlock>(std::move(main_body)),
+            .span = {},
+            .is_runtime = false,
+            .where_clause = {},
+            .lowered_where_clause = {},
+            .param_availability = {},
+            .result_availability = {},
+            .internal_runtime_evidence = std::nullopt,
+        });
+
+    const auto folded = cstc::tyir_interp::fold_program(program);
+    assert(!folded.has_value());
+    assert(folded.error().message.find("runtime-only behavior") != std::string::npos);
+    assert(folded.error().message.find("function 'wrapper'") != std::string::npos);
+}
+
+static void test_deferred_generic_runtime_result_call_reclassifies_after_substitution() {
+    SymbolSession session;
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const Symbol runtime_fn = Symbol::intern("runtime_constraint");
+    const Symbol generic_name = Symbol::intern("T");
+    const Ty generic_ty = generic_copy_ty(generic_name);
+    const Ty constraint_ty = ty::named(constraint_name, constraint_name, ValueSemantics::Copy);
+    Ty runtime_constraint_ty = constraint_ty;
+    runtime_constraint_ty.is_runtime = true;
+
+    TyBlock body;
+    body.ty = constraint_ty;
+    body.tail =
+        make_ty_expr({}, EnumVariantRef{constraint_name, Symbol::intern("Valid")}, constraint_ty);
+
+    TyFnDecl fn{
+        .name = runtime_fn,
+        .generic_params = {{generic_name, {}}},
+        .params = {},
+        .return_ty = generic_ty,
+        .body = std::make_shared<TyBlock>(std::move(body)),
+        .span = {},
+        .is_runtime = false,
+        .where_clause = {},
+        .lowered_where_clause = {},
+        .param_availability = {},
+        .result_availability = {},
+        .internal_runtime_evidence = std::nullopt,
+    };
+
+    TyDeferredGenericCall deferred;
+    deferred.fn_name = runtime_fn;
+    deferred.generic_args.push_back(generic_ty);
+    auto expr = make_ty_expr({}, std::move(deferred), constraint_ty);
+
+    cstc::tyir_interp::detail::ProgramView view;
+    view.fns.emplace(runtime_fn, &fn);
+    view.constraint_enum_name = constraint_name;
+
+    cstc::tyir_interp::detail::TypeSubstitution substitution;
+    substitution.emplace(generic_name, runtime_constraint_ty);
+    const auto result = cstc::tyir_interp::detail::evaluate_constraint(expr, substitution, view);
+    assert(result.kind == cstc::tyir_interp::ConstraintEvalKind::RuntimeOnly);
+}
+
+static void test_direct_generic_runtime_result_call_reclassifies_after_substitution() {
+    SymbolSession session;
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const Symbol runtime_fn = Symbol::intern("runtime_constraint");
+    const Symbol generic_name = Symbol::intern("T");
+    const Ty generic_ty = generic_copy_ty(generic_name);
+    const Ty constraint_ty = ty::named(constraint_name, constraint_name, ValueSemantics::Copy);
+    Ty runtime_constraint_ty = constraint_ty;
+    runtime_constraint_ty.is_runtime = true;
+
+    TyBlock body;
+    body.ty = constraint_ty;
+    body.tail =
+        make_ty_expr({}, EnumVariantRef{constraint_name, Symbol::intern("Valid")}, constraint_ty);
+
+    TyFnDecl fn{
+        .name = runtime_fn,
+        .generic_params = {{generic_name, {}}},
+        .params = {},
+        .return_ty = generic_ty,
+        .body = std::make_shared<TyBlock>(std::move(body)),
+        .span = {},
+        .is_runtime = false,
+        .where_clause = {},
+        .lowered_where_clause = {},
+        .param_availability = {},
+        .result_availability = {},
+        .internal_runtime_evidence = std::nullopt,
+    };
+
+    auto expr = make_ty_expr({}, TyCall{runtime_fn, {generic_ty}, {}}, constraint_ty);
+
+    cstc::tyir_interp::detail::ProgramView view;
+    view.fns.emplace(runtime_fn, &fn);
+    view.constraint_enum_name = constraint_name;
+
+    cstc::tyir_interp::detail::TypeSubstitution substitution;
+    substitution.emplace(generic_name, runtime_constraint_ty);
+    const auto result = cstc::tyir_interp::detail::evaluate_constraint(expr, substitution, view);
+    assert(result.kind == cstc::tyir_interp::ConstraintEvalKind::RuntimeOnly);
+}
+
+static void test_deferred_generic_trusted_extern_call_reclassifies_after_substitution() {
+    SymbolSession session;
+    const Symbol constraint_name = Symbol::intern("Constraint");
+    const Symbol trusted_fn = Symbol::intern("trusted_constraint");
+    const Ty constraint_ty = ty::named(constraint_name, constraint_name, ValueSemantics::Copy);
+
+    TyExternFnDecl decl{
+        .abi = Symbol::intern("lang"),
+        .name = trusted_fn,
+        .link_name = Symbol::intern("cstc_std_constraint"),
+        .params = {TyParam{
+            Symbol::intern("value"), ty::bool_(), {}, ParamRequirement::RuntimeAllowed}},
+        .return_ty = constraint_ty,
+        .span = {},
+        .is_runtime = false,
+        .runtime_authority = RuntimeAuthority::TrustedExtern,
+        .param_availability = {},
+        .result_availability = {},
+        .internal_runtime_evidence = std::nullopt,
+    };
+
+    TyDeferredGenericCall deferred;
+    deferred.fn_name = trusted_fn;
+    deferred.args.push_back(make_ty_expr(
+        {}, TyLiteral{TyLiteral::Kind::Bool, kInvalidSymbol, true}, ty::bool_(),
+        availability_ct()));
+    auto expr = make_ty_expr({}, std::move(deferred), constraint_ty);
+
+    cstc::tyir_interp::detail::ProgramView view;
+    view.extern_fns.emplace(trusted_fn, &decl);
+    view.constraint_enum_name = constraint_name;
+
+    const auto result = cstc::tyir_interp::detail::evaluate_constraint(expr, {}, view);
+    assert(result.kind == cstc::tyir_interp::ConstraintEvalKind::RuntimeOnly);
+}
+
 static void test_generic_where_runtime_loop_reports_runtime_only() {
     SymbolSession session;
     const auto error = must_fail_to_lower_with_constraint_prelude(R"(
@@ -3328,8 +3653,10 @@ int main() {
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
     test_plain_call_with_runtime_argument_remains_in_tyir();
+    test_ignored_runtime_argument_keeps_same_callee_barrier();
     test_runtime_result_call_with_ct_argument_remains_in_tyir();
     test_rt_available_call_with_foldable_argument_remains_in_tyir();
+    test_runtime_extern_call_remains_runtime_barrier();
     test_null_evidence_rt_call_remains_in_tyir();
     test_runtime_block_folds_pure_inner_expression();
     test_runtime_block_preserves_runtime_call_boundary();
@@ -3338,6 +3665,7 @@ int main() {
     test_runtime_block_stmt_with_null_body_still_falls_through();
     test_plain_type_runtime_availability_is_preserved();
     test_folded_if_recomputes_availability_after_erasing_runtime_branch();
+    test_folded_call_recomputes_residue_after_erasing_runtime_argument();
     test_folded_for_recomputes_availability_with_reachability();
     test_control_children_recompute_availability_with_reachability();
     test_folded_operands_recompute_availability_with_reachability();
@@ -3438,6 +3766,10 @@ int main() {
     test_generic_where_parameter_references_are_rejected_while_lowering();
     test_generic_where_runtime_call_reports_runtime_only();
     test_decl_generic_runtime_result_call_fails_after_substitution();
+    test_decl_generic_trusted_extern_call_preserves_barrier_after_substitution();
+    test_deferred_generic_runtime_result_call_reclassifies_after_substitution();
+    test_direct_generic_runtime_result_call_reclassifies_after_substitution();
+    test_deferred_generic_trusted_extern_call_reclassifies_after_substitution();
     test_generic_where_runtime_loop_reports_runtime_only();
     test_generic_where_runtime_while_reports_runtime_only();
     test_unused_generic_where_is_deferred_until_instantiation();

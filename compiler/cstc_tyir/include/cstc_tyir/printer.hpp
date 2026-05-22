@@ -87,6 +87,18 @@ inline void indent(std::ostringstream& out, std::size_t level) {
     return " [runtime-authority: " + std::string(runtime_authority_name(authority)) + "]";
 }
 
+[[nodiscard]] inline std::string_view call_residue_name(CallResidue residue) {
+    switch (residue) {
+    case CallResidue::CtEligible: return "ct-eligible";
+    case CallResidue::RuntimeBarrier: return "runtime-barrier";
+    }
+    return "?";
+}
+
+[[nodiscard]] inline std::string call_residue_suffix(CallResidue residue) {
+    return " [call-residue: " + std::string(call_residue_name(residue)) + "]";
+}
+
 [[nodiscard]] inline std::string expr_type_summary(const TyExprPtr& expr) {
     return expr->ty.display() + availability_suffix(expr->availability);
 }
@@ -243,8 +255,9 @@ inline void print_ty_expr(std::ostringstream& out, const TyExprPtr& expr, std::s
                 print_ty_expr(out, node.base, level + 1);
             } else if constexpr (std::is_same_v<N, TyCall>) {
                 indent(out, level);
+                const std::string residue = call_residue_suffix(call_residue_for_expr(*expr, node));
                 out << "TyCall(" << node.fn_name.as_str() << "): " << expr_type_summary(expr)
-                    << "\n";
+                    << residue << "\n";
                 if (!node.generic_args.empty()) {
                     indent(out, level + 1);
                     out << "GenericArgs\n";
