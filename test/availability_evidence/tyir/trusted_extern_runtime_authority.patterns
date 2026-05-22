@@ -1,0 +1,6 @@
+# source: test/e2e/pass/runtime/trusted_extern_runtime_authority.cst
+# out-type: tyir
+# rule: trusted_extern_runtime_authority
+TyExternFnDecl "lang" __cst_mod_1__time() -> runtime num [runtime-authority: trusted-extern] [availability-signature: params=[], result=RT, internal-rt=runtime-result declaration]
+TyFnDecl main() -> Unit [runtime-authority: none] [availability-signature: params=[], result=RT, internal-rt=trusted runtime extern]
+TyCall(__cst_mod_1__time): runtime num [availability: runtime] [call-residue: runtime-barrier]

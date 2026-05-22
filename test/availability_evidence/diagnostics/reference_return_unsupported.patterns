@@ -1,0 +1,5 @@
+# source: test/e2e/fail_compile/type_errors/reference_return_unsupported.cst
+# rule: reference_return_unsupported
+reference return types are not supported
+fn view(value: &num) -> &num {
+reference return types are not supported

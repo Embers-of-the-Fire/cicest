@@ -1,0 +1,5 @@
+# source: test/e2e/fail_compile/type_errors/reference_struct_field_unsupported.cst
+# rule: reference_struct_field_unsupported
+reference fields are not supported in structs
+value: &num,
+reference fields are not supported in structs

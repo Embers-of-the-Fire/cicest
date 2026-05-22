@@ -1,0 +1,9 @@
+# source: test/e2e/pass/runtime/runtime_authority_boundaries.cst
+# out-type: tyir
+# rule: runtime_authority_boundaries
+TyExternFnDecl "lang" __cst_mod_1__time() -> runtime num [runtime-authority: trusted-extern] [availability-signature: params=[], result=RT, internal-rt=runtime-result declaration]
+TyFnDecl ordinary_runtime_result() -> runtime num [runtime-authority: none] [availability-signature: params=[], result=RT, internal-rt=runtime-result declaration]
+TyFnDecl source_boundary() -> runtime num [runtime-authority: source-boundary] [availability-signature: params=[], result=RT, internal-rt=runtime function boundary]
+TyCall(ordinary_runtime_result): runtime num [availability: runtime] [call-residue: runtime-barrier]
+TyCall(source_boundary): runtime num [availability: runtime] [call-residue: runtime-barrier]
+TyCall(__cst_mod_1__time): runtime num [availability: runtime] [call-residue: runtime-barrier]
