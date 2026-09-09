@@ -7,6 +7,8 @@ TyFnDecl mk_window<T>(primary: T, fallback: T, limit: !runtime num) -> Window<T>
 Let static_window: Window<num> =
 TyStructInit(Window): Window<num>
 TyLiteral(8): num
+Let static_value: num =
+TyLiteral(8): num
 Let dynamic_window: runtime Window<num> =
 TyCall(mk_window): runtime Window<num>
 TyCall(checked_limit): runtime num
