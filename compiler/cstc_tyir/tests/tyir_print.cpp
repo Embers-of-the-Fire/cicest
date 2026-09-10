@@ -265,7 +265,7 @@ static void test_print_ct_required_parameter() {
     prog.items.push_back(std::move(fn));
 
     const std::string out = format_program(prog);
-    assert(contains(out, "TyFnDecl reserve(count: !runtime num) -> num"));
+    assert(contains(out, "TyFnDecl reserve(count: const num) -> num"));
 }
 
 static void test_print_symbolic_fn_availability_signature() {

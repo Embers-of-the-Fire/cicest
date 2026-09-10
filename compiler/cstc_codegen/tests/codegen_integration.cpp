@@ -247,7 +247,7 @@ runtime extern "lang" fn print(value: &str);
 
 fn main() {
     let rendered: str = to_str(42);
-    print(&rendered);
+    runtime { print(&rendered); };
 }
 )");
     assert(ir_contains(ir, "%cstc.str = type { ptr, i64, i8 }"));

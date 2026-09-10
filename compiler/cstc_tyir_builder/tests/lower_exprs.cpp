@@ -285,10 +285,65 @@ static void test_runtime_result_call_with_ct_args_is_runtime_barrier() {
 static void test_runtime_extern_call_is_runtime_barrier() {
     const auto prog = must_lower(
         "runtime extern \"lang\" fn poll() -> num;"
-        "fn main() -> runtime num { poll() }");
-    const auto& call = std::get<TyCall>((*first_fn(prog).body->tail)->node);
+        "fn main() -> runtime num { runtime { poll() } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    const auto& runtime_block = std::get<TyRuntimeBlock>(tail->node);
+    assert(runtime_block.body->tail.has_value());
+    const auto& call = std::get<TyCall>((*runtime_block.body->tail)->node);
     assert(call.residue == CallResidue::RuntimeBarrier);
     assert(call.fn_name == Symbol::intern("poll"));
+}
+
+static void test_runtime_extern_call_outside_boundary_is_rejected() {
+    must_fail_with_message(
+        "runtime extern \"lang\" fn poll() -> num;"
+        "fn main() -> runtime num { poll() }",
+        "runtime-only extern 'poll' must be called inside a `runtime { ... }` block");
+}
+
+static void test_runtime_extern_boundary_error_cites_enclosing_contract() {
+    must_fail_with_message(
+        "runtime extern \"lang\" fn poll() -> num;"
+        "fn fetch(retries: const num) -> num { poll() }",
+        "enclosing function 'fetch' with contract 'fetch(retries: const num) -> num'");
+}
+
+static void test_runtime_block_authorization_does_not_leak() {
+    must_fail_with_message(
+        "runtime extern \"lang\" fn poll() -> num;"
+        "fn main() -> num { runtime { poll() }; poll() }",
+        "runtime-only extern 'poll' must be called inside a `runtime { ... }` block");
+}
+
+static void test_runtime_fn_body_is_authorized_by_declaration() {
+    // `runtime fn f() -> T { body }` desugars to `fn f() -> runtime T {
+    // runtime { body } }`, so runtime-only externs are callable directly.
+    const auto prog = must_lower(
+        "runtime extern \"lang\" fn poll() -> num;"
+        "runtime fn fetch() -> num { poll() }");
+    const auto& call = std::get<TyCall>((*first_fn(prog).body->tail)->node);
+    assert(call.fn_name == Symbol::intern("poll"));
+    assert(call.residue == CallResidue::RuntimeBarrier);
+}
+
+static void test_runtime_return_type_alone_does_not_authorize_body() {
+    // `fn f() -> runtime T` without the `runtime fn` prefix only qualifies the
+    // result; the body is still checked in mode P.
+    must_fail_with_message(
+        "runtime extern \"lang\" fn poll() -> num;"
+        "fn fetch() -> runtime num { poll() }",
+        "runtime-only extern 'poll' must be called inside a `runtime { ... }` block");
+}
+
+static void test_runtime_extern_call_inside_boundary_in_runtime_fn_is_accepted() {
+    const auto prog = must_lower(
+        "runtime extern \"lang\" fn poll() -> num;"
+        "runtime fn fetch() -> num { runtime { poll() } }");
+    const auto& tail = *first_fn(prog).body->tail;
+    const auto& runtime_block = std::get<TyRuntimeBlock>(tail->node);
+    const auto& call = std::get<TyCall>((*runtime_block.body->tail)->node);
+    assert(call.fn_name == Symbol::intern("poll"));
+    assert(call.residue == CallResidue::RuntimeBarrier);
 }
 
 static void test_ignored_runtime_argument_prevents_direct_call_result_demotion() {
@@ -324,7 +379,8 @@ static void test_runtime_result_call_with_unreachable_arg_stays_runtime_barrier(
         "fn f() -> runtime num { sink((return 1)) }");
     const auto& body = *second_fn(prog).body;
     assert(body.ty == ty::never());
-    assert(body.availability.kind == AvailabilityKind::Ct);
+    // The body is stamped runtime by the runtime-result declaration; the
+    // unreachable argument must not weaken the call's residue classification.
     const TyCall& call = std::get<TyCall>((*body.tail)->node);
     assert(call.residue == CallResidue::RuntimeBarrier);
 }
@@ -332,11 +388,14 @@ static void test_runtime_result_call_with_unreachable_arg_stays_runtime_barrier(
 static void test_runtime_extern_call_with_unreachable_arg_stays_runtime_barrier() {
     const auto prog = must_lower(
         "runtime extern \"lang\" fn sink(value: num);"
-        "fn f() -> num { sink((return 1)) }");
+        "fn f() -> num { runtime { sink((return 1)) } }");
     const auto& body = *first_fn(prog).body;
     assert(body.ty == ty::never());
-    assert(body.availability.kind == AvailabilityKind::Ct);
-    const TyCall& call = std::get<TyCall>((*body.tail)->node);
+    const auto& runtime_block = std::get<TyRuntimeBlock>((*body.tail)->node);
+    const TyBlock& inner = *runtime_block.body;
+    assert(inner.ty == ty::never());
+    assert(inner.availability.kind == AvailabilityKind::Ct);
+    const TyCall& call = std::get<TyCall>((*inner.tail)->node);
     assert(call.residue == CallResidue::RuntimeBarrier);
 }
 
@@ -1815,6 +1874,12 @@ int main() {
     test_ignored_runtime_argument_lifts_direct_call_result();
     test_runtime_result_call_with_ct_args_is_runtime_barrier();
     test_runtime_extern_call_is_runtime_barrier();
+    test_runtime_extern_call_outside_boundary_is_rejected();
+    test_runtime_extern_boundary_error_cites_enclosing_contract();
+    test_runtime_block_authorization_does_not_leak();
+    test_runtime_fn_body_is_authorized_by_declaration();
+    test_runtime_return_type_alone_does_not_authorize_body();
+    test_runtime_extern_call_inside_boundary_in_runtime_fn_is_accepted();
     test_ignored_runtime_argument_prevents_direct_call_result_demotion();
     test_plain_call_lifted_result_still_prevents_return_demotion();
     test_call_unreachable_arg_does_not_taint_plain_result();

@@ -1,5 +1,8 @@
 {
   description = "Cicest Lang dev environment";
+
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+
   outputs =
     { self, nixpkgs }:
     let
@@ -8,14 +11,15 @@
         inherit system;
         config.allowUnfree = true;
       };
+      llvm = pkgs.llvmPackages_22;
       llvm-dependencies = with pkgs; [
-        llvmPackages_latest.llvm
-        llvmPackages_latest.llvm.dev
-        llvmPackages_latest.lld
-        llvmPackages_latest.bintools
-        llvmPackages_latest.libcxx
-        llvmPackages_latest.compiler-rt
-        llvmPackages_latest.libunwind
+        llvm.llvm
+        llvm.llvm.dev
+        llvm.lld
+        llvm.bintools
+        llvm.libcxx
+        llvm.compiler-rt
+        llvm.libunwind
         zlib
         zlib.dev
         libxml2
@@ -30,8 +34,8 @@
         cmake
         gnumake
         ninja
-        llvmPackages_latest.clang
-        llvmPackages_latest.clang-tools
+        llvm.clang
+        llvm.clang-tools
         patchelf
         pkg-config
       ];
@@ -117,6 +121,43 @@
               '';
             }
           }/bin/prerelease-bundle";
+        };
+        # Prints the exact toolchain versions used by the lint/format pipeline;
+        # useful when diagnosing toolchain crashes.
+        toolchain-versions = {
+          type = "app";
+          program = "${
+            pkgs.writeShellApplication {
+              name = "toolchain-versions";
+              runtimeInputs = make-dependencies;
+              text = ''
+                clang --version | head -n1
+                clangd --version | head -n1
+                clang-tidy --version | head -n1
+                clang-format --version | head -n1
+              '';
+            }
+          }/bin/toolchain-versions";
+        };
+        # Formats all tracked C/C++ sources in place with the flake's
+        # clang-format. Pass --dry-run to check instead of rewriting.
+        format = {
+          type = "app";
+          program = "${
+            pkgs.writeShellApplication {
+              name = "format";
+              runtimeInputs = make-dependencies ++ [ pkgs.git ];
+              text = ''
+                if [[ "''${1:-}" == "--dry-run" ]]; then
+                  git ls-files '*.h' '*.hh' '*.hpp' '*.c' '*.cc' '*.cpp' '*.cxx' |
+                    xargs clang-format --dry-run --Werror
+                else
+                  git ls-files '*.h' '*.hh' '*.hpp' '*.c' '*.cc' '*.cpp' '*.cxx' |
+                    xargs clang-format -i
+                fi
+              '';
+            }
+          }/bin/format";
         };
       };
 

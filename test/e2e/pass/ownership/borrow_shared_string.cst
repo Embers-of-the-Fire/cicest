@@ -1,6 +1,8 @@
 fn show_pair(left: &str, right: &str) {
-    println(left);
-    println(right);
+    runtime {
+        println(left);
+        println(right);
+    };
 }
 
 fn main() {
@@ -9,5 +11,5 @@ fn main() {
     let right: &str = &rendered;
 
     show_pair(left, right);
-    println(&rendered);
+    runtime { println(&rendered); };
 }

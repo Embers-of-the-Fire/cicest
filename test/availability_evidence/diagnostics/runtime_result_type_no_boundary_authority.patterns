@@ -1,0 +1,5 @@
+# source: test/e2e/fail_compile/type_errors/runtime_result_type_no_boundary_authority.cst
+# rule: runtime_result_type_does_not_authorize_body
+runtime-only extern 'time' must be called inside a `runtime { ... }` block
+enclosing function 'fetch' with contract 'fetch() -> runtime num'
+does not authorize runtime-only actions

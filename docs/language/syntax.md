@@ -165,6 +165,13 @@ Notes:
   `fn f() -> runtime num { runtime { 1 } }`. TyIR also preserves the
   declaration-level runtime bit for const-eval rather than necessarily printing a
   synthetic whole-body `runtime` block.
+- Authorization follows the same rule: entering a `runtime { ... }` block grants
+  permission to call runtime-only externs (mode R), and the check is enforced —
+  a runtime-only extern call in mode P is a compile error that cites the
+  enclosing declaration's contract. Because the `runtime fn` sugar wraps the
+  body in a runtime block, a `runtime fn` body is authorized; a plain function
+  whose return type is merely runtime-qualified (`fn f() -> runtime T`) is not,
+  and must wrap runtime-only calls in an explicit `runtime { ... }` block.
 - `runtime extern ... fn` has no source body, so it only wraps the extern return
   type in `runtime` and marks the binding as runtime-qualified.
 - `pub` marks a top-level item or import as exportable from its module.
@@ -223,10 +230,12 @@ Ownership notes:
   can remain compile-time-available when the existing lifetime checks accept it.
 - Reference types are currently restricted to local bindings and function
   parameters; they are not valid in struct fields or return positions.
-- `const` and `!runtime` mark CT-required function parameters and explicit local
-  annotations only. CT-required function return types, CT-required struct fields,
-  and nested CT-required positions such as `&!runtime T` or `Box<const T>` are
-  unsupported.
+- `const` marks CT-required function parameters and explicit local annotations
+  only. `!runtime` is a deprecated alias for `const` in these positions; it is
+  still accepted but the parser emits a deprecation warning, and all diagnostics
+  and IR output print the canonical `const` spelling. CT-required function
+  return types, CT-required struct fields, and nested CT-required positions such
+  as `&const T` or `Box<const T>` are unsupported.
 - Mutable references, heap allocation, and alias-sensitive availability are not
   part of the current language boundary.
 
@@ -449,7 +458,7 @@ an explicit runtime boundary when the runtime behavior is intentional.
 Inside a declaration body, an ordinary plain parameter keeps its plain type shape
 but carries symbolic runtime-allowed dependence. This lets the helper body type as
 plain for the all-static instantiation while still preventing that parameter from
-satisfying a `!runtime`/`const` requirement unless the requirement is explicit on
+satisfying a `const` requirement unless the requirement is explicit on
 the parameter or local being forwarded.
 
 ## 7. Valid Syntax Examples

@@ -1,5 +1,5 @@
 fn main() {
     let key: &str = "PATH";
-    let value: runtime str = env(key);
+    let value: runtime str = runtime { env(key) };
     let _ = value;
 }

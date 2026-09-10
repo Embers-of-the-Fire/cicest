@@ -594,6 +594,15 @@ struct LowerCtx {
     /// Stack of enclosing loops (innermost at back).
     std::vector<LoopCtx> loop_stack;
 
+    /// Authorization mode: true while lowering inside a `runtime { ... }`
+    /// block (mode R in the calculus); false elsewhere (mode P). Runtime-only
+    /// externs may only be called while authorized.
+    bool runtime_authorized = false;
+
+    /// Human-readable description of the enclosing declaration and its
+    /// contract, cited by authorization diagnostics.
+    std::string authorization_context;
+
     /// Returns true when we are inside at least one loop form.
     [[nodiscard]] bool in_loop() const { return !loop_stack.empty(); }
 
@@ -1062,6 +1071,27 @@ struct LowerCtx {
 template <typename Decl>
 [[nodiscard]] static std::string display_decl_name(const Decl& decl) {
     return display_symbol(decl.display_name, decl.name);
+}
+
+/// Renders a declaration's contract in surface syntax (`name(p: const num, ...) -> T`),
+/// cited by diagnostics that must reference the enclosing declaration's contract.
+[[nodiscard]] static std::string
+    fn_contract_display(std::string_view display_name, const FnSignature& sig) {
+    std::string rendered = std::string(display_name) + "(";
+    for (std::size_t i = 0; i < sig.param_types.size(); ++i) {
+        if (i > 0)
+            rendered += ", ";
+        if (i < sig.param_names.size() && sig.param_names[i].is_valid()) {
+            rendered += sig.param_names[i].as_str();
+            rendered += ": ";
+        }
+        if (i < sig.param_requirements.size()
+            && sig.param_requirements[i] == tyir::ParamRequirement::CtRequired)
+            rendered += "const ";
+        rendered += sig.param_types[i].display();
+    }
+    rendered += ") -> " + sig.return_ty.display();
+    return rendered;
 }
 
 [[nodiscard]] static tyir::ValueSemantics primitive_semantics(tyir::TyKind kind) {
@@ -1548,13 +1578,13 @@ static void recompute_block_summary(tyir::TyBlock& block);
 [[nodiscard]] static std::expected<FnSignature, LowerError> resolve_fn_signature(
     const std::vector<ast::Param>& params, const std::optional<ast::TypeRef>& return_type,
     cstc::span::SourceSpan span, const TypeEnv& env, bool is_runtime,
-    tyir::RuntimeAuthority runtime_authority,
+    tyir::RuntimeAuthority boundary_authority,
     const std::vector<ast::GenericParam>& generic_params = {}) {
     FnSignature sig;
     sig.span = span;
     sig.generic_params = generic_params;
     sig.has_explicit_return_type = return_type.has_value();
-    sig.runtime_authority = runtime_authority;
+    sig.runtime_authority = tyir::RuntimeAuthority::None;
     const GenericParamSet generic_param_set = make_generic_param_set(generic_params);
     if (return_type.has_value()) {
         auto t = lower_type(*return_type, env, span, generic_param_set);
@@ -1582,7 +1612,11 @@ static void recompute_block_summary(tyir::TyBlock& block);
             parameter_signature_availability(*pt, requirement, sig.param_availability.size()));
     }
     if (type_has_runtime_dependency(sig.return_ty)) {
+        // `runtime fn f() -> T` and `fn f() -> runtime T` are the same
+        // declaration: both grant the boundary authority and fix the result
+        // contract at RT.
         sig.result_availability = tyir::availability_expr_rt();
+        sig.runtime_authority = boundary_authority;
         sig.internal_runtime_evidence = runtime_evidence_at(span, "runtime-result declaration");
     } else {
         sig.result_availability = tyir::availability_expr_ct();
@@ -1957,7 +1991,10 @@ struct ParamReferenceVisitor {
             if (!expr->ty.is_never())
                 expr->ty.is_runtime = true;
         }
-        tyir::set_availability(*expr, runtime_availability_at(expr->span, "runtime block"));
+        if (expr->ty.is_never())
+            tyir::set_availability(*expr, runtime_block->body->availability);
+        else
+            tyir::set_availability(*expr, runtime_availability_at(expr->span, "runtime block"));
         return expr;
     }
 
@@ -2171,7 +2208,10 @@ struct ParamReferenceVisitor {
         const std::vector<cstc::ast::GenericParam>& generic_params = {},
         const std::vector<tyir::TyParam>* params = nullptr,
         const tyir::Ty& current_return_ty = tyir::ty::unit()) {
-    LowerCtx ctx{env, {}, make_generic_param_set(generic_params), false, current_return_ty, {}};
+    LowerCtx ctx{
+        env, {}, make_generic_param_set(generic_params), false, current_return_ty, {}, false, {},
+    };
+    ctx.authorization_context = "the enclosing where clause";
     ctx.scope.push();
     for (const cstc::ast::GenericConstraint& constraint : constraints) {
         auto invalid_return = find_return_in_where_expr(constraint.expr);
@@ -3225,6 +3265,17 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
                 const FnSignature& sig = ctx.env.fn_signatures.at(fn_name);
 
+                // T-Prim: runtime-only externs are only callable in mode R,
+                // i.e. under a covering `runtime { ... }` block.
+                if (sig.runtime_authority == tyir::RuntimeAuthority::TrustedExtern
+                    && !ctx.runtime_authorized) {
+                    return make_error(
+                        expr->span, "runtime-only extern '" + display_fn_name
+                                        + "' must be called inside a `runtime { ... }` block: "
+                                        + ctx.authorization_context
+                                        + " does not authorize runtime-only actions");
+                }
+
                 std::vector<tyir::TyExprPtr> lowered_args;
                 lowered_args.reserve(node.args.size());
                 std::vector<std::size_t> temp_borrows;
@@ -3366,17 +3417,28 @@ static std::expected<void, LowerError> merge_loop_break_types(
 
             // ── runtime { ... } block ─────────────────────────────────────
             else if constexpr (std::is_same_v<N, ast::RuntimeExpr>) {
+                // T-Boundary: entering the block switches to mode R and stamps
+                // the block's result RT.
+                const bool was_authorized = ctx.runtime_authorized;
+                ctx.runtime_authorized = true;
                 auto block = lower_block(*node.body, ctx);
+                ctx.runtime_authorized = was_authorized;
                 if (!block)
                     return std::unexpected(std::move(block.error()));
                 tyir::Ty result_ty = block->ty;
                 if (!result_ty.is_never())
                     result_ty.is_runtime = true;
+                // A diverging block yields no value, so — as with calls whose
+                // arguments cannot fall through — it does not taint the
+                // enclosing expression.
+                tyir::Availability block_availability =
+                    result_ty.is_never() ? block->availability
+                                         : runtime_availability_at(expr->span, "runtime block");
                 auto block_ptr = std::make_shared<tyir::TyBlock>(std::move(*block));
                 return LoweredExpr{
                     tyir::make_ty_expr(
                         expr->span, tyir::TyRuntimeBlock{std::move(block_ptr)}, result_ty,
-                        runtime_availability_at(expr->span, "runtime block")),
+                        block_availability),
                     {},
                     std::nullopt,
                 };
@@ -3908,8 +3970,14 @@ static std::expected<void, LowerError> merge_loop_break_types(
                 sig.param_requirements[i]});
 
     LowerCtx ctx{
-        env, {}, make_generic_param_set(fn.generic_params), false, sig.return_ty, {},
+        env, {}, make_generic_param_set(fn.generic_params), false, sig.return_ty, {}, false, {},
     };
+    ctx.authorization_context = "enclosing function '" + display_decl_name(fn) + "' with contract '"
+                              + fn_contract_display(display_decl_name(fn), sig) + "'";
+    // `runtime fn f() -> T { body }` is sugar for
+    // `fn f() -> runtime T { runtime { body } }`: the prefix grants the body
+    // mode R. A plain `-> runtime T` return type carries no authorization.
+    ctx.runtime_authorized = fn.is_runtime;
     ctx.scope.push();
     for (std::size_t index = 0; index < ty_params.size(); ++index) {
         const tyir::TyParam& p = ty_params[index];
@@ -3959,11 +4027,14 @@ static std::expected<void, LowerError> merge_loop_break_types(
                                + "' may fall through without returning a value of type '"
                                + sig.return_ty.display() + "'");
 
-    if (fn.is_runtime) {
+    if (sig.return_ty.is_runtime) {
+        // `runtime fn f() -> T` and `fn f() -> runtime T` are the same
+        // declaration; both stamp the body with the runtime-result evidence.
+        // The body's own evidence stays primary when it already has one.
         const tyir::Availability boundary_availability =
-            runtime_availability_at(fn.span, "runtime function boundary");
+            runtime_availability_at(fn.span, "runtime-result declaration");
         const tyir::Availability body_availability =
-            tyir::availability_join(boundary_availability, body->availability);
+            tyir::availability_join(body->availability, boundary_availability);
         tyir::set_availability(*body, body_availability);
     }
 
@@ -3990,7 +4061,7 @@ static std::expected<void, LowerError> merge_loop_break_types(
     lowered_fn.return_ty = sig.return_ty;
     lowered_fn.body = std::move(body_ptr);
     lowered_fn.span = fn.span;
-    lowered_fn.is_runtime = fn.is_runtime;
+    lowered_fn.is_runtime = sig.return_ty.is_runtime;
     lowered_fn.runtime_authority = sig.runtime_authority;
     lowered_fn.where_clause = fn.where_clause;
     lowered_fn.lowered_where_clause = std::move(*lowered_constraints);
@@ -4144,9 +4215,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
         if (const auto* fn = std::get_if<ast::FnDecl>(&item)) {
             auto sig = detail::resolve_fn_signature(
                 fn->params, fn->return_type, fn->span, env, fn->is_runtime,
-                fn->is_runtime ? tyir::RuntimeAuthority::SourceBoundary
-                               : tyir::RuntimeAuthority::None,
-                fn->generic_params);
+                tyir::RuntimeAuthority::SourceBoundary, fn->generic_params);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(fn->name, std::move(*sig));
@@ -4163,8 +4232,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             // Build a signature from the extern fn declaration.
             auto sig = detail::resolve_fn_signature(
                 ext_fn->params, ext_fn->return_type, ext_fn->span, env, ext_fn->is_runtime,
-                ext_fn->is_runtime ? tyir::RuntimeAuthority::TrustedExtern
-                                   : tyir::RuntimeAuthority::None);
+                tyir::RuntimeAuthority::TrustedExtern);
             if (!sig)
                 return std::unexpected(std::move(sig.error()));
             const auto insert_result = env.fn_signatures.emplace(ext_fn->name, std::move(*sig));
@@ -4255,7 +4323,7 @@ std::expected<tyir::TyProgram, LowerError> lower_program(const ast::Program& pro
             ty_decl.link_name = *link_name;
             ty_decl.return_ty = sig.return_ty;
             ty_decl.span = ext_fn->span;
-            ty_decl.is_runtime = ext_fn->is_runtime;
+            ty_decl.is_runtime = sig.return_ty.is_runtime;
             ty_decl.runtime_authority = sig.runtime_authority;
             ty_decl.param_availability = sig.param_availability;
             ty_decl.result_availability = sig.result_availability;

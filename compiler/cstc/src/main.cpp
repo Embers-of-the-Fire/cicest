@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -48,11 +49,12 @@ struct Options {
     std::optional<std::string> linker;
     std::vector<EmitKind> emits;
     bool show_help = false;
+    bool time_phases = false;
 };
 
 [[nodiscard]] std::string usage() {
     return "Usage: cstc <input-file> [-o <output-stem>] [--module-name <module>] "
-           "[--emit <asm|obj|exe|all>] [--linker <linker>]";
+           "[--emit <asm|obj|exe|all>] [--linker <linker>] [--time-phases]";
 }
 
 void add_emit_kind(std::vector<EmitKind>& emits, EmitKind emit_kind) {
@@ -138,6 +140,11 @@ void parse_and_add_emit(std::vector<EmitKind>& emits, std::string_view emit_valu
             if (index + 1 >= argc)
                 throw std::runtime_error("missing value for --linker\n" + usage());
             options.linker = std::string(argv[++index]);
+            continue;
+        }
+
+        if (arg == "--time-phases") {
+            options.time_phases = true;
             continue;
         }
 
@@ -371,16 +378,35 @@ void link_object_to_executable(
 }
 
 void compile_file(const Options& options) {
+    using Clock = std::chrono::steady_clock;
+    const auto phase_ms = [](Clock::time_point begin, Clock::time_point end) {
+        return std::chrono::duration<double, std::milli>(end - begin).count();
+    };
+    const auto report_phase = [&options](std::string_view phase, double ms) {
+        if (options.time_phases)
+            std::cerr << "phase," << phase << ',' << ms << '\n';
+    };
+    const auto compile_start = Clock::now();
+
     cstc::symbol::SymbolSession session;
     cstc::span::SourceMap source_map;
-    const cstc::ast::Program merged =
-        cstc::cli_support::load_module_program(source_map, options.input_path, CICEST_STD_PATH);
+    const auto parse_start = Clock::now();
+    std::vector<cstc::parser::ParseWarning> warnings;
+    const cstc::ast::Program merged = cstc::cli_support::load_module_program(
+        source_map, options.input_path, CICEST_STD_PATH, &warnings);
+    report_phase("parse_modules", phase_ms(parse_start, Clock::now()));
+    if (!warnings.empty())
+        std::cerr << cstc::cli_support::format_parse_warnings(source_map, warnings);
 
+    const auto lower_start = Clock::now();
     const auto tyir = cstc::cli_support::lower_and_fold_program(source_map, merged);
+    report_phase("lower_fold", phase_ms(lower_start, Clock::now()));
     if (!tyir.has_value())
         throw std::runtime_error(tyir.error());
 
+    const auto lir_start = Clock::now();
     const auto lir = cstc::lir_builder::lower_program(*tyir);
+    report_phase("lir", phase_ms(lir_start, Clock::now()));
     if (!lir.has_value())
         throw std::runtime_error(cstc::cli_support::format_lir_error(source_map, lir.error()));
 
@@ -394,6 +420,7 @@ void compile_file(const Options& options) {
     const bool emit_obj = has_emit(options, EmitKind::Obj);
     const bool emit_exe = has_emit(options, EmitKind::Exe);
 
+    const auto codegen_start = Clock::now();
     if (emit_asm) {
         cstc::codegen::emit_native_assembly(*lir, assembly_path, options.module_name);
         std::cout << "emitted " << assembly_path.string() << '\n';
@@ -406,11 +433,14 @@ void compile_file(const Options& options) {
         if (emit_obj)
             std::cout << "emitted " << object_path.string() << '\n';
     }
+    report_phase("codegen", phase_ms(codegen_start, Clock::now()));
 
     if (emit_exe) {
+        const auto link_start = Clock::now();
         const std::filesystem::path& executable_path = output_stem;
         link_object_to_executable(object_path, executable_path, options);
         std::cout << "emitted " << executable_path.string() << '\n';
+        report_phase("link", phase_ms(link_start, Clock::now()));
 
         if (!emit_obj) {
             std::error_code remove_error;
@@ -422,6 +452,7 @@ void compile_file(const Options& options) {
             }
         }
     }
+    report_phase("total", phase_ms(compile_start, Clock::now()));
 }
 
 } // namespace

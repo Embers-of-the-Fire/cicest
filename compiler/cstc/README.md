@@ -48,6 +48,11 @@ Flags:
 - `--emit <asm|obj|exe|all>`: choose output kinds (can be repeated)
   - when omitted, defaults to `exe`
 - `--linker <path>`: linker/driver executable used for `exe` output
+- `--time-phases`: print per-phase compile timings to stderr as CSV rows
+  (`phase,<name>,<milliseconds>`). Phases: `parse_modules`, `lower_fold`
+  (availability checking and const-eval folding), `lir`, `codegen`, `link`,
+  `total`. Used by the RQ4 checking-overhead harness
+  (`scripts/eval/rq4-compile-phases.sh`).
 - `-h`, `--help`: print usage
 
 If `-o/--output` is not provided, `cstc` emits artifacts next to the input

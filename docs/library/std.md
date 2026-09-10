@@ -74,7 +74,7 @@ Extern runtime functions still use the `extern` declaration syntax:
 
 | Component          | Description                                                                  |
 | ------------------ | ---------------------------------------------------------------------------- |
-| `runtime`          | Marks an extern function as runtime-backed; sugar for a `runtime` return type and preserved for const-eval |
+| `runtime`          | Marks an extern function as runtime-backed; sugar for a `runtime` return type and preserved for const-eval. Calls to runtime-only externs must appear inside a `runtime { ... }` block or a `runtime fn` body |
 | `extern`           | Keyword introducing an external declaration                                  |
 | `"lang"`           | ABI string literal — `"lang"` denotes the cicest language runtime            |
 | `fn` / `struct`    | Declares a function signature or opaque struct type                          |

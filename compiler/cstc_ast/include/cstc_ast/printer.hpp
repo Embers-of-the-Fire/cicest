@@ -124,7 +124,7 @@ inline void print_attributes(
     }
 
     if (type.requires_ct)
-        return "!runtime " + rendered;
+        return "const " + rendered;
     if (type.is_runtime)
         return "runtime " + rendered;
     return rendered;

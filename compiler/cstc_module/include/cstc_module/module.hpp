@@ -61,9 +61,15 @@ struct ModuleError {
         });
 }
 
+/// Loads the root module and its transitive imports and flattens them into a
+/// single crate-wide program.
+///
+/// When `warnings` is non-null, non-fatal parse diagnostics (such as
+/// deprecation warnings) from every loaded module are appended to it.
 [[nodiscard]] inline std::expected<cstc::ast::Program, ModuleError> load_program(
     cstc::span::SourceMap& source_map, const std::filesystem::path& root_path,
-    const std::filesystem::path& std_root_path);
+    const std::filesystem::path& std_root_path,
+    std::vector<cstc::parser::ParseWarning>* warnings = nullptr);
 
 } // namespace cstc::module
 
@@ -250,8 +256,10 @@ class Resolver {
 public:
     Resolver(
         cstc::span::SourceMap& source_map, const std::filesystem::path& root_path,
-        const std::filesystem::path& std_root_path)
+        const std::filesystem::path& std_root_path,
+        std::vector<cstc::parser::ParseWarning>* warnings = nullptr)
         : source_map_(source_map)
+        , warnings_(warnings)
         , std_dir_(cstc::resource_path::resolve_std_dir(std_root_path)) {
         root_path_ = cstc::resource_path::canonicalize_or_throw(root_path, "input file");
         prelude_path_ =
@@ -307,7 +315,7 @@ private:
             return make_error({}, "invalid source file id while loading module");
 
         const auto parsed =
-            cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
+            cstc::parser::parse_source_at(source_file->source, source_file->start_pos, warnings_);
         if (!parsed.has_value()) {
             return make_error(parsed.error().span, parsed.error().message);
         }
@@ -501,6 +509,16 @@ private:
         return {};
     }
 
+    /// Extracts the block that expression rewriting must descend into for both
+    /// `runtime { ... }` expressions and plain block expressions.
+    [[nodiscard]] static cstc::ast::BlockPtr rewritable_block(const cstc::ast::RuntimeExpr& expr) {
+        return expr.body;
+    }
+
+    [[nodiscard]] static cstc::ast::BlockPtr rewritable_block(const cstc::ast::BlockPtr& block) {
+        return block;
+    }
+
     class AstRewriter {
     public:
         explicit AstRewriter(const ModuleInfo& module)
@@ -687,8 +705,10 @@ private:
                             rewrite_expr(arg);
                     } else if constexpr (std::is_same_v<Node, cstc::ast::DeclExpr>) {
                         rewrite_expr(node.expr);
-                    } else if constexpr (std::is_same_v<Node, cstc::ast::BlockPtr>) {
-                        rewrite_block(node);
+                    } else if constexpr (
+                        std::is_same_v<Node, cstc::ast::RuntimeExpr>
+                        || std::is_same_v<Node, cstc::ast::BlockPtr>) {
+                        rewrite_block(rewritable_block(node));
                     } else if constexpr (std::is_same_v<Node, cstc::ast::IfExpr>) {
                         rewrite_expr(node.condition);
                         rewrite_block(node.then_block);
@@ -803,6 +823,7 @@ private:
     }
 
     cstc::span::SourceMap& source_map_;
+    std::vector<cstc::parser::ParseWarning>* warnings_ = nullptr;
     std::filesystem::path root_path_;
     std::filesystem::path std_dir_;
     std::filesystem::path prelude_path_;
@@ -819,9 +840,9 @@ namespace cstc::module {
 
 inline std::expected<cstc::ast::Program, ModuleError> load_program(
     cstc::span::SourceMap& source_map, const std::filesystem::path& root_path,
-    const std::filesystem::path& std_root_path) {
+    const std::filesystem::path& std_root_path, std::vector<cstc::parser::ParseWarning>* warnings) {
     try {
-        detail::Resolver resolver(source_map, root_path, std_root_path);
+        detail::Resolver resolver(source_map, root_path, std_root_path, warnings);
         return resolver.run();
     } catch (const std::exception& error) {
         return std::unexpected(ModuleError{{}, error.what()});

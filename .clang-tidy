@@ -50,6 +50,19 @@
 #   readability-convert-member-functions-to-static — too noisy (94 violations), style preference
 #   clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling — snprintf/memcpy are fine in C runtime
 #   clang-analyzer-security.ArrayBound     — false positive from LLVM header internals
+#
+# Newly introduced by the clang-tidy 22 toolchain upgrade (fire on long-standing
+# code; excluded to keep the upgrade a no-op for existing sources):
+#
+#   cppcoreguidelines-pro-bounds-avoid-unchecked-container-access — std::vector/array
+#       operator[] is pervasive and index validity is established locally (1431 violations)
+#   misc-use-internal-linkage                — detail-namespace types and the C runtime's
+#       exported symbols (runtime.c) are intentional
+#   misc-predictable-rand                    — test-only temporary-directory seeding
+#   readability-redundant-typename           — style preference
+#   readability-inconsistent-ifelse-braces   — project uses braceless single-line ifs
+#   bugprone-command-processor               — e2e test runner spawns the compiler driver
+#       as a subprocess intentionally
 
 Checks: >
   -*,
@@ -100,6 +113,12 @@ Checks: >
   -readability-duplicate-include,
   -readability-container-contains,
   -readability-convert-member-functions-to-static,
+  -cppcoreguidelines-pro-bounds-avoid-unchecked-container-access,
+  -misc-use-internal-linkage,
+  -misc-predictable-rand,
+  -readability-redundant-typename,
+  -readability-inconsistent-ifelse-braces,
+  -bugprone-command-processor,
 
 # All findings are hard failures.
 WarningsAsErrors: '*'

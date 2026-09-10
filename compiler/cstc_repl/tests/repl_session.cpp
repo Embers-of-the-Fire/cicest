@@ -308,7 +308,7 @@ void test_expression_statements_are_not_persisted() {
     TemporaryDirectory root("cstc-repl-test");
     cstc::repl::Session session({.session_root_dir = root.path(), .linker = std::nullopt});
 
-    const auto first = expect_success(session, R"(println("hello");)");
+    const auto first = expect_success(session, R"(runtime { println("hello"); };)");
     assert(first.stdout_output == "hello\n");
     assert(!first.state_changed);
 

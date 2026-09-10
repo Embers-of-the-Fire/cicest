@@ -50,4 +50,39 @@ namespace cstc::parser {
         });
 }
 
+/// Renders a non-fatal parse warning (for example deprecated syntax) in the same
+/// house style as parse errors, but with warning severity.
+[[nodiscard]] inline std::string
+    format_parse_warning(const cstc::span::SourceMap& source_map, const ParseWarning& warning) {
+    cstc::error_report::SourceDatabase database;
+    cstc::error_report::Diagnostic diagnostic;
+    diagnostic.severity = cstc::error_report::Severity::Warning;
+    diagnostic.message = warning.message;
+
+    if (const auto resolved = source_map.resolve_span(warning.span); resolved.has_value()) {
+        if (const cstc::span::SourceFile* file = source_map.file(resolved->file_id);
+            file != nullptr) {
+            const cstc::error_report::SourceId source_id =
+                database.add_source(file->name, file->source);
+            const auto report_span =
+                database.make_span(source_id, resolved->local.start, resolved->local.end);
+            if (report_span.has_value()) {
+                diagnostic.labels.push_back(
+                    cstc::error_report::Label{
+                        .span = *report_span,
+                        .message = warning.message,
+                        .style = cstc::error_report::LabelStyle::Primary,
+                    });
+            }
+        }
+    }
+
+    return cstc::error_report::render(
+        database, diagnostic,
+        cstc::error_report::RenderOptions{
+            .color = cstc::ansi_color::detect_emission(),
+            .context_lines = 1,
+        });
+}
+
 } // namespace cstc::parser

@@ -12,7 +12,7 @@ fn non_negative(value: num) -> bool {
     value >= 0
 }
 
-fn checked_limit(value: num, limit: !runtime num) -> num {
+fn checked_limit(value: num, limit: const num) -> num {
     assert(non_negative(value));
     assert(value <= limit);
     value

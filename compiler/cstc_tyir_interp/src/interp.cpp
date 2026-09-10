@@ -2316,8 +2316,9 @@ ConstraintEvalResult evaluate_constraint(
                         }
                         defer_where_clause =
                             generic_args_depend && !fn.lowered_where_clause.empty();
-                    } else if (const auto ext_it = program.extern_fns.find(node.fn_name);
-                               ext_it != program.extern_fns.end()) {
+                    } else if (
+                        const auto ext_it = program.extern_fns.find(node.fn_name);
+                        ext_it != program.extern_fns.end()) {
                         const tyir::TyExternFnDecl& decl = *ext_it->second;
                         if (decl.return_ty.is_runtime || decl.is_runtime) {
                             return {
@@ -3731,6 +3732,9 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
         candidate->span);
     if (!folded)
         return std::unexpected(std::move(folded.error()));
+    // Count only genuine folds: a non-literal expression replaced by a literal.
+    if (program.fold_stats != nullptr && !std::holds_alternative<tyir::TyLiteral>(candidate->node))
+        ++program.fold_stats->folded_nodes;
     return *folded;
 }
 
@@ -4496,8 +4500,10 @@ std::expected<tyir::TyExprPtr, EvalError> value_to_expr(
 
 namespace cstc::tyir_interp {
 
-std::expected<tyir::TyProgram, EvalError> fold_program(const tyir::TyProgram& program) {
-    const detail::ProgramView view = detail::build_program_view(program);
+std::expected<tyir::TyProgram, EvalError>
+    fold_program(const tyir::TyProgram& program, FoldStats* stats) {
+    detail::ProgramView view = detail::build_program_view(program);
+    view.fold_stats = stats;
     if (auto constraints = detail::validate_program_constraints(program, view); !constraints)
         return std::unexpected(std::move(constraints.error()));
 

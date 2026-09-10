@@ -109,7 +109,7 @@ inline void indent(std::ostringstream& out, std::size_t level) {
 
 [[nodiscard]] inline std::string param_type_name(const TyParam& param) {
     if (param.requires_ct())
-        return "!runtime " + param.ty.display();
+        return "const " + param.ty.display();
     return param.ty.display();
 }
 

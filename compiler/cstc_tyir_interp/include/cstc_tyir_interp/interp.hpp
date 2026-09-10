@@ -54,8 +54,18 @@ struct ConstraintEvalResult {
     std::optional<cstc::tyir::InstantiationLimitDiagnostic> instantiation_limit;
 };
 
+/// Counters describing what const-eval folding did to a program.
+///
+/// Pass a pointer to `fold_program` to collect them; `nullptr` (the default)
+/// disables collection entirely.
+struct FoldStats {
+    /// Number of expression nodes replaced by a folded literal during
+    /// const-eval normalization.
+    std::size_t folded_nodes = 0;
+};
+
 [[nodiscard]] std::expected<tyir::TyProgram, EvalError>
-    fold_program(const tyir::TyProgram& program);
+    fold_program(const tyir::TyProgram& program, FoldStats* stats = nullptr);
 
 } // namespace cstc::tyir_interp
 

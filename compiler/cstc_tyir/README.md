@@ -166,6 +166,21 @@ TyProgram
           TyLocal(y): num [availability: const]
 ```
 
+## Node statistics
+
+```cpp
+#include <cstc_tyir/stats.hpp>
+
+cstc::tyir::ProgramNodeStats stats = cstc::tyir::count_program_nodes(program);
+```
+
+`count_program_nodes` walks all function bodies and reports
+`ProgramNodeStats{total_nodes, residual_calls}`: the total number of TyIR
+expression/statement/block nodes, and the number of direct calls that remain
+residualized as `call-residue: runtime-barrier`. Together with the
+`cstc_tyir_interp::FoldStats` fold counter, these back the RQ2 evidence table
+surfaced through `cstc_inspect --out-type stats`.
+
 ## Dependencies
 
 ```

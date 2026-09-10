@@ -411,12 +411,14 @@ static void test_runtime_extern_call_remains_runtime_barrier() {
 runtime extern "lang" fn poll() -> num;
 
 fn main() -> runtime num {
-    poll()
+    runtime { poll() }
 }
 )");
 
     const TyExprPtr& tail = require_tail(find_fn(program, "main"));
-    const TyCall& call = require_call(tail);
+    const auto& runtime_block = std::get<TyRuntimeBlock>(tail->node);
+    assert(runtime_block.body->tail.has_value());
+    const TyCall& call = require_call(*runtime_block.body->tail);
     assert(call.fn_name == Symbol::intern("poll"));
     assert(call.residue == CallResidue::RuntimeBarrier);
     assert(tail->availability.kind == AvailabilityKind::Rt);
@@ -1008,7 +1010,7 @@ runtime extern "lang" fn println(value: &str);
 
 fn main() {
     let rendered: str = to_str(42);
-    println(&rendered);
+    runtime { println(&rendered); };
 }
 )");
 
@@ -1022,8 +1024,10 @@ fn main() {
     assert(rendered_literal.symbol.as_str() == std::string_view{"\"42\""});
 
     const auto& print_stmt = std::get<TyExprStmt>(main_fn.body->stmts[1]);
-    assert(std::holds_alternative<TyCall>(print_stmt.expr->node));
-    const auto& print_call = std::get<TyCall>(print_stmt.expr->node);
+    const auto& runtime_block = std::get<TyRuntimeBlock>(print_stmt.expr->node);
+    assert(runtime_block.body->stmts.size() == 1);
+    const auto& inner_stmt = std::get<TyExprStmt>(runtime_block.body->stmts[0]);
+    const auto& print_call = std::get<TyCall>(inner_stmt.expr->node);
     assert(print_call.args.size() == 1);
     assert(std::holds_alternative<TyBorrow>(print_call.args[0]->node));
     const auto& borrow = std::get<TyBorrow>(print_call.args[0]->node);
@@ -1038,7 +1042,7 @@ static void test_borrow_preserves_folded_rhs_when_ref_cannot_materialize() {
 runtime extern "lang" fn sink(value: &num);
 
 fn main() {
-    sink(&(1 + 2));
+    runtime { sink(&(1 + 2)); };
 }
 )");
 
@@ -1047,8 +1051,10 @@ fn main() {
     assert(main_fn.body->stmts.size() == 1);
 
     const auto& sink_stmt = std::get<TyExprStmt>(main_fn.body->stmts[0]);
-    assert(std::holds_alternative<TyCall>(sink_stmt.expr->node));
-    const auto& sink_call = std::get<TyCall>(sink_stmt.expr->node);
+    const auto& runtime_block = std::get<TyRuntimeBlock>(sink_stmt.expr->node);
+    assert(runtime_block.body->stmts.size() == 1);
+    const auto& inner_stmt = std::get<TyExprStmt>(runtime_block.body->stmts[0]);
+    const auto& sink_call = std::get<TyCall>(inner_stmt.expr->node);
     assert(sink_call.args.size() == 1);
     assert(std::holds_alternative<TyBorrow>(sink_call.args[0]->node));
 
@@ -1064,7 +1070,7 @@ static void test_runtime_intrinsic_call_is_preserved() {
 runtime extern "lang" fn println(value: &str);
 
 fn main() {
-    println("hello");
+    runtime { println("hello"); };
 }
 )");
 
@@ -1073,8 +1079,11 @@ fn main() {
     assert(main_fn.body->stmts.size() == 1);
     assert(std::holds_alternative<TyExprStmt>(main_fn.body->stmts[0]));
     const auto& expr = std::get<TyExprStmt>(main_fn.body->stmts[0]).expr;
-    assert(std::holds_alternative<TyCall>(expr->node));
-    assert(std::get<TyCall>(expr->node).fn_name == Symbol::intern("println"));
+    const auto& runtime_block = std::get<TyRuntimeBlock>(expr->node);
+    assert(runtime_block.body->stmts.size() == 1);
+    const auto& inner_stmt = std::get<TyExprStmt>(runtime_block.body->stmts[0]);
+    assert(std::holds_alternative<TyCall>(inner_stmt.expr->node));
+    assert(std::get<TyCall>(inner_stmt.expr->node).fn_name == Symbol::intern("println"));
 }
 
 static void test_dead_if_body_is_not_folded() {
@@ -1213,7 +1222,7 @@ static void test_dead_tail_after_break_is_not_folded() {
     SymbolSession session;
     const auto program = must_fold(R"(
 extern "lang" fn assert(condition: bool);
-runtime extern "lang" fn keep_running() -> bool;
+runtime fn keep_running() -> bool { true }
 
 fn main() {
     while keep_running() {
@@ -1239,7 +1248,7 @@ static void test_dead_tail_after_continue_is_not_folded() {
     SymbolSession session;
     const auto program = must_fold(R"(
 extern "lang" fn assert(condition: bool);
-runtime extern "lang" fn keep_running() -> bool;
+runtime fn keep_running() -> bool { true }
 
 fn main() {
     while keep_running() {
@@ -3649,7 +3658,61 @@ fn main() -> num {
     assert(error.message.find("type 'Box'") != std::string::npos);
 }
 
+static void test_fold_stats_count_folded_nodes() {
+    SymbolSession session;
+    const auto ast = cstc::parser::parse_source(R"(
+fn add(a: num, b: num) -> num { a + b }
+
+fn main() {
+    let x: num = add(1, 2);
+    let y: num = x + 1;
+}
+)");
+    assert(ast.has_value());
+    const auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+    cstc::tyir_interp::FoldStats stats;
+    const auto folded = cstc::tyir_interp::fold_program(*tyir, &stats);
+    assert(folded.has_value());
+    // add(1, 2) folds to a literal, and `x + 1` folds against the known binding.
+    assert(stats.folded_nodes >= 2);
+}
+
+static void test_fold_stats_default_is_disabled() {
+    SymbolSession session;
+    const auto ast = cstc::parser::parse_source("fn main() { let x: num = 1 + 2; }");
+    assert(ast.has_value());
+    const auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+    const auto folded = cstc::tyir_interp::fold_program(*tyir);
+    assert(folded.has_value());
+}
+
+static void test_fold_stats_do_not_count_runtime_barrier_contents() {
+    SymbolSession session;
+    const auto ast = cstc::parser::parse_source(R"(
+runtime extern "lang" fn poll() -> num;
+
+fn main() -> runtime num {
+    runtime { poll() + 1 }
+}
+)");
+    assert(ast.has_value());
+    const auto tyir = cstc::tyir_builder::lower_program(*ast);
+    assert(tyir.has_value());
+    cstc::tyir_interp::FoldStats stats;
+    const auto folded = cstc::tyir_interp::fold_program(*tyir, &stats);
+    assert(folded.has_value());
+    // The runtime-barrier call blocks folding of `poll() + 1` as a whole.
+    const TyExprPtr& tail = require_tail(find_fn(*folded, "main"));
+    assert(std::holds_alternative<TyRuntimeBlock>(tail->node));
+    assert(stats.folded_nodes == 0);
+}
+
 int main() {
+    test_fold_stats_count_folded_nodes();
+    test_fold_stats_default_is_disabled();
+    test_fold_stats_do_not_count_runtime_barrier_contents();
     test_const_function_call_folds_to_literal();
     test_runtime_call_remains_in_tyir();
     test_plain_call_with_runtime_argument_remains_in_tyir();

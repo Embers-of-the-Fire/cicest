@@ -1,7 +1,7 @@
 # source: test/e2e/pass/runtime/ct_known_conditional_refinement.cst
 # out-type: tyir
 # rule: ct_known_conditional_refinement
-TyFnDecl source() -> runtime num [runtime-authority: source-boundary] [availability-signature: params=[], result=RT, internal-rt=runtime function boundary]
+TyFnDecl source() -> runtime num [runtime-authority: source-boundary] [availability-signature: params=[], result=RT, internal-rt=runtime-result declaration]
 Let value: num =
 TyLiteral(1): num [availability: const]
 TyCall(__cst_mod_1__assert_eq): runtime Unit [availability: runtime] [call-residue: runtime-barrier]

@@ -7,5 +7,5 @@ fn main() {
     assert_eq(y, 42.0);
     assert_eq(z, 50.0);
 
-    println("Variable bindings work correctly!");
+    runtime { println("Variable bindings work correctly!"); };
 }

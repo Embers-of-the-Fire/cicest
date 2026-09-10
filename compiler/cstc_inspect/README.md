@@ -11,6 +11,7 @@ Reads a source file and emits either:
 - typed IR (`tyir`)
 - low-level IR (`lir`)
 - LLVM IR (`llvm`)
+- fold/residual statistics as one CSV row (`stats`)
 
 Output can be written to stdout or a file.
 
@@ -29,11 +30,12 @@ cstc_inspect <input-file> --out-type tyir
 cstc_inspect <input-file> --out-type lir
 cstc_inspect <input-file> --out-type llvm
 cstc_inspect <input-file> --out-type llvm -o output.ll
+cstc_inspect <input-file> --out-type stats
 ```
 
 Flags:
 
-- `--out-type <tokens|ast|tyir|lir|llvm>` (required)
+- `--out-type <tokens|ast|tyir|lir|llvm|stats>` (required)
 - `-o, --output <path>`
 - `--keep-trivia` (tokens mode)
 
@@ -46,6 +48,13 @@ Output kinds:
 - `lir`: low-level IR lowered from the resolved typed program.
 - `llvm`: LLVM IR emitted for the resolved module graph and injected std
   prelude.
+- `stats`: machine-readable CSV (`program,folded_nodes,residual_calls,total_nodes`)
+  for the folded TyIR program. `folded_nodes` counts expression nodes the
+  compile-time interpreter replaced with literals (cstc_tyir_interp
+  `FoldStats`); `residual_calls` counts direct calls that remain as
+  `call-residue: runtime-barrier`; `total_nodes` counts every TyIR expression,
+  statement, and block (cstc_tyir `count_program_nodes`). This output backs the
+  RQ2 fold/residual evidence table (`scripts/eval/rq2-fold-stats.sh`).
 
 The `ast` and `tyir` outputs render explicit runtime block nodes for
 `runtime { ... }`, which helps inspect how the runtime boundary survives
@@ -59,4 +68,4 @@ lowering before LIR/codegen.
 - Target: `cstc_inspect` (executable)
 - Links: `cstc_ast`, `cstc_cli_support`, `cstc_codegen`, `cstc_lexer`,
   `cstc_lir`, `cstc_lir_builder`, `cstc_parser`, `cstc_resource_path`,
-  `cstc_tyir`, `cstc_tyir_builder`
+  `cstc_tyir`, `cstc_tyir_builder`, `cstc_tyir_interp`

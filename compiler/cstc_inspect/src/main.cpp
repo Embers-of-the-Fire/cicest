@@ -10,6 +10,8 @@
 #include <cstc_span/span.hpp>
 #include <cstc_symbol/symbol.hpp>
 #include <cstc_tyir/printer.hpp>
+#include <cstc_tyir/stats.hpp>
+#include <cstc_tyir_interp/interp.hpp>
 
 #include <filesystem>
 #include <iostream>
@@ -29,7 +31,7 @@ struct Options {
 };
 
 [[nodiscard]] std::string usage() {
-    return "Usage: cstc_inspect <input-file> --out-type <tokens|ast|tyir|lir|llvm> "
+    return "Usage: cstc_inspect <input-file> --out-type <tokens|ast|tyir|lir|llvm|stats> "
            "[-o <output-file>] [--keep-trivia]";
 }
 
@@ -69,9 +71,9 @@ struct Options {
     if (options.input_path.empty())
         throw std::runtime_error("missing input file path\n" + usage());
     if (options.out_type != "tokens" && options.out_type != "ast" && options.out_type != "tyir"
-        && options.out_type != "lir" && options.out_type != "llvm")
+        && options.out_type != "lir" && options.out_type != "llvm" && options.out_type != "stats")
         throw std::runtime_error(
-            "--out-type must be one of: tokens, ast, tyir, lir, llvm\n" + usage());
+            "--out-type must be one of: tokens, ast, tyir, lir, llvm, stats\n" + usage());
 
     return options;
 }
@@ -130,10 +132,19 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     return output.str();
 }
 
+[[nodiscard]] cstc::ast::Program load_merged_program(
+    cstc::span::SourceMap& source_map, const std::filesystem::path& input_path) {
+    std::vector<cstc::parser::ParseWarning> warnings;
+    cstc::ast::Program merged =
+        cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH, &warnings);
+    if (!warnings.empty())
+        std::cerr << cstc::cli_support::format_parse_warnings(source_map, warnings);
+    return merged;
+}
+
 [[nodiscard]] std::string
     render_tyir(cstc::span::SourceMap& source_map, const std::filesystem::path& input_path) {
-    const auto merged =
-        cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH);
+    const auto merged = load_merged_program(source_map, input_path);
 
     const auto tyir = cstc::cli_support::lower_and_fold_program(source_map, merged);
     if (!tyir.has_value())
@@ -142,10 +153,34 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     return cstc::tyir::format_program(*tyir);
 }
 
+/// Renders one machine-readable CSV row of fold/residual statistics for the
+/// program: `program,folded_nodes,residual_calls,total_nodes`.
+///
+/// - `folded_nodes` counts expression nodes the compile-time interpreter
+///   replaced with folded literals.
+/// - `residual_calls` counts direct calls that remain as
+///   `call-residue: runtime-barrier` in the folded TyIR.
+/// - `total_nodes` counts every TyIR expression, statement, and block node.
+[[nodiscard]] std::string
+    render_stats(cstc::span::SourceMap& source_map, const std::filesystem::path& input_path) {
+    const auto merged = load_merged_program(source_map, input_path);
+
+    cstc::tyir_interp::FoldStats fold_stats;
+    const auto tyir = cstc::cli_support::lower_and_fold_program(source_map, merged, &fold_stats);
+    if (!tyir.has_value())
+        throw std::runtime_error(tyir.error());
+
+    const cstc::tyir::ProgramNodeStats node_stats = cstc::tyir::count_program_nodes(*tyir);
+    std::ostringstream output;
+    output << "program,folded_nodes,residual_calls,total_nodes\n"
+           << input_path.string() << ',' << fold_stats.folded_nodes << ','
+           << node_stats.residual_calls << ',' << node_stats.total_nodes << '\n';
+    return output.str();
+}
+
 [[nodiscard]] std::string
     render_lir(cstc::span::SourceMap& source_map, const std::filesystem::path& input_path) {
-    const auto merged =
-        cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH);
+    const auto merged = load_merged_program(source_map, input_path);
 
     const auto tyir = cstc::cli_support::lower_and_fold_program(source_map, merged);
     if (!tyir.has_value())
@@ -159,8 +194,7 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
 
 [[nodiscard]] std::string
     render_llvm(cstc::span::SourceMap& source_map, const std::filesystem::path& input_path) {
-    const auto merged =
-        cstc::cli_support::load_module_program(source_map, input_path, CICEST_STD_PATH);
+    const auto merged = load_merged_program(source_map, input_path);
 
     const auto tyir = cstc::cli_support::lower_and_fold_program(source_map, merged);
     if (!tyir.has_value())
@@ -178,10 +212,14 @@ void write_output(std::string_view text, const std::optional<std::string>& outpu
     if (source_file == nullptr)
         throw std::runtime_error("invalid source file id in render_ast");
 
-    const auto parsed = cstc::parser::parse_source_at(source_file->source, source_file->start_pos);
+    std::vector<cstc::parser::ParseWarning> warnings;
+    const auto parsed =
+        cstc::parser::parse_source_at(source_file->source, source_file->start_pos, &warnings);
     if (!parsed.has_value())
         throw std::runtime_error(
             cstc::parser::format_parse_error(source_map, parsed.error(), true));
+    if (!warnings.empty())
+        std::cerr << cstc::cli_support::format_parse_warnings(source_map, warnings);
 
     return cstc::ast::format_program(*parsed);
 }
@@ -206,6 +244,8 @@ int main(int argc, char** argv) {
                 output = render_ast(source_map, file_id);
         } else if (options.out_type == "tyir") {
             output = render_tyir(source_map, options.input_path);
+        } else if (options.out_type == "stats") {
+            output = render_stats(source_map, options.input_path);
         } else if (options.out_type == "llvm") {
             output = render_llvm(source_map, options.input_path);
         } else {

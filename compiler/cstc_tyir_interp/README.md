@@ -17,8 +17,15 @@ const-evaluable subtrees back into TyIR before LIR lowering.
 - Types:
   - `cstc::tyir_interp::EvalStackFrame`
   - `cstc::tyir_interp::EvalError`
+  - `cstc::tyir_interp::FoldStats`
 - Functions:
-  - `cstc::tyir_interp::fold_program(const cstc::tyir::TyProgram&)`
+  - `cstc::tyir_interp::fold_program(const cstc::tyir::TyProgram&, FoldStats*)`
+
+`FoldStats` is an optional instrumentation sink: when a non-null pointer is
+passed to `fold_program`, `folded_nodes` counts how many non-literal expression
+nodes were replaced by folded literals during const-eval normalization. Pass
+`nullptr` (the default) to disable collection; the counters back the RQ2
+fold/residual evidence surfaced through `cstc_inspect --out-type stats`.
 
 ## Behavior
 

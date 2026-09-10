@@ -84,7 +84,7 @@ synthetic `TyRuntimeBlock` around the body.
 Plain runtime-allowed parameters are represented inside a declaration body as
 compile-time-shaped values with symbolic parameter dependence. They do not make
 the body runtime-qualified by themselves, but they also cannot satisfy a
-CT-required position such as a `!runtime` parameter or `const` local annotation.
+CT-required position such as a `const` parameter or `const` local annotation.
 At a call site, the argument availability instantiates that symbolic dependence
 and lifts the call result when an allowed argument is runtime-dependent.
 
@@ -101,7 +101,7 @@ whose semantics are not yet designed:
 - Struct field type `&T`.
 - CT-required function return type.
 - CT-required struct field type.
-- Nested CT-required type positions such as `&!runtime T` or `Box<const T>`.
+- Nested CT-required type positions such as `&const T` or `Box<const T>`.
 
 These restrictions are language guardrails. Future mutable references,
 allocation, or alias analysis must define their own availability rules instead of
@@ -187,6 +187,13 @@ the tail expression rather than considering only the yielded value.
 - `runtime { e }` yields `runtime T` when the body block yields `T`.
 - The runtime boundary is explicit in TyIR as `TyRuntimeBlock`; the body remains a
   normal `TyBlock` so pure inner expressions can still be folded independently.
+- The boundary is enforced, not only recorded: while lowering, the builder tracks
+  an authorization mode (pure mode P, or authorized mode R inside a
+  `TyRuntimeBlock` or a `runtime fn` body). Calling a trusted runtime-only
+  extern (`runtime extern ... fn`) in mode P is a type error whose message cites
+  the enclosing declaration's contract. A diverging boundary body (type
+  `Never`) yields no value, so it stamps no runtime availability on the
+  enclosing expression, mirroring the never-aware call-result rule.
 
 ## If-else type rules
 

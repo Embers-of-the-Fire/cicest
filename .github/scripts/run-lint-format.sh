@@ -86,9 +86,13 @@ fi
 tidy_file_list="$(jq -r '.[].file' "${compile_commands_path}" | sort -u)"
 if [[ -n "${tidy_file_list}" ]]; then
 	mapfile -t tidy_files <<<"${tidy_file_list}"
-	echo "Running clang-tidy on ${#tidy_files[@]} file(s) from ${compile_commands_path}…"
+	# clang-tidy processes are heavy; highly parallel runs intermittently
+	# crash clang-tidy itself on large TUs. CICEST_TIDY_JOBS bounds the
+	# parallelism when the default (all cores) proves unstable.
+	tidy_jobs="${CICEST_TIDY_JOBS:-$(nproc)}"
+	echo "Running clang-tidy on ${#tidy_files[@]} file(s) from ${compile_commands_path} with ${tidy_jobs} job(s)…"
 	printf '%s\0' "${tidy_files[@]}" |
-		xargs -0 -P "$(nproc)" -n1 clang-tidy -p build
+		xargs -0 -P "${tidy_jobs}" -n1 clang-tidy -p build
 else
 	echo "No compilation database entries found for clang-tidy."
 fi

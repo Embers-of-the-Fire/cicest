@@ -12,7 +12,7 @@ runtime fn source_boundary() -> num {
 fn main() {
     let ordinary: runtime num = ordinary_runtime_result();
     let boundary: runtime num = source_boundary();
-    let trusted: runtime num = time();
+    let trusted: runtime num = runtime { time() };
 
     let _ = ordinary;
     let _ = boundary;

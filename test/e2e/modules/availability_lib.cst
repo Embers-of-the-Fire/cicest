@@ -1,0 +1,22 @@
+// Library module for the module-boundary case study. Clients import these
+// helpers and are checked against the shipped availability signatures only;
+// the library bodies are invisible at the client's call sites.
+
+// CT-required `limit`: the bound check is a compile-time contract obligation.
+pub fn bounded(value: num, limit: const num) -> num {
+    assert(value <= limit);
+    value
+}
+
+// Plain helper: its result availability is the join of its runtime-allowed
+// parameters, so clients may pass compile-time or runtime data.
+pub fn max(a: num, b: num) -> num {
+    if a >= b { a } else { b }
+}
+
+// Source boundary: the runtime result contract is part of the shipped
+// signature, and the `runtime fn` body is authorized to call the runtime-only
+// `time()` extern directly.
+pub runtime fn wall_ms() -> num {
+    time()
+}

@@ -283,6 +283,29 @@ void test_ct_required_type_prefixes() {
     assert(!fn.return_type->requires_ct);
 }
 
+void test_deprecated_bang_runtime_emits_warning() {
+    cstc::symbol::SymbolSession session;
+    std::vector<cstc::parser::ParseWarning> warnings;
+    const auto parsed =
+        cstc::parser::parse_source("fn reserve(count: !runtime num) -> num { count }", &warnings);
+    assert(parsed.has_value());
+    assert(warnings.size() == 1);
+    assert(warnings[0].message.find("`!runtime` is deprecated; use `const`") != std::string::npos);
+    const auto& fn = std::get<cstc::ast::FnDecl>(parsed->items[0]);
+    assert(fn.params[0].type.requires_ct);
+}
+
+void test_const_spelling_emits_no_warning() {
+    cstc::symbol::SymbolSession session;
+    std::vector<cstc::parser::ParseWarning> warnings;
+    const auto parsed =
+        cstc::parser::parse_source("fn reserve(count: const num) -> num { count }", &warnings);
+    assert(parsed.has_value());
+    assert(warnings.empty());
+    const auto& fn = std::get<cstc::ast::FnDecl>(parsed->items[0]);
+    assert(fn.params[0].type.requires_ct);
+}
+
 void test_import_decl() {
     cstc::symbol::SymbolSession session;
     const auto prog = must_parse("import { Value, helper as alias } from \"path/to/foo.cst\";");
@@ -494,6 +517,8 @@ int main() {
     test_pub_extern_fn();
     test_runtime_type_prefixes();
     test_ct_required_type_prefixes();
+    test_deprecated_bang_runtime_emits_warning();
+    test_const_spelling_emits_no_warning();
     test_import_decl();
     test_pub_import_decl();
     test_fn_never_return_type();

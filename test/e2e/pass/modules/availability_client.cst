@@ -1,0 +1,17 @@
+// Module-boundary case study (RQ1): the client is checked against the library
+// module's shipped availability signatures. The all-CT call folds at compile
+// time; the runtime-dependent calls lift across the boundary and remain
+// residualized behind runtime barriers.
+import { bounded, max, wall_ms } from "../../modules/availability_lib.cst";
+
+fn main() {
+    // All-CT call across the boundary: folds to a literal at compile time.
+    let known: num = bounded(8, 10);
+    assert_eq(known, 8);
+
+    // Runtime-dependent calls: the library's contracts lift the results.
+    let now: runtime num = wall_ms();
+    let lifted: runtime num = max(now, 1);
+
+    let _ = lifted;
+}

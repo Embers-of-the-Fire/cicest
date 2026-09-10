@@ -1,0 +1,11 @@
+// `runtime fn` is a source boundary: its body is authorized (mode R), so it
+// may call runtime-only externs directly. Clients still see the declared
+// runtime-result contract across the boundary.
+runtime fn now_ms() -> num {
+    time()
+}
+
+fn main() {
+    let stamp: runtime num = now_ms();
+    let _ = stamp;
+}

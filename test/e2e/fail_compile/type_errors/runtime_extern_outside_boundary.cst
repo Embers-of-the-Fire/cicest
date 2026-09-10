@@ -1,0 +1,7 @@
+// T-Prim enforcement: a runtime-only extern called outside a covering
+// `runtime { ... }` block is rejected, even when the result annotation would
+// tolerate runtime dependence.
+fn main() {
+    let stamp: runtime num = time();
+    let _ = stamp;
+}

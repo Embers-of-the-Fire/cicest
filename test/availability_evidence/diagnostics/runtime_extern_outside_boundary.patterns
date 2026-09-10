@@ -1,0 +1,5 @@
+# source: test/e2e/fail_compile/type_errors/runtime_extern_outside_boundary.cst
+# rule: runtime_only_extern_requires_boundary
+runtime-only extern 'time' must be called inside a `runtime { ... }` block
+enclosing function 'main' with contract 'main() -> Unit'
+does not authorize runtime-only actions

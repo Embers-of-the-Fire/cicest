@@ -1,0 +1,11 @@
+// T-Prim enforcement: a plain function whose return type is merely
+// runtime-qualified (`-> runtime T`) has no boundary authority — its body is
+// checked in mode P and must wrap runtime-only extern calls in a covering
+// `runtime { ... }` block. (Only the `runtime fn` prefix authorizes the body.)
+fn fetch() -> runtime num {
+    time()
+}
+
+fn main() {
+    let _: runtime num = fetch();
+}

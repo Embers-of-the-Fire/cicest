@@ -18,6 +18,7 @@ target_link_libraries(cstc_inspect
         cstc_resource_path
         cstc_tyir
         cstc_tyir_builder
+        cstc_tyir_interp
         cicest_options
         cicest_warnings
 )

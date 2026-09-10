@@ -40,8 +40,10 @@ using cstc::lexer::TokenKind;
 
 class Parser {
 public:
-    explicit Parser(std::span<const Token> input_tokens)
-        : tokens_(input_tokens.begin(), input_tokens.end()) {
+    explicit Parser(
+        std::span<const Token> input_tokens, std::vector<ParseWarning>* warnings = nullptr)
+        : tokens_(input_tokens.begin(), input_tokens.end())
+        , warnings_(warnings) {
         if (tokens_.empty() || tokens_.back().kind != TokenKind::EndOfFile) {
             const std::size_t position = tokens_.empty() ? 0 : tokens_.back().span.end;
             tokens_.push_back(
@@ -130,6 +132,11 @@ private:
             .span = token.span,
             .message = std::move(message),
         };
+    }
+
+    void emit_warning(cstc::span::SourceSpan span, std::string message) const {
+        if (warnings_ != nullptr)
+            warnings_->push_back(ParseWarning{span, std::move(message)});
     }
 
     [[nodiscard]] cstc::span::SourceSpan
@@ -477,7 +484,7 @@ private:
                     return std::unexpected(field_type.error());
                 if (field_type->requires_ct) {
                     return std::unexpected(make_error_token(
-                        previous(), "`const`/`!runtime` is only supported for function "
+                        previous(), "`const` is only supported for function "
                                     "parameters and explicit local annotations"));
                 }
 
@@ -647,7 +654,7 @@ private:
                 return std::unexpected(parsed_return_type.error());
             if (parsed_return_type->requires_ct) {
                 return std::unexpected(make_error_token(
-                    previous(), "`const`/`!runtime` is only supported for function parameters and "
+                    previous(), "`const` is only supported for function parameters and "
                                 "explicit local annotations"));
             }
             return_type = std::move(*parsed_return_type);
@@ -777,7 +784,7 @@ private:
                 return std::unexpected(parsed_return_type.error());
             if (parsed_return_type->requires_ct) {
                 return std::unexpected(make_error_token(
-                    previous(), "`const`/`!runtime` is only supported for function parameters and "
+                    previous(), "`const` is only supported for function parameters and "
                                 "explicit local annotations"));
             }
             return_type = std::move(*parsed_return_type);
@@ -947,7 +954,7 @@ private:
                 return std::unexpected(inner.error());
             if (inner->requires_ct) {
                 return std::unexpected(
-                    make_error_here("conflicting `runtime` and `!runtime` type qualifiers"));
+                    make_error_here("conflicting `runtime` and `const` type qualifiers"));
             }
 
             inner->is_runtime = true;
@@ -968,7 +975,7 @@ private:
                     make_error_here("conflicting `const` and `runtime` type qualifiers"));
             }
             if (inner->requires_ct) {
-                return std::unexpected(make_error_here("duplicate `!runtime` type qualifier"));
+                return std::unexpected(make_error_here("duplicate `const` type qualifier"));
             }
 
             inner->requires_ct = true;
@@ -1025,20 +1032,23 @@ private:
             const Token bang = previous();
             if (match(TokenKind::KwRuntime)) {
                 if (!allow_ct_requirement) {
-                    return std::unexpected(make_error_token(
-                        bang, "nested `!runtime` type qualifier is not supported"));
+                    return std::unexpected(
+                        make_error_token(bang, "nested `const` type qualifier is not supported"));
                 }
                 auto inner = parse_type(allow_ct_requirement);
                 if (!inner.has_value())
                     return std::unexpected(inner.error());
                 if (inner->is_runtime) {
                     return std::unexpected(
-                        make_error_here("conflicting `!runtime` and `runtime` type qualifiers"));
+                        make_error_here("conflicting `const` and `runtime` type qualifiers"));
                 }
                 if (inner->requires_ct) {
-                    return std::unexpected(make_error_here("duplicate `!runtime` type qualifier"));
+                    return std::unexpected(make_error_here("duplicate `const` type qualifier"));
                 }
 
+                emit_warning(
+                    merge_spans(bang.span, previous().span),
+                    "`!runtime` is deprecated; use `const` to require compile-time availability");
                 inner->requires_ct = true;
                 return std::move(*inner);
             }
@@ -1823,11 +1833,13 @@ private:
 
     std::vector<Token> tokens_;
     std::size_t cursor_ = 0;
+    std::vector<ParseWarning>* warnings_ = nullptr;
 };
 
 } // namespace
 
-std::expected<ast::Program, ParseError> parse_tokens(std::span<const lexer::Token> tokens) {
+std::expected<ast::Program, ParseError>
+    parse_tokens(std::span<const lexer::Token> tokens, std::vector<ParseWarning>* warnings) {
     std::vector<lexer::Token> filtered;
     filtered.reserve(tokens.size());
 
@@ -1836,18 +1848,19 @@ std::expected<ast::Program, ParseError> parse_tokens(std::span<const lexer::Toke
             filtered.push_back(token);
     }
 
-    Parser parser(filtered);
+    Parser parser(filtered, warnings);
     return parser.parse_program();
 }
 
-std::expected<ast::Program, ParseError>
-    parse_source_at(std::string_view source, cstc::span::BytePos base_pos) {
+std::expected<ast::Program, ParseError> parse_source_at(
+    std::string_view source, cstc::span::BytePos base_pos, std::vector<ParseWarning>* warnings) {
     const std::vector<lexer::Token> tokens = lexer::lex_source_at(source, base_pos, false);
-    return parse_tokens(tokens);
+    return parse_tokens(tokens, warnings);
 }
 
-std::expected<ast::Program, ParseError> parse_source(std::string_view source) {
-    return parse_source_at(source, 0);
+std::expected<ast::Program, ParseError>
+    parse_source(std::string_view source, std::vector<ParseWarning>* warnings) {
+    return parse_source_at(source, 0, warnings);
 }
 
 } // namespace cstc::parser

@@ -7,5 +7,5 @@ fn main() {
     assert_eq(x * y, 50.0);
     assert_eq(x / y, 2.0);
 
-    println("All arithmetic tests passed!");
+    runtime { println("All arithmetic tests passed!"); };
 }

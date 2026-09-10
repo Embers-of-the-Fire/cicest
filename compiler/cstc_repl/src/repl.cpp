@@ -63,27 +63,27 @@ constexpr std::string_view kSessionFileSuffix = ".cst";
 
 constexpr std::string_view kRuntimeHelpers = R"cst(fn __cstc_repl_internal_print_num(value: num) {
     let rendered: str = to_str(value);
-    println(&rendered);
+    runtime { println(&rendered); };
 }
 
 fn __cstc_repl_internal_print_str(value: str) {
-    println(&value);
+    runtime { println(&value); };
 }
 
 fn __cstc_repl_internal_print_ref_str(value: &str) {
-    println(value);
+    runtime { println(value); };
 }
 
 fn __cstc_repl_internal_print_bool(value: bool) {
     if value {
-        println("true");
+        runtime { println("true"); };
     } else {
-        println("false");
+        runtime { println("false"); };
     }
 }
 
 fn __cstc_repl_internal_print_unit(value: Unit) {
-    println("()");
+    runtime { println("()"); };
 }
 )cst";
 

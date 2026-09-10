@@ -19,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace cstc::cli_support {
 
@@ -207,12 +208,13 @@ inline void append_instantiation_limit_children(
 }
 
 [[nodiscard]] inline std::expected<cstc::tyir::TyProgram, std::string> lower_and_fold_program(
-    const cstc::span::SourceMap& source_map, const cstc::ast::Program& program) {
+    const cstc::span::SourceMap& source_map, const cstc::ast::Program& program,
+    cstc::tyir_interp::FoldStats* fold_stats = nullptr) {
     const auto lowered = cstc::tyir_builder::lower_program(program);
     if (!lowered.has_value())
         return std::unexpected(format_type_error(source_map, lowered.error()));
 
-    const auto folded = cstc::tyir_interp::fold_program(*lowered);
+    const auto folded = cstc::tyir_interp::fold_program(*lowered, fold_stats);
     if (!folded.has_value())
         return std::unexpected(format_eval_error(source_map, folded.error()));
 
@@ -244,11 +246,25 @@ inline void append_instantiation_limit_children(
 
 [[nodiscard]] inline cstc::ast::Program load_module_program(
     cstc::span::SourceMap& source_map, const std::filesystem::path& root_path,
-    const std::filesystem::path& std_root_path) {
-    const auto loaded = cstc::module::load_program(source_map, root_path, std_root_path);
+    const std::filesystem::path& std_root_path,
+    std::vector<cstc::parser::ParseWarning>* warnings = nullptr) {
+    const auto loaded = cstc::module::load_program(source_map, root_path, std_root_path, warnings);
     if (!loaded.has_value())
         throw std::runtime_error(cstc::module::format_module_error(source_map, loaded.error()));
     return *loaded;
+}
+
+/// Renders collected parse warnings (for example deprecation warnings) in the
+/// house diagnostic style, one per line, ready to print to stderr.
+[[nodiscard]] inline std::string format_parse_warnings(
+    const cstc::span::SourceMap& source_map,
+    const std::vector<cstc::parser::ParseWarning>& warnings) {
+    std::string rendered;
+    for (const cstc::parser::ParseWarning& warning : warnings) {
+        rendered += cstc::parser::format_parse_warning(source_map, warning);
+        rendered += '\n';
+    }
+    return rendered;
 }
 
 } // namespace cstc::cli_support

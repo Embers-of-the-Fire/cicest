@@ -65,6 +65,8 @@ struct ProgramView {
     std::unordered_map<Symbol, const tyir::TyFnDecl*, SymbolHash> fns;
     std::unordered_map<Symbol, const tyir::TyExternFnDecl*, SymbolHash> extern_fns;
     Symbol constraint_enum_name = cstc::symbol::kInvalidSymbol;
+    /// Optional sink for fold statistics; incremented while folding when set.
+    FoldStats* fold_stats = nullptr;
 };
 
 inline constexpr std::size_t kDefaultEvalStepBudget = 4096;

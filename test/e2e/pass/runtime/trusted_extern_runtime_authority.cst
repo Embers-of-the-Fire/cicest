@@ -1,4 +1,4 @@
 fn main() {
-    let stamp: runtime num = time();
+    let stamp: runtime num = runtime { time() };
     let _ = stamp;
 }
